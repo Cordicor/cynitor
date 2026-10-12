@@ -395,13 +395,36 @@ const _bufferIndexFor = (t) => {
   return i;
 };
 
-// The row to insert a row with time ``t`` before: null to append, undefined
-// if it is older than every row shown while the list is full.
+// An entry's row: the first one, for the oldest entry, or found by its id.
+const _rowOf = (list, entry) => {
+  const first = list.firstElementChild;
+  return first?.dataset.id === String(entry.id) ? first : list.querySelector(`.log-row[data-id="${entry.id}"]`);
+};
+
+// The row to insert a row with time ``t`` before, or null to append.
 const _rowAfter = (list, t) => {
   let after = null;
   for (let r = list.lastElementChild; r && Number(r.dataset.t) > t; r = r.previousElementSibling) after = r;
-  if (after === list.firstElementChild && after && list.childElementCount >= LOG_CAP) return undefined;
   return after;
+};
+
+// A text subject added with + may say something new many times a second. Its
+// rows fill what room the list has, but once they are more than this share of
+// it, a new message pushes out the oldest of them, not what the nodes and the
+// server reported.
+const SUBJECT_ROWS_SHARE = 0.5;
+
+// Which entry goes when the list is over its cap: the oldest, or, with the
+// text subjects over their share, the oldest of theirs.
+const _indexToDrop = () => {
+  let subjectRows = 0;
+  let oldestSubjectRow = 0;
+  for (let i = state.logBuffer.length - 1; i >= 0; i--) {
+    if (state.logBuffer[i].kind !== 'subject') continue;
+    subjectRows++;
+    oldestSubjectRow = i;
+  }
+  return subjectRows > LOG_CAP * SUBJECT_ROWS_SHARE ? oldestSubjectRow : 0;
 };
 
 // A message just listed, while the panel is shut: its toggle counts it if it
@@ -465,30 +488,22 @@ const _pushEntry = (entry) => {
   }
   state.logBuffer.splice(_bufferIndexFor(entry.t), 0, entry);
   if (entry.source in _srcCounts) _srcCounts[entry.source]++;
+  let dropped = null;  // the entry that made room for this one, the list being full
   if (state.logBuffer.length > LOG_CAP) {
-    const excess = state.logBuffer.length - LOG_CAP;
-    for (let i = 0; i < excess; i++) {
-      const s = state.logBuffer[i].source;
-      if (s in _srcCounts) _srcCounts[s]--;
-    }
-    state.logBuffer.splice(0, excess);
+    [dropped] = state.logBuffer.splice(_indexToDrop(), 1);
+    if (dropped.source in _srcCounts) _srcCounts[dropped.source]--;
   }
   _refreshSourcePillBadges();
   const list = el('logList');
-  if (!list) return;
+  if (!list || dropped === entry) return;  // older than all the full list keeps: never drawn
   const wasAtBottom = isAtBottom(list.parentElement);
   const after = _rowAfter(list, entry.t);
-  let listed = false;  // drawn, and not hidden by a filter
-  if (after !== undefined) {
-    const row = renderLogRow(entry);
-    applyAllFiltersToRow(row);
-    list.insertBefore(row, after);
-    listed = !row.classList.contains('hidden');
-  }
+  const row = renderLogRow(entry);
+  applyAllFiltersToRow(row);
+  list.insertBefore(row, after);
+  const listed = !row.classList.contains('hidden');  // drawn, and not hidden by a filter
   if (listed) _countUnread(entry);
-  while (list.childElementCount > LOG_CAP) {
-    list.removeChild(list.firstElementChild);
-  }
+  if (dropped) _rowOf(list, dropped)?.remove();
   updateEmptyHint();
   _followOrCountBelow(entry, list, listed && after === null, wasAtBottom);
 };

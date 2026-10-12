@@ -6675,6 +6675,37 @@ async def _(page):
     assert "logPanel width" in on_toggle, f"Its toggle should still slide it: {on_toggle}"
 
 
+@test("Log panel: a text subject that keeps saying new things does not push out what the nodes reported")
+async def _(page):
+    was_open = await set_log_panel(page, True)
+    await page.locator("#logClearBtn").click()
+    try:
+        seen = await page.evaluate("""() => {
+            const now = Date.now() / 1000 - 100;
+            ingestLogEvent({subject_id: 8184, message_type: 'Record_1_1', publisher_node_id: 50, timestamp_unix: now,
+                attributes: [{attribute: 'severity', value: 5}, {attribute: 'text', value: 'the one error'}]});
+            state.logSubjectIds.add(1800);
+            for (let i = 0; i < 1500; i++) {  // a text of its own every time: nothing to fold
+                ingestLogEvent({subject_id: 1800, message_type: 'String_1_0', publisher_node_id: 50,
+                    timestamp_unix: now + 1 + i * 0.02, attributes: [{attribute: 'value', value: `reading ${i}`}]});
+            }
+            state.logSubjectIds.delete(1800);
+            const rows = [...el('logList').children];
+            return {kept: state.logBuffer.length, listed: rows.length,
+                    error: state.logBuffer.some((entry) => entry.text === 'the one error'),
+                    first: rows[0].innerText.replace(/\\s+/g, ' ').trim().replace(/^\\S+ /, ''),
+                    last: rows[rows.length - 1].innerText.replace(/\\s+/g, ' ').trim().replace(/^\\S+ /, ''),
+                    inStep: state.logBuffer.map((entry) => String(entry.id)).join() === rows.map((row) => row.dataset.id).join()}; }""")
+    finally:
+        await page.evaluate("state.logSubjectIds.delete(1800)")
+        await page.locator("#logClearBtn").click()
+        await set_log_panel(page, was_open)
+    assert seen["error"] and seen["first"] == "ERROR 50 the one error", \
+        f"After 1500 texts from a subject the node's error should still lead the list: {seen}"
+    assert seen["kept"] == seen["listed"] == 1000 and seen["last"].endswith("reading 1499") and seen["inStep"], \
+        f"The list should hold its 1000 newest in step with what is kept: {seen}"
+
+
 # Keep last: it reloads the page with every other host unreachable.
 @test("Dashboard works with no internet access")
 async def _(page):
