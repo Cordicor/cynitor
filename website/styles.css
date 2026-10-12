@@ -465,6 +465,10 @@ body {
   flex: 1;
   overflow-y: auto;
   position: relative;
+  /* A reader scrolled up keeps their place as rows come and go above: the
+     list sees to it (_pushEntry), in Safari too, which does no anchoring of
+     its own. Browsers that do must not do it twice. */
+  overflow-anchor: none;
 }
 
 .log-empty {

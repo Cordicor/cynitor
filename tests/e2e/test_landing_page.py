@@ -6780,6 +6780,39 @@ async def _(page):
     assert ticked == [1800] and after == ["logAddSubjectBtn", True], f"Space ticked {ticked}; after Escape: {after}"
 
 
+@test("Log panel: reading back in a full list, what is in view stays put as old messages go and late ones come in above")
+async def _(page):
+    was_open = await set_log_panel(page, True)
+    await page.locator("#logClearBtn").click()
+    in_view = """() => { const top = el('logPanelBody').getBoundingClientRect().top;
+        for (const row of el('logList').children) { const box = row.getBoundingClientRect();
+            if (box.bottom > top + 1) return {row: row.innerText.replace(/\\s+/g, ' ').trim().replace(/^\\S+ /, ''),
+                                              at: Math.round(box.top - top)}; } }"""
+    ingest = """([count, text, ago]) => { const start = Date.now() / 1000 - ago;
+        for (let i = 0; i < count; i++) ingestLogEvent({subject_id: 8184, message_type: 'Record_1_1', publisher_node_id: 50,
+            timestamp_unix: start + i * 0.001, attributes: [{attribute: 'severity', value: 2}, {attribute: 'text', value: `${text} ${i}`}]}); }"""
+    try:
+        await page.evaluate(ingest, [1000, "line", 100])  # the list is full
+        await page.evaluate("el('logPanelBody').scrollTop = el('logPanelBody').scrollHeight / 2")
+        await page.wait_for_timeout(100)
+        reading = await page.evaluate(in_view)
+        await page.evaluate(ingest, [50, "newer", 10])  # each pushes the oldest row out, above what is in view
+        after_newer = await page.evaluate(in_view)
+        await page.evaluate(ingest, [3, "late", 99.7])  # sorts in near the top of the list, above what is in view
+        after_late = await page.evaluate(in_view)
+        anchoring = await page.evaluate("getComputedStyle(el('logPanelBody')).overflowAnchor")
+    finally:
+        await page.locator("#logClearBtn").click()
+        await set_log_panel(page, was_open)
+    def same_place(now):  # the same row, within the pixel a scroll position is rounded to
+        return now["row"] == reading["row"] and abs(now["at"] - reading["at"]) <= 1
+
+    assert reading["row"].startswith("INFO 50 line 5"), f"Scrolled to the middle of 1000 rows, the first in view: {reading}"
+    assert same_place(after_newer), f"After 50 new messages the first row in view is {after_newer}, was {reading}"
+    assert same_place(after_late), f"After 3 late messages sorted in above, the first row in view is {after_late}, was {reading}"
+    assert anchoring == "none", f"The list keeps the place itself, so the browser must not as well: overflow-anchor is {anchoring}"
+
+
 # Keep last: it reloads the page with every other host unreachable.
 @test("Dashboard works with no internet access")
 async def _(page):

@@ -401,6 +401,23 @@ const _rowOf = (list, entry) => {
   return first?.dataset.id === String(entry.id) ? first : list.querySelector(`.log-row[data-id="${entry.id}"]`);
 };
 
+// Whether a row that is drawn lies wholly above what the list shows.
+const _isAboveView = (row, body) =>
+  row.offsetParent !== null && row.offsetTop + row.offsetHeight <= body.scrollTop;
+
+// A row's height to the fraction of a pixel it is laid out at.
+const _heightOf = (row) => row.getBoundingClientRect().height;
+
+// Scrolls the list by `pixels`, which is rarely a whole number: what the
+// browser rounds off is owed to the next call, or a reader's place would
+// creep away a fraction of a pixel per message.
+let _scrollOwed = 0;
+const _scrollBy = (body, pixels) => {
+  const from = body.scrollTop;
+  body.scrollTop = from + pixels + _scrollOwed;
+  _scrollOwed = from + pixels + _scrollOwed - body.scrollTop;
+};
+
 // The row to insert a row with time ``t`` before, or null to append.
 const _rowAfter = (list, t) => {
   let after = null;
@@ -511,14 +528,24 @@ const _pushEntry = (entry) => {
   _refreshSourcePillBadges();
   const list = el('logList');
   if (!list || dropped === entry) return;  // older than all the full list keeps: never drawn
-  const wasAtBottom = isAtBottom(list.parentElement);
+  const body = list.parentElement;
+  const wasAtBottom = isAtBottom(body);
   const after = _rowAfter(list, entry.t);
+  const droppedRow = dropped ? _rowOf(list, dropped) : null;
+  // A reader scrolled up keeps their place: a row that goes from above what
+  // is in view, or comes in there, would move it by its height, which the
+  // list takes back. Measured before the rows change, while nothing is to lay out.
+  const holdsPlace = !(state.logAutoscroll && wasAtBottom);
+  const goesAbove = holdsPlace && droppedRow && _isAboveView(droppedRow, body) ? _heightOf(droppedRow) : 0;
+  const comesAbove = holdsPlace && after && after.offsetParent && after.offsetTop <= body.scrollTop;
   const row = renderLogRow(entry);
   applyAllFiltersToRow(row);
   list.insertBefore(row, after);
   const listed = !row.classList.contains('hidden');  // drawn, and not hidden by a filter
   if (listed) _countUnread(entry);
-  if (dropped) _rowOf(list, dropped)?.remove();
+  const moved = (comesAbove ? _heightOf(row) : 0) - goesAbove;
+  droppedRow?.remove();
+  if (moved) _scrollBy(body, moved);
   updateEmptyHint();
   _followOrCountBelow(entry, list, listed && after === null, wasAtBottom);
 };
