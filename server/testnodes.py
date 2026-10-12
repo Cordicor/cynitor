@@ -89,7 +89,8 @@ def value_schema(data_type) -> dict:
     if isinstance(data_type, pydsdl.DelimitedType):
         data_type = data_type.inner_type
     if isinstance(data_type, pydsdl.BooleanType):
-        return {"kind": "bool", "type": str(data_type)}
+        # Named so whatever the pydsdl: older ones call it "saturated bool".
+        return {"kind": "bool", "type": "bool"}
     if isinstance(data_type, (pydsdl.IntegerType, pydsdl.FloatType)):
         limits = data_type.inclusive_value_range
         number = int if isinstance(data_type, pydsdl.IntegerType) else float
