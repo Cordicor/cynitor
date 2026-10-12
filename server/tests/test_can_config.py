@@ -5,6 +5,7 @@ import pytest
 from can_config import (
     bitrate_env_value,
     bitrate_from_env,
+    fd_data_bitrates,
     is_explicit_spec,
     is_socketcan,
     media_bitrate,
@@ -143,16 +144,32 @@ class TestCanFd:
     def test_no_data_bitrate_means_classic(self):
         assert resolve_data_bitrate("pcan:PCAN_USBBUS1", None) is None
 
-    @pytest.mark.parametrize("iface", ["pcan:PCAN_USBBUS1", "kvaser:0", "vector:0", "ixxat:0"])
+    @pytest.mark.parametrize("iface", ["pcan:PCAN_USBBUS1", "kvaser:0", "vector:0", "ixxat:0",
+                                       "gs_usb:0", "slcan:COM5@115200"])
     def test_fd_capable_adapters(self, iface):
         assert resolve_data_bitrate(iface, 2_000_000) == 2_000_000
         assert supports_fd(iface)
 
-    @pytest.mark.parametrize("iface", ["gs_usb:0", "slcan:COM5"])
+    @pytest.mark.parametrize("iface", ["canalystii:0", "usb2can:ED000200"])
     def test_adapters_without_can_fd_are_refused(self, iface):
         with pytest.raises(ValueError, match="cannot run CAN FD"):
             resolve_data_bitrate(iface, 2_000_000)
         assert not supports_fd(iface)
+
+    def test_slcan_runs_the_canable_firmwares_presets_only(self):
+        assert fd_data_bitrates("slcan:COM5") == (2_000_000, 5_000_000)
+        assert resolve_data_bitrate("slcan:COM5", 5_000_000) == 5_000_000
+        with pytest.raises(ValueError, match="slcan adapters run the CAN FD data phase at "
+                                             "2000000 or 5000000 bit/s only, not 4000000"):
+            resolve_data_bitrate("slcan:COM5", 4_000_000)
+
+    @pytest.mark.parametrize("iface", ["pcan:PCAN_USBBUS1", "gs_usb:0", "vcan0"])
+    def test_other_interfaces_have_no_presets(self, iface):
+        assert fd_data_bitrates(iface) is None
+
+    def test_candlelight_takes_any_data_bitrate(self):
+        # Its bit timing is worked out from the adapter's own clock (gs_usb_fd).
+        assert resolve_data_bitrate("gs_usb:0", 8_000_000) == 8_000_000
 
     def test_socketcan_ignores_a_data_bitrate(self):
         # The kernel owns its rates; FD follows the interface's own setting.

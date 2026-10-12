@@ -5565,6 +5565,38 @@ async def _(page):
         await sidebar_close(page, server)
 
 
+SIDEBAR_CANABLE_SLCAN = {"interface": "slcan:COM5", "label": "CANable (slcan) COM5", "needs_bitrate": True,
+                         "supports_fd": True, "data_bitrates": [2000000, 5000000]}
+
+
+@test("Sidebar: an adapter with CAN FD data bitrate presets is offered only those, and loses a pick it cannot run")
+async def _(page):
+    server = _SidebarServer()
+    server.adapters = [SIDEBAR_VCAN, SIDEBAR_PEAK, SIDEBAR_CANABLE_SLCAN]
+    await sidebar_open(page, server)
+    offered = "[...el('canDataBitrateSelect').options].filter((o) => !o.disabled).map((o) => o.value)"
+    try:
+        await page.locator("#connectDashboardBtn").click()
+        await page.wait_for_function("!el('connectCanBtn').disabled", timeout=WAIT_MS)
+        await page.select_option("#interfacesSelect", "pcan:PCAN_USBBUS1")
+        peak = await page.evaluate(offered)
+        await page.select_option("#interfacesSelect", "slcan:COM5")
+        canable = await page.evaluate(offered)
+        # Named under Other…, slcan is known by its interface.
+        await page.select_option("#interfacesSelect", "__other__")
+        await page.fill("#canSpecInput", "pcan:PCAN_USBBUS2")
+        await page.select_option("#canDataBitrateSelect", "4000000")
+        await page.fill("#canSpecInput", "slcan:COM7@115200")
+        typed = await page.evaluate(offered)
+        kept = await page.evaluate("el('canDataBitrateSelect').value")
+    finally:
+        await sidebar_close(page, server)
+    assert peak == ["", "1000000", "2000000", "4000000", "5000000", "8000000"], f"PEAK is offered {peak}"
+    assert canable == typed == ["", "2000000", "5000000"], \
+        f"A CANable with slcan firmware is offered {canable}; one named slcan:COM7, {typed}"
+    assert kept == "", f"4 Mbit/s, picked for a PEAK, is still picked for slcan: {kept!r}"
+
+
 # What the CAN section says of its last failure, if anything (#canError shown).
 SIDEBAR_CAN_ERROR = "el('canError') && !el('canError').classList.contains('hidden') ? el('canError').textContent : null"
 

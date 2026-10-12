@@ -232,10 +232,20 @@ class TestCANConnectSpecsAndBitrate:
     @pytest.mark.asyncio
     async def test_data_bitrate_refused_for_adapter_without_can_fd(self, client, session):
         resp = await client.post("/api/can/connect", json={
-            "interface": "gs_usb:0", "bitrate": 500000, "data_bitrate": 2000000,
+            "interface": "canalystii:0", "bitrate": 500000, "data_bitrate": 2000000,
         })
         assert resp.status == 400
         assert "cannot run CAN FD" in (await resp.json())["error"]
+        session.connect.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_data_bitrate_refused_outside_the_adapters_presets(self, client, session):
+        # The CANable 2.0's slcan firmware has two data bitrates.
+        resp = await client.post("/api/can/connect", json={
+            "interface": "slcan:COM5", "bitrate": 500000, "data_bitrate": 4000000,
+        })
+        assert resp.status == 400
+        assert "2000000 or 5000000 bit/s only" in (await resp.json())["error"]
         session.connect.assert_not_awaited()
 
     @pytest.mark.asyncio
@@ -1000,6 +1010,7 @@ class TestAdapterListing:
         c.get = MagicMock(return_value=[
             Adapter("vcan0", "vcan0 (SocketCAN)", False),
             Adapter("gs_usb:0", "CANable 0", True),
+            Adapter("slcan:COM5", "CANable (slcan) COM5", True, True, (2_000_000, 5_000_000)),
         ])
         return c
 
@@ -1019,7 +1030,9 @@ class TestAdapterListing:
         assert data["available_interfaces"] == ["vcan0"]  # unchanged for old clients
         assert data["available_adapters"][1] == {
             "interface": "gs_usb:0", "label": "CANable 0", "needs_bitrate": True, "supports_fd": False,
+            "data_bitrates": None,
         }
+        assert data["available_adapters"][2]["data_bitrates"] == [2_000_000, 5_000_000]
         assert data["can_bitrate"] is None
         assert data["can_data_bitrate"] is None and data["can_fd"] is False
 
@@ -1045,7 +1058,7 @@ class TestAdapterListing:
     async def test_refresh_query_forces_a_rescan(self, listing_client, catalog):
         resp = await listing_client.get("/api/can/adapters?refresh=1")
         assert resp.status == 200
-        assert len((await resp.json())["adapters"]) == 2
+        assert len((await resp.json())["adapters"]) == 3
         catalog.get.assert_called_once_with(True, True)
 
     @pytest.mark.asyncio

@@ -1,0 +1,395 @@
+"""CAN FD on candleLight (gs_usb) adapters, which python-can opens as Classic CAN only.
+
+python-can's gs_usb interface, and the gs_usb package beneath it, speak the
+Classic CAN part of the gs_usb protocol. candleLight firmware built with
+CAN FD, and other gs_usb devices such as CANnectivity, take CAN FD through
+the protocol's extensions, as the Linux kernel's gs_usb driver uses them: a
+feature bit, timing limits for the data phase, a request that sets its
+timing, a mode flag, and frames with up to 64 data bytes. On Linux that
+driver serves these adapters as SocketCAN. Elsewhere GsUsbFdBus stands in for
+it: the CAN hub opens a gs_usb adapter with it when given a data bitrate,
+and with python-can's gs_usb for Classic CAN.
+
+Devices are counted as the gs_usb package lists them, as python-can counts
+them, so that gs_usb:<n> names the same adapter either way; like python-can,
+GsUsbFdBus uses a device's first CAN channel. pyusb comes with the gs_usb
+package, which only Windows installs (see requirements.txt).
+"""
+
+from __future__ import annotations
+
+import collections
+import logging
+import struct
+import time
+from dataclasses import dataclass
+from typing import Optional
+
+import can
+from can.util import dlc2len, len2dlc
+
+from can_config import FD_DATA_SAMPLE_POINT, FD_NOMINAL_SAMPLE_POINT
+
+try:
+    import usb.core
+    import usb.util
+except ImportError:  # see the module docstring
+    usb = None
+
+logger = logging.getLogger(__name__)
+
+# Control requests (enum gs_usb_breq in the Linux driver), all of them vendor
+# requests to the interface: host to device, or device to host.
+_BREQ_HOST_FORMAT = 0
+_BREQ_BITTIMING = 1
+_BREQ_MODE = 2
+_BREQ_BT_CONST = 4
+_BREQ_DATA_BITTIMING = 10
+_BREQ_BT_CONST_EXT = 11
+_TO_DEVICE = 0x41
+_TO_HOST = 0xC1
+_CONTROL_TIMEOUT_MS = 1000
+
+_MODE_RESET = 0
+_MODE_START = 1
+_MODE_FLAG_FD = 1 << 8
+
+# Features a device reports with its bit timing limits.
+_FEATURE_FD = 1 << 8
+_FEATURE_REQ_USB_QUIRK_LPC546XX = 1 << 9  # frames sent to it take one byte more
+_FEATURE_BT_CONST_EXT = 1 << 10           # the data phase has limits of its own
+
+# Frame flags.
+_FLAG_OVERFLOW = 1 << 0  # the device lost frames before this one
+_FLAG_FD = 1 << 1
+_FLAG_BRS = 1 << 2
+_FLAG_ESI = 1 << 3
+
+# SocketCAN's can_id flags (linux/can.h), which gs_usb frames carry as they are.
+_CAN_EFF_FLAG = 0x80000000
+_CAN_RTR_FLAG = 0x40000000
+_CAN_ERR_FLAG = 0x20000000
+_CAN_EFF_MASK = 0x1FFFFFFF
+# A receive overflow, as SocketCAN reports one (linux/can/error.h).
+_CAN_ERR_CRTL = 0x00000004
+_CAN_ERR_CRTL_RX_OVERFLOW = 0x01
+
+_HOST_BYTE_ORDER = 0x0000BEEF  # little endian, all candleLight knows
+_ECHO_ID_RX = 0xFFFFFFFF       # a frame off the bus; any other echoes one sent
+_TX_ECHO_ID = 0
+_CHANNEL = 0
+
+_HEADER = struct.Struct("<IIBBBB")  # echo_id, can_id, can_dlc, channel, flags, reserved
+_FD_DATA_SIZE = 64
+# The most a device sends: a CAN FD frame, with a hardware timestamp after it.
+_MAX_FRAME_SIZE = _HEADER.size + _FD_DATA_SIZE + 4
+# BT_CONST answers with features then limits, BT_CONST_EXT with the data phase's after.
+_FEATURES = struct.Struct("<II")    # feature, fclk_can
+_LIMITS = struct.Struct("<8I")      # TimingLimits' fields
+_TIMING = struct.Struct("<5I")      # prop_seg, phase_seg1, phase_seg2, sjw, brp
+_MODE = struct.Struct("<II")        # mode, flags
+
+_ENDPOINT_IN = 0x80
+_TRANSFER_TYPE_MASK = 0x03
+_TRANSFER_TYPE_BULK = 0x02
+
+# How long send waits by default for the device to take a frame, in seconds.
+_SEND_TIMEOUT = 1.0
+
+
+@dataclass(frozen=True)
+class TimingLimits:
+    """The bit timings one phase of a device's CAN controller takes, in time quanta."""
+
+    tseg1_min: int
+    tseg1_max: int
+    tseg2_min: int
+    tseg2_max: int
+    sjw_max: int
+    brp_min: int
+    brp_max: int
+    brp_inc: int
+
+    def admits(self, brp: int, tseg1: int, tseg2: int) -> bool:
+        return (self.brp_min <= brp <= self.brp_max and brp % max(self.brp_inc, 1) == 0
+                and self.tseg1_min <= tseg1 <= self.tseg1_max
+                and self.tseg2_min <= tseg2 <= self.tseg2_max)
+
+
+@dataclass(frozen=True)
+class Capability:
+    """What a gs_usb device's CAN channel can do."""
+
+    feature: int
+    clock: int  # of the CAN controller, in Hz
+    nominal: TimingLimits
+    data: TimingLimits
+
+    @property
+    def can_fd(self) -> bool:
+        return bool(self.feature & _FEATURE_FD)
+
+
+def read_capability(device) -> Capability:
+    """Ask pyusb ``device`` what its first CAN channel can do.
+
+    A device that gives the data phase no limits of its own gets the nominal
+    ones there, as the Linux driver gives it.
+    """
+    answer = _control_in(device, _BREQ_BT_CONST, _FEATURES.size + _LIMITS.size)
+    feature, clock = _FEATURES.unpack_from(answer)
+    nominal = data = TimingLimits(*_LIMITS.unpack_from(answer, _FEATURES.size))
+    if feature & _FEATURE_FD and feature & _FEATURE_BT_CONST_EXT:
+        answer = _control_in(device, _BREQ_BT_CONST_EXT, _FEATURES.size + 2 * _LIMITS.size)
+        data = TimingLimits(*_LIMITS.unpack_from(answer, _FEATURES.size + _LIMITS.size))
+    return Capability(feature, clock, nominal, data)
+
+
+def fd_bit_timing(capability: Capability, bitrate: int, data_bitrate: int) -> can.BitTimingFd:
+    """A bit timing for ``bitrate`` with a ``data_bitrate`` data phase that the device takes.
+
+    Of python-can's timings for Cynitor's sample points (see can_config),
+    those within the device's limits, ranked as python-can ranks them: one
+    prescaler for both phases if there is such a timing, then the sample
+    points nearest those asked for, then the smallest prescalers. Each
+    synchronization jump width is cut to what the device takes. ValueError
+    if there is none.
+    """
+    fitting = [
+        _within_sjw_limits(timing, capability)
+        for timing in can.BitTimingFd.iterate_from_sample_point(
+            capability.clock, bitrate, FD_NOMINAL_SAMPLE_POINT, data_bitrate, FD_DATA_SAMPLE_POINT)
+        if capability.nominal.admits(timing.nom_brp, timing.nom_tseg1, timing.nom_tseg2)
+        and capability.data.admits(timing.data_brp, timing.data_tseg1, timing.data_tseg2)
+    ]
+    if not fitting:
+        raise ValueError(
+            f"no CAN FD bit timing for {bitrate} bit/s with a {data_bitrate} bit/s data phase "
+            f"at the adapter's {capability.clock / 1e6:g} MHz CAN clock"
+        )
+    return min(fitting, key=lambda timing: (
+        timing.nom_brp != timing.data_brp,
+        abs(timing.nom_sample_point - FD_NOMINAL_SAMPLE_POINT)
+        + abs(timing.data_sample_point - FD_DATA_SAMPLE_POINT),
+        abs(timing.nom_brp - timing.data_brp),
+        timing.nom_brp + timing.data_brp,
+    ))
+
+
+def _within_sjw_limits(timing: can.BitTimingFd, capability: Capability) -> can.BitTimingFd:
+    nom_sjw = min(timing.nom_sjw, capability.nominal.sjw_max)
+    data_sjw = min(timing.data_sjw, capability.data.sjw_max)
+    if (nom_sjw, data_sjw) == (timing.nom_sjw, timing.data_sjw):
+        return timing
+    return can.BitTimingFd(
+        f_clock=timing.f_clock,
+        nom_brp=timing.nom_brp, nom_tseg1=timing.nom_tseg1, nom_tseg2=timing.nom_tseg2, nom_sjw=nom_sjw,
+        data_brp=timing.data_brp, data_tseg1=timing.data_tseg1, data_tseg2=timing.data_tseg2,
+        data_sjw=data_sjw,
+    )
+
+
+class GsUsbFdBus(can.BusABC):
+    """The first CAN channel of the ``index``th gs_usb device, run as CAN FD.
+
+    CanInitializationError if there is no such device, it cannot be opened
+    (another program has it), or it cannot run CAN FD at these bitrates.
+
+    One thread may receive while another sends, as the CAN hub's do. The
+    device echoes every frame sent back; ``recv`` drops those, and returns
+    the frames off the bus, error frames among them. A USB error other than
+    a timeout, as when the adapter is unplugged, fails ``recv``.
+    """
+
+    def __init__(self, index: int, bitrate: int, data_bitrate: int, **kwargs: object) -> None:
+        if usb is None:
+            raise can.CanInterfaceNotImplementedError("gs_usb adapters need pyusb, which is not installed")
+        self.channel_info = f"gs_usb:{index}"
+        devices = _scan()
+        if not 0 <= index < len(devices):
+            raise can.CanInitializationError(f"Cannot find device {index}. Devices found: {len(devices)}")
+        self.device = devices[index]
+        try:
+            self._ep_in, self._ep_out, interface = _bulk_endpoints(self.device)
+            _control_out(self.device, _BREQ_HOST_FORMAT, struct.pack("<I", _HOST_BYTE_ORDER),
+                         value=1, index=interface)
+            capability = read_capability(self.device)
+            if not capability.can_fd:
+                raise can.CanInitializationError(
+                    f"{self.channel_info} cannot run CAN FD: its firmware does Classic CAN only. "
+                    f"Leave the data bitrate out for Classic CAN"
+                )
+            try:
+                timing = fd_bit_timing(capability, bitrate, data_bitrate)
+            except ValueError as exc:
+                raise can.CanInitializationError(f"{self.channel_info}: {exc}") from None
+            self._quirk = b"\0" if capability.feature & _FEATURE_REQ_USB_QUIRK_LPC546XX else b""
+            # The channel takes timings while stopped; a program may have left it running.
+            self._set_mode(_MODE_RESET)
+            _control_out(self.device, _BREQ_BITTIMING,
+                         _phase_timing(timing.nom_brp, timing.nom_tseg1, timing.nom_tseg2, timing.nom_sjw))
+            _control_out(self.device, _BREQ_DATA_BITTIMING,
+                         _phase_timing(timing.data_brp, timing.data_tseg1, timing.data_tseg2, timing.data_sjw))
+            self._set_mode(_MODE_START, _MODE_FLAG_FD)
+        except BaseException as exc:
+            usb.util.dispose_resources(self.device)
+            if isinstance(exc, usb.core.USBError):
+                raise can.CanInitializationError(f"{self.channel_info}: {exc}") from exc
+            raise
+        logger.info("%s: CAN FD, %s", self.channel_info, timing)
+        # Messages read but not returned yet: a frame and its overflow notice.
+        self._pending: collections.deque[can.Message] = collections.deque()
+        self._can_protocol = can.CanProtocol.CAN_FD
+        super().__init__(channel=index, **kwargs)
+
+    def send(self, msg: can.Message, timeout: Optional[float] = None) -> None:
+        """Hand ``msg`` to the device; CanOperationError if it does not take it within ``timeout``.
+
+        None waits a second, as python-can's gs_usb does, rather than for
+        ever: a device with nobody on the bus to acknowledge its frames
+        stops taking more.
+        """
+        frame = self._frame(msg)
+        try:
+            self.device.write(self._ep_out, frame, _milliseconds(_SEND_TIMEOUT if timeout is None else timeout))
+        except usb.core.USBError as exc:
+            raise can.CanOperationError(f"{self.channel_info}: send failed: {exc}") from exc
+
+    def _recv_internal(self, timeout: Optional[float]) -> tuple[Optional[can.Message], bool]:
+        if not self._pending:
+            try:
+                # To libusb a timeout of 0 means none.
+                frame = self.device.read(self._ep_in, _MAX_FRAME_SIZE,
+                                         0 if timeout is None else _milliseconds(timeout))
+            except usb.core.USBTimeoutError:
+                return None, False
+            except usb.core.USBError as exc:
+                raise can.CanOperationError(f"{self.channel_info}: receive failed: {exc}") from exc
+            self._pending.extend(self._messages(bytes(frame)))
+        return (self._pending.popleft() if self._pending else None), False
+
+    def shutdown(self) -> None:
+        if self._is_shutdown:
+            return
+        super().shutdown()
+        try:
+            self._set_mode(_MODE_RESET)  # off the bus
+        except usb.core.USBError as exc:  # unplugged, most likely
+            logger.debug("%s: could not stop the channel: %s", self.channel_info, exc)
+        finally:
+            # Now rather than once garbage-collected: WinUSB lets one handle
+            # at a time open the device, and connecting again needs one.
+            usb.util.dispose_resources(self.device)
+
+    def _set_mode(self, mode: int, flags: int = 0) -> None:
+        _control_out(self.device, _BREQ_MODE, _MODE.pack(mode, flags))
+
+    def _frame(self, msg: can.Message) -> bytes:
+        """``msg`` as the device takes it: each frame sized for CAN FD, as the Linux driver sends them."""
+        data = bytes(msg.data)
+        if len(data) > (_FD_DATA_SIZE if msg.is_fd else 8):
+            raise ValueError(f"{len(data)} data bytes do not fit a {'CAN FD' if msg.is_fd else 'Classic CAN'} frame")
+        can_id = msg.arbitration_id | (_CAN_EFF_FLAG if msg.is_extended_id else 0)
+        flags = 0
+        if msg.is_fd:
+            dlc = len2dlc(len(data))  # the device pads the data up to the DLC's length
+            flags = (_FLAG_FD | (_FLAG_BRS if msg.bitrate_switch else 0)
+                     | (_FLAG_ESI if msg.error_state_indicator else 0))
+        elif msg.is_remote_frame:
+            can_id |= _CAN_RTR_FLAG
+            dlc = msg.dlc
+        else:
+            dlc = len(data)
+        header = _HEADER.pack(_TX_ECHO_ID, can_id, dlc, _CHANNEL, flags, 0)
+        return header + data.ljust(_FD_DATA_SIZE, b"\0") + self._quirk
+
+    def _messages(self, frame: bytes) -> list[can.Message]:
+        """What a frame from the device reports: a frame off the bus, and an overflow."""
+        if len(frame) < _HEADER.size:
+            logger.debug("%s: %d-byte frame from the device dropped", self.channel_info, len(frame))
+            return []
+        echo_id, can_id, dlc, channel, flags, _ = _HEADER.unpack_from(frame)
+        if channel != _CHANNEL:
+            return []
+        messages = []
+        if echo_id == _ECHO_ID_RX:
+            message = self._message(can_id, dlc, flags, frame[_HEADER.size:])
+            if message is not None:
+                messages.append(message)
+        if flags & _FLAG_OVERFLOW:
+            messages.append(can.Message(
+                timestamp=time.time(), arbitration_id=_CAN_ERR_CRTL, is_extended_id=False,
+                is_error_frame=True, data=bytes([0, _CAN_ERR_CRTL_RX_OVERFLOW, 0, 0, 0, 0, 0, 0]),
+                channel=self.channel_info,
+            ))
+        return messages
+
+    def _message(self, can_id: int, dlc: int, flags: int, payload: bytes) -> Optional[can.Message]:
+        fd = bool(flags & _FLAG_FD)
+        remote = not fd and bool(can_id & _CAN_RTR_FLAG)
+        if fd:
+            length = dlc2len(dlc & 0x0F)
+        else:
+            length = 0 if remote else min(dlc, 8)
+        if len(payload) < length:
+            logger.debug("%s: frame with %d of its %d data bytes dropped", self.channel_info, len(payload), length)
+            return None
+        return can.Message(
+            timestamp=time.time(),
+            arbitration_id=can_id & _CAN_EFF_MASK,
+            is_extended_id=bool(can_id & _CAN_EFF_FLAG),
+            is_remote_frame=remote,
+            is_error_frame=bool(can_id & _CAN_ERR_FLAG),
+            is_fd=fd,
+            bitrate_switch=bool(flags & _FLAG_BRS),
+            error_state_indicator=bool(flags & _FLAG_ESI),
+            dlc=min(dlc, 8) if remote else None,
+            data=payload[:length],
+            channel=self.channel_info,
+        )
+
+
+def _scan() -> list:
+    """The pyusb devices of every gs_usb adapter, in the order the gs_usb package lists them."""
+    from gs_usb.gs_usb import GsUsb
+    return [found.gs_usb for found in GsUsb.scan()]
+
+
+def _bulk_endpoints(device) -> tuple[int, int, int]:
+    """The device's bulk IN and OUT endpoint addresses, and the number of their interface.
+
+    From its descriptors, as the Linux driver finds them: candleLight's are
+    0x81 and 0x02, other firmware's need not be.
+    """
+    interface = device.get_active_configuration()[(0, 0)]
+    bulk = [endpoint.bEndpointAddress for endpoint in interface
+            if endpoint.bmAttributes & _TRANSFER_TYPE_MASK == _TRANSFER_TYPE_BULK]
+    ep_in = next((address for address in bulk if address & _ENDPOINT_IN), None)
+    ep_out = next((address for address in bulk if not address & _ENDPOINT_IN), None)
+    if ep_in is None or ep_out is None:
+        raise can.CanInitializationError("The gs_usb device has no bulk endpoints for CAN frames")
+    return ep_in, ep_out, interface.bInterfaceNumber
+
+
+def _phase_timing(brp: int, tseg1: int, tseg2: int, sjw: int) -> bytes:
+    # The device adds prop_seg and phase_seg1 up again; split as the Linux driver splits them.
+    prop_seg = tseg1 // 2
+    return _TIMING.pack(prop_seg, tseg1 - prop_seg, tseg2, sjw, brp)
+
+
+def _control_out(device, request: int, payload: bytes, value: int = _CHANNEL, index: int = 0) -> None:
+    device.ctrl_transfer(_TO_DEVICE, request, value, index, payload, _CONTROL_TIMEOUT_MS)
+
+
+def _control_in(device, request: int, length: int, value: int = _CHANNEL, index: int = 0) -> bytes:
+    answer = bytes(device.ctrl_transfer(_TO_HOST, request, value, index, length, _CONTROL_TIMEOUT_MS))
+    if len(answer) < length:
+        raise can.CanInitializationError(
+            f"The gs_usb device answered request {request} with {len(answer)} bytes, not {length}"
+        )
+    return answer
+
+
+def _milliseconds(seconds: float) -> int:
+    # At least 1: to libusb, 0 means wait for ever.
+    return max(1, round(seconds * 1000))

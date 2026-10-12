@@ -463,6 +463,44 @@ class TestOpenAdapterCanFd:
         assert opened == [{"interface": "kvaser", "channel": 0, "bitrate": 500_000,
                            "data_bitrate": 4_000_000, "fd": True}]
 
+    def test_slcan_takes_the_rates_as_a_bit_timing(self, opened):
+        open_adapter("slcan:COM5@115200", 500_000, 5_000_000)
+        timing = opened[0].pop("timing")
+        assert (timing.nom_bitrate, timing.data_bitrate) == (500_000, 5_000_000)
+        assert opened == [{"interface": "slcan", "channel": "COM5", "tty_baudrate": 115200}]
+
+    @pytest.mark.parametrize("bitrate", [10_000, 20_000, 50_000, 83_300, 100_000, 125_000,
+                                         250_000, 500_000, 750_000, 1_000_000])
+    @pytest.mark.parametrize("data_bitrate", [2_000_000, 5_000_000])
+    def test_slcan_rates_come_out_exact(self, bitrate, data_bitrate):
+        # python-can matches them against the firmware's presets (S0-S9, Y2, Y5).
+        timing = can_hub._rates_only_timing(bitrate, data_bitrate)
+        assert (timing.nom_bitrate, timing.data_bitrate) == (bitrate, data_bitrate)
+
+    def test_slcan_sets_both_presets_before_joining_the_bus(self, monkeypatch):
+        # python-can's slcan itself, on a loopback serial port that hands back
+        # what it is sent: the commands of the CANable 2.0 firmware.
+        import can.interfaces.slcan as slcan
+        monkeypatch.setattr(slcan.time, "sleep", lambda seconds: None)  # its wait for the port to settle
+        bus = open_adapter("slcan:loop://", 500_000, 5_000_000)
+        try:
+            sent = bus.serialPortOrig.read(bus.serialPortOrig.in_waiting)
+        finally:
+            bus.shutdown()
+        assert sent.startswith(b"C\rS6\rY5\rO\r")
+
+    def test_gs_usb_goes_through_cynitors_driver(self, opened, monkeypatch):
+        # python-can's gs_usb runs Classic CAN only; see gs_usb_fd.
+        made = []
+        monkeypatch.setattr(can_hub, "GsUsbFdBus", lambda *args: made.append(args) or "bus")
+        assert open_adapter("gs_usb:1", 500_000, 2_000_000) == "bus"
+        assert made == [(1, 500_000, 2_000_000)] and opened == []
+
+    def test_gs_usb_classic_stays_with_python_can(self, opened, monkeypatch):
+        monkeypatch.setattr(can_hub, "GsUsbFdBus", lambda *args: pytest.fail("not for Classic CAN"))
+        open_adapter("gs_usb:0", 500_000)
+        assert opened == [{"interface": "gs_usb", "channel": "0", "bitrate": 500_000, "index": 0}]
+
 
 class FakeCountingHub:
     bitrate = 500_000

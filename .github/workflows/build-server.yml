@@ -189,10 +189,11 @@ jobs:
 
       - name: Smoke-test the executable
         # Imports and DLLs PyInstaller could not see only fail on connect, so
-        # the test connects: to a gs_usb index no adapter has (libusb must
-        # load for that answer), and through the CAN hub to a virtual bus. It
-        # also checks the dashboard, the token, and that killing the
-        # bootloader does not leave the server holding its port.
+        # the test connects: to a gs_usb index no adapter has, as Classic CAN
+        # and as CAN FD (libusb must load for that answer), and through the
+        # CAN hub to a virtual bus. It also checks the dashboard, the token,
+        # and that killing the bootloader does not leave the server holding
+        # its port.
         shell: powershell
         run: ./packaging/smoke-test.ps1
 

@@ -59,7 +59,7 @@ Open in browser:
 
 - Sidebar:
   - Server connection (API base URL + Connect button). A backend that stops answering is tried again until it answers: the dot pulses and the section says `reconnecting…`; Disconnect stops trying
-  - CAN interface dropdown + Connect button, off until the server is connected (its tooltip says so). Adapters other than SocketCAN take a bitrate, and CAN FD ones a data bitrate, remembered per adapter; the pick is kept while an adapter is missing from the list for a moment. Why the last connect failed, or why the backend ended the session (`last_error`), stays under the form until the next try
+  - CAN interface dropdown + Connect button, off until the server is connected (its tooltip says so). Adapters other than SocketCAN take a bitrate, and CAN FD ones a data bitrate (one of its presets for an adapter that has them, such as slcan's), remembered per adapter; the pick is kept while an adapter is missing from the list for a moment. Why the last connect failed, or why the backend ended the session (`last_error`), stays under the form until the next try
   - Load reading: messages per second, bus load and dropped messages, with a curve of the last minute over the interface list
   - Theme toggle (dark/light)
   - Collapsible (half-hidden toggle button); collapsed, its controls leave the Tab order

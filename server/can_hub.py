@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import itertools
 import logging
+import math
 import random
 import threading
 import time
@@ -28,7 +29,9 @@ from typing import Callable, Optional
 
 import can
 
+from can_config import FD_DATA_SAMPLE_POINT, FD_NOMINAL_SAMPLE_POINT
 from cyphal_v11 import V11Traffic
+from gs_usb_fd import GsUsbFdBus
 
 logger = logging.getLogger(__name__)
 
@@ -79,11 +82,16 @@ def open_adapter(spec: str, bitrate: int, data_bitrate: Optional[int] = None) ->
     (``kvaser:0``) are integers while named ones (``pcan:PCAN_USBBUS1``) are not.
 
     With ``data_bitrate`` the adapter is opened as CAN FD, again as pycyphal
-    would: PCAN takes a full bit timing, the others the two rates.
+    would: PCAN takes a full bit timing, the others the two rates. pycyphal
+    runs neither slcan nor gs_usb as CAN FD: slcan takes the two rates as a
+    bit timing, and gs_usb is opened with Cynitor's own driver (gs_usb_fd),
+    as python-can's runs Classic CAN only.
     """
     interface, sep, channel = spec.partition(":")
     if not sep or not interface:
         raise ValueError(f"Expected <interface>:<channel>, got {spec!r}")
+    if interface == "gs_usb" and data_bitrate is not None:
+        return GsUsbFdBus(int(channel), bitrate, data_bitrate)
     kwargs: dict = {"bitrate": bitrate}
     if interface == "slcan" and "@" in channel:
         channel, _, baud = channel.rpartition("@")
@@ -96,13 +104,30 @@ def open_adapter(spec: str, bitrate: int, data_bitrate: Optional[int] = None) ->
     if data_bitrate is not None:
         if interface == "pcan":
             kwargs = {"timing": can.BitTimingFd.from_sample_point(
-                f_clock=80_000_000, nom_bitrate=bitrate, nom_sample_point=80,
-                data_bitrate=data_bitrate, data_sample_point=80,
-            )}
+                f_clock=80_000_000, nom_bitrate=bitrate, nom_sample_point=FD_NOMINAL_SAMPLE_POINT,
+                data_bitrate=data_bitrate, data_sample_point=FD_DATA_SAMPLE_POINT,
+            ), "fd": True}
+        elif interface == "slcan":
+            kwargs["timing"] = _rates_only_timing(kwargs.pop("bitrate"), data_bitrate)
         else:
-            kwargs["data_bitrate"] = data_bitrate
-        kwargs["fd"] = True
+            kwargs.update(data_bitrate=data_bitrate, fd=True)
     return can.ThreadSafeBus(interface=interface, channel=channel, **kwargs)
+
+
+def _rates_only_timing(bitrate: int, data_bitrate: int) -> can.BitTimingFd:
+    """A bit timing that carries just ``bitrate`` and ``data_bitrate``, both exact.
+
+    python-can's slcan takes CAN FD rates only as a BitTimingFd, of which it
+    reads nothing but the two rates: the adapter has presets for them (see
+    can_config.FD_DATA_BITRATES). Ten time quanta per bit in either phase,
+    at a clock both rates divide.
+    """
+    clock = 10 * math.lcm(bitrate, data_bitrate)
+    return can.BitTimingFd(
+        f_clock=clock,
+        nom_brp=clock // (10 * bitrate), nom_tseg1=7, nom_tseg2=2, nom_sjw=2,
+        data_brp=clock // (10 * data_bitrate), data_tseg1=7, data_tseg2=2, data_sjw=2,
+    )
 
 
 def frame_bits(msg: can.Message) -> tuple[int, int]:
@@ -126,9 +151,9 @@ def presence_check(bus: can.BusABC) -> Optional[Callable[[], bool]]:
 
     python-can's gs_usb reads swallow USB errors, so an unplugged CANable
     looks exactly like a quiet bus. Enumerating USB devices for the one we
-    opened needs no I/O to the device itself. Other drivers fail their reads
-    when the adapter goes away, which the hub already treats as fatal, so
-    they get no check.
+    opened needs no I/O to the device itself. Other drivers, Cynitor's CAN
+    FD one for gs_usb among them, fail their reads when the adapter goes
+    away, which the hub already treats as fatal, so they get no check.
     """
     device = getattr(getattr(bus, "gs_usb", None), "gs_usb", None)
     if device is None:

@@ -128,7 +128,7 @@ Other options:
 | Flag | Effect |
 |------|--------|
 | `--bitrate <n>` | Bus speed in bit/s. Required with `--can` for every adapter Cynitor opens itself (PCAN, gs_usb, slcan, …); there is no default, because a wrong guess disrupts the bus. Ignored for SocketCAN, whose bitrate is set with `ip link` |
-| `--data-bitrate <n>` | CAN FD data-phase speed in bit/s. Opens the adapter as CAN FD (PEAK, Kvaser, Vector, IXXAT); leave it out for Classic CAN. Ignored for SocketCAN, which runs CAN FD when the interface is set up for it (see [CAN FD](#can-fd)) |
+| `--data-bitrate <n>` | CAN FD data-phase speed in bit/s. Opens the adapter as CAN FD (PEAK, Kvaser, Vector, IXXAT, candleLight with CAN FD firmware, CANable 2.0 with slcan firmware); leave it out for Classic CAN. Ignored for SocketCAN, which runs CAN FD when the interface is set up for it (see [CAN FD](#can-fd)) |
 | `--bind <host>` | Listen on `<host>` (default `127.0.0.1`; `0.0.0.0` to expose on the network) |
 | `--port <n>` | Listen on `<n>` instead of 8080 |
 | `--data-dir <dir>` | Keep history, recordings and the allocator's node-ID table in `<dir>` instead of the default data folder (see [Where data is kept](#where-data-is-kept)) |
@@ -176,6 +176,10 @@ python3 main.py --can gs_usb:0 --bitrate 500000
 python3 main.py --can slcan:COM5@115200 --bitrate 500000
 # PEAK PCAN-USB FD, CAN FD with a 2 Mbit/s data phase
 python3 main.py --can pcan:PCAN_USBBUS1 --bitrate 500000 --data-bitrate 2000000
+# candleLight firmware with CAN FD, a 4 Mbit/s data phase
+python3 main.py --can gs_usb:0 --bitrate 1000000 --data-bitrate 4000000
+# CANable 2.0 / slcan firmware, CAN FD with its 5 Mbit/s data phase
+python3 main.py --can slcan:COM5@115200 --bitrate 1000000 --data-bitrate 5000000
 
 # Or connect a running backend
 curl -X POST http://localhost:8080/api/can/connect \
@@ -206,7 +210,12 @@ Cyphal/CAN FD works on both paths:
   ```
 
   Bus load then needs a `canbusload` from mid-2021 or later; older ones, such as Ubuntu 22.04's (2020.11), count Classic CAN frames only, so CAN FD load reads low.
-- **Adapters Cynitor opens itself**: give the data-phase bitrate with `--data-bitrate`, or pick it under the bitrate in the dashboard. PEAK, Kvaser, Vector and IXXAT can do this. candleLight (`gs_usb`) and slcan adapters cannot through python-can; on Linux, use them as SocketCAN for CAN FD.
+- **Adapters Cynitor opens itself**, every adapter on Windows and macOS: give the data-phase bitrate with `--data-bitrate`, or pick it under the bitrate in the dashboard, which offers it where the adapter can run CAN FD:
+  - PEAK, Kvaser, Vector and IXXAT, through their vendor drivers.
+  - candleLight (`gs_usb`) adapters whose firmware does CAN FD, and other gs_usb devices that do. python-can's gs_usb runs Classic CAN only, so for CAN FD Cynitor drives the adapter itself, the way the Linux kernel's gs_usb driver does. Each adapter says whether its firmware does CAN FD: one that does not, such as a CANable 1.0, is offered Classic CAN only. Cynitor works out the bit timing from the adapter's CAN clock and limits, aiming at an 80 % sample point in both phases, as for PEAK.
+  - The CANable 2.0 with its slcan firmware, which has two data-phase presets: 2 and 5 Mbit/s.
+
+  On Linux a candleLight adapter is a SocketCAN interface, set up for CAN FD as above. An slcan adapter can be named by its tty instead, such as `slcan:/dev/ttyACM0`, with no `slcand` attached to it.
 
 Every node on a CAN FD bus must be set up for CAN FD: Cynitor sends its own frames as CAN FD frames there, which a Classic-only controller answers with error frames.
 
