@@ -533,14 +533,25 @@ body {
   white-space: pre-wrap;
 }
 
-.log-row-sev-trace    .log-row-sev { color: var(--muted); opacity: 0.7; }
-.log-row-sev-debug    .log-row-sev { color: var(--accent); opacity: 0.85; }
+/* Colour is kept for what needs a look. TRACE and DEBUG are the message's own
+   colour in a light weight, INFO and NOTICE bold; from WARNING up the label
+   takes the severity's colour, which CRITICAL and ALERT fill in: their rows
+   are tinted, and red on that tint would read poorly. */
+.log-row-sev-trace    .log-row-sev,
+.log-row-sev-debug    .log-row-sev { color: var(--text); font-weight: 400; }
 .log-row-sev-info     .log-row-sev { color: var(--text); }
 .log-row-sev-notice   .log-row-sev { color: var(--text-bright); }
 .log-row-sev-warning  .log-row-sev { color: var(--warn); }
 .log-row-sev-error    .log-row-sev { color: var(--error); }
-.log-row-sev-critical .log-row-sev { color: var(--error); font-weight: 800; }
-.log-row-sev-alert    .log-row-sev { color: var(--error); font-weight: 800; }
+.log-row-sev-critical .log-row-sev,
+.log-row-sev-alert    .log-row-sev {
+  justify-self: start;
+  padding: 0 0.1875rem;
+  border-radius: 0.1875rem;
+  background: var(--error);
+  color: var(--surface);
+  font-weight: 800;
+}
 .log-row-sev-none     .log-row-sev { color: var(--muted); }
 
 /* A bar on the left edge marks what needs a look when scanning. */

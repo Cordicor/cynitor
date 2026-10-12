@@ -6294,6 +6294,56 @@ async def _(page):
     assert all("2026" in cell["title"] and not cell["cut"] for cell in seen), f"Tooltips, and whether a time is cut: {seen}"
 
 
+# The WCAG contrast of an element's text against what is painted behind it, opacity counted.
+CONTRAST_OF = """(selector) => {
+    const parse = (colour) => { const n = colour.match(/[\\d.]+/g).map(Number); return {rgb: n.slice(0, 3), alpha: n.length > 3 ? n[3] : 1}; };
+    const over = (top, alpha, under) => top.map((v, i) => v * alpha + under[i] * (1 - alpha));
+    const luminance = (rgb) => { const [r, g, b] = rgb.map((v) => { v /= 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; });
+        return 0.2126 * r + 0.7152 * g + 0.0722 * b; };
+    const element = document.querySelector(selector);
+    const layers = [];
+    let opacity = 1;
+    for (let node = element; node; node = node.parentElement) {
+        const style = getComputedStyle(node);
+        opacity *= Number(style.opacity);
+        const fill = parse(style.backgroundColor);
+        if (fill.alpha > 0 && !layers.some((layer) => layer.alpha === 1)) layers.push(fill);
+    }
+    let behind = [255, 255, 255];
+    for (const layer of layers.reverse()) behind = over(layer.rgb, layer.alpha, behind);
+    const text = parse(getComputedStyle(element).color);
+    const [light, dark] = [luminance(over(text.rgb, text.alpha * opacity, behind)), luminance(behind)].sort((a, b) => b - a);
+    return Math.round((light + 0.05) / (dark + 0.05) * 100) / 100; }"""
+
+
+@test("Log panel: every severity's label reads against its row in both themes, and DEBUG takes no colour")
+async def _(page):
+    was_open = await set_log_panel(page, True)
+    await page.locator("#logClearBtn").click()
+    levels = ["trace", "debug", "info", "notice", "warning", "error", "critical", "alert"]
+    seen = {}
+    try:
+        for severity in range(8):
+            await page.evaluate(INGEST_DIAGNOSTIC, [8 - severity, severity, f"severity {severity}"])
+        for _ in range(2):  # the theme in use, then the other, and back to the first
+            theme = await page.evaluate("document.documentElement.getAttribute('data-theme') || 'light'")
+            await page.mouse.move(400, 400)
+            await page.wait_for_timeout(300)
+            seen[theme] = {level: await page.evaluate(CONTRAST_OF, f".log-row-sev-{level} .log-row-sev") for level in levels}
+            seen[theme]["debug is coloured"] = await page.evaluate("""() => getComputedStyle(
+                document.querySelector('.log-row-sev-debug .log-row-sev')).color
+                !== getComputedStyle(document.querySelector('.log-row-sev-debug .log-row-text')).color""")
+            await page.locator("#themeToggle").click()
+    finally:
+        await page.locator("#logClearBtn").click()
+        await set_log_panel(page, was_open)
+    assert set(seen) == {"light", "dark"}, f"Themes checked: {list(seen)}"
+    for theme, contrasts in seen.items():
+        faint = {level: contrasts[level] for level in levels if contrasts[level] < 4.5}
+        assert not faint, f"In the {theme} theme these labels have less than 4.5:1 against their row: {faint}"
+        assert not contrasts["debug is coloured"], f"In the {theme} theme DEBUG's label has a colour of its own"
+
+
 # Keep last: it reloads the page with every other host unreachable.
 @test("Dashboard works with no internet access")
 async def _(page):
