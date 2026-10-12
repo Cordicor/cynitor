@@ -173,6 +173,14 @@ const isAtBottom = (container) => {
   return container.scrollHeight - container.scrollTop - container.clientHeight <= AUTOSCROLL_STICKY_PX;
 };
 
+// The name of the node an entry comes from, kept from when it is first known:
+// a list drawn again later finds the node gone with the bus, or its ID taken
+// by another device.
+const entryNodeName = (entry) => {
+  if (!entry.nodeName) entry.nodeName = nodeDisplayName(entry.nodeId);
+  return entry.nodeName;
+};
+
 // Who a row comes from: [html, plain text for the filter, tooltip].
 const logRowSource = (entry) => {
   if (entry.source === 'server') {
@@ -180,7 +188,7 @@ const logRowSource = (entry) => {
     return [escapeHtml(logger), logger, `backend logger: ${logger}`];
   }
   if (entry.nodeId == null) return ['', '', ''];
-  const name = nodeDisplayName(entry.nodeId);
+  const name = entryNodeName(entry);
   const html = `<span class="log-row-nid">${entry.nodeId}</span>${name ? ` ${escapeHtml(name)}` : ''}`;
   return [html, `${entry.nodeId} ${name}`, `node ${entry.nodeId}${name ? ` (${name})` : ''}`];
 };

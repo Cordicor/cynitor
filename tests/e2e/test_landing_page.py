@@ -5933,6 +5933,27 @@ async def _(page):
     assert await toggle.get_attribute("aria-controls") == "logPanel", "The toggle does not name the panel it controls"
 
 
+@test("Log panel: a row keeps its node's name once the bus is gone and the list is drawn again")
+async def _(page):
+    was_open = await set_log_panel(page, True)
+    await page.locator("#logClearBtn").click()
+    await page.evaluate("""() => { window.e2eNodesBefore = state.latestNodesPayload;
+        state.latestNodesPayload = {node_count: 1, nodes: {50: {node_id: 50, name: 'demo.sensor', unique_id: []}}}; }""")
+    try:
+        await page.evaluate(INGEST_DIAGNOSTIC, [1, 4, "supply voltage low"])
+        named = (await page.evaluate(LOG_ROWS))[0]
+        await page.evaluate("state.latestNodesPayload = {node_count: 0, nodes: {}}")  # as a CAN disconnect leaves it
+        await set_log_panel(page, False)
+        await set_log_panel(page, True)  # opening the panel draws its list again
+        redrawn = (await page.evaluate(LOG_ROWS))[0]
+    finally:
+        await page.evaluate("state.latestNodesPayload = window.e2eNodesBefore; delete window.e2eNodesBefore")
+        await page.locator("#logClearBtn").click()
+        await set_log_panel(page, was_open)
+    assert "50 demo.sensor supply voltage low" in named, f"The row as it arrived: {named}"
+    assert redrawn == named, f"Drawn again after the disconnect: {redrawn!r}, was {named!r}"
+
+
 # Keep last: it reloads the page with every other host unreachable.
 @test("Dashboard works with no internet access")
 async def _(page):
