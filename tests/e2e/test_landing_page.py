@@ -873,7 +873,7 @@ async def _(page):
     strip = page.locator("#nodesStatus")
     await page.wait_for_function("document.getElementById('nodesStatus').innerText.includes('unusual health')", timeout=3000)
     text = " ".join((await strip.inner_text()).split())
-    assert text == "6 nodes 1 offline 1 displaced 2 unusual health Compact", f"Strip: {text!r}"
+    assert text == "6 nodes 2 offline 2 unusual health Hide offline Compact", f"Strip: {text!r}"
     ids = "nodesTabulator.getRows('active').map(r => r.getData().id)"
     await strip.locator('[data-focus="health"]').click()
     try:
@@ -881,6 +881,37 @@ async def _(page):
     finally:
         await strip.locator('[data-focus="health"]').click()
     assert len(await page.evaluate(ids)) == 6, "Clicked again, the count lets the rows go"
+
+
+@test("Tables: Hide offline takes every offline node out of the Nodes table at once, says how many, and is remembered")
+async def _(page):
+    strip = page.locator("#nodesStatus")
+    toggle = strip.locator("[data-hide-offline]")
+    ids = "nodesTabulator.getRows('active').map(r => r.getData().id)"
+    said = "document.getElementById('nodesStatus').innerText.replace(/\\s+/g, ' ').trim()"
+    listed = await page.evaluate(ids)
+    assert await toggle.count() == 1, "The Nodes strip has no Hide offline"
+    await toggle.click()
+    try:
+        await page.wait_for_function(f"({ids}).length === 4", timeout=3000)
+        hidden = {"ids": await page.evaluate(ids), "strip": await page.evaluate(said),
+                  "pressed": await toggle.get_attribute("aria-pressed")}
+        await page.wait_for_function(
+            "JSON.parse(localStorage.getItem('cynitor.dashboard.settings.v1')).hideOfflineNodes === true", timeout=2000)
+        # With every other node hidden by its own eye button, only offline nodes are
+        # left to list: the empty table says where they went.
+        await page.evaluate("""() => { for (const id of [10, 20, 21, 30]) {
+            state.hiddenNodeIds.add(nodeStableKey(state.latestNodesPayload.nodes[id])); } renderNodesTable(); }""")
+        await page.wait_for_function(f"({ids}).length === 0", timeout=3000)
+        empty = await page.locator("#nodesTable .tabulator-placeholder").inner_text()
+    finally:
+        await page.evaluate("state.hiddenNodeIds.clear(); renderNodesTable()")
+        await toggle.click()
+    await page.wait_for_function(f"({ids}).length === 6", timeout=3000)
+    assert len(listed) == 6 and hidden["ids"] == [10, 20, 21, 30], f"Listed {listed}; with Hide offline on: {hidden['ids']}"
+    assert hidden["strip"] == "4 nodes · 2 offline hidden 2 unusual health Hide offline Compact" \
+        and hidden["pressed"] == "true", f"The strip with Hide offline on: {hidden}"
+    assert "2 offline nodes are hidden" in " ".join(empty.split()), f"The table with only offline nodes, hidden: {empty!r}"
 
 
 @test("Tables: Compact makes the rows of both tables shorter, and is remembered")

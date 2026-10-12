@@ -5953,6 +5953,15 @@ details.svc-history-entry[open] > summary::before {
   margin-left: auto;
 }
 
+/* A table's own toggle before it (Hide offline) takes that push to the end instead. */
+.table-offline-btn {
+  margin-left: auto;
+}
+
+.table-offline-btn + .table-density-btn {
+  margin-left: 0;
+}
+
 /* The IDs outrank every cell rule, the fav and action cells' padding included. */
 #nodesTable.table-compact .tabulator-row .tabulator-cell,
 #subjectsTable.table-compact .tabulator-row .tabulator-cell {

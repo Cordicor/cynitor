@@ -102,6 +102,7 @@ const state = {
   subjectsKind: 'all',   // what the Subjects table lists: 'all', 'Subject' or 'Service'
   compactRows: false,    // the tables' rows at about 70% height (Compact, in their strips)
   nodesFocus: null,      // the kind picked out in a table's status strip, or null
+  hideOfflineNodes: false,  // Nodes table: offline nodes left out (Hide offline, in its strip)
   subjectsFocus: null,
   recordings: [],
   activeRecordingId: null,
@@ -457,8 +458,9 @@ const bindRowKeys = (tabulator, activate, keys = {}) => {
 // A strip over a table saying what needs a look: the total, then a count of
 // each kind of row that does, which, clicked, picks those rows out (see the
 // Graph's strip); last, the Compact toggle (see applyRowDensity). `before` is
-// markup to put first. Returns the kinds counted.
-const renderStatusStrip = (strip, total, kinds, rows, focus, before = '') => {
+// markup to put first, `tools` markup for the table's own toggles, put before
+// Compact. Returns the kinds counted.
+const renderStatusStrip = (strip, total, kinds, rows, focus, before = '', tools = '') => {
   const counts = kinds.map((k) => ({ ...k, count: rows.filter(k.test).length })).filter((k) => k.count);
   const fresh = document.createElement('div');
   fresh.innerHTML = `${before}<span class="table-status-total">${escapeHtml(total)}</span>`
@@ -466,6 +468,7 @@ const renderStatusStrip = (strip, total, kinds, rows, focus, before = '') => {
       ? counts.map((k) => `<button type="button" class="table-chip table-chip--${k.level}" data-focus="${k.key}"`
         + ` aria-pressed="${focus === k.key}">${k.count} ${escapeHtml(k.label)}</button>`).join('')
       : '<span class="table-status-usual">nothing unusual</span>')
+    + tools
     + `<button type="button" class="table-kind-btn table-density-btn${state.compactRows ? ' active' : ''}"`
     + ` data-density aria-pressed="${state.compactRows}">Compact</button>`;
   patchChildren(strip, fresh);
@@ -823,6 +826,7 @@ const _writeSettingsNow = () => {
     subjectsTableSort: state.subjectsTableSort,
     subjectsKind: state.subjectsKind,
     compactRows: state.compactRows,
+    hideOfflineNodes: state.hideOfflineNodes,
     subjectsHeaderFilters: typeof getSubjectsHeaderFilters === 'function' ? getSubjectsHeaderFilters() : null,
     recordFilterDraft: state.recordFilterDraft,
     rawLogPlaybackSpeed: state.rawLogPlaybackSpeed,
@@ -986,6 +990,7 @@ const loadSettings = () => {
     state.subjectsKind = settings.subjectsKind;
   }
   if (settings.compactRows === true) state.compactRows = true;
+  if (settings.hideOfflineNodes === true) state.hideOfflineNodes = true;
   if (typeof settings.plotTimeWindow === 'number' && settings.plotTimeWindow >= 0) {
     state.plotTimeWindow = settings.plotTimeWindow;
   }
