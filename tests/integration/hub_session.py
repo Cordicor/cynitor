@@ -66,7 +66,6 @@ DATA_BITRATE = 2_000_000 if FD else None
 DEVICE_NODE_ID = 50
 TEMPERATURE_SUBJECT_ID = 1620
 UNNAMED_SUBJECT_ID = 1700  # published with no register naming its type
-TEST_NODE_ID = 60
 TEST_NODE_SUBJECT_ID = 1900
 TIMEOUT = 30.0
 
@@ -355,23 +354,26 @@ async def run() -> None:
         decoded = await wait_for(lambda: TEMPERATURE_SUBJECT_ID in session.telemetry.latest_by_subject)
         check(decoded, f"and its subject {TEMPERATURE_SUBJECT_ID} decodes")
 
-        # A test node, defined as the dashboard defines one, counting up.
+        # A test node, defined as the dashboard defines one, counting up. It sets
+        # no node-ID: Cynitor, whose own was drawn at random, gives it a free one.
         from testnodes import normalize_definition, value_schema
         dsdl = DsdlManager(ROOT, data_dir=data)
         definition = normalize_definition({
-            "name": "integration.test_node", "node_id": TEST_NODE_ID,
+            "name": "integration.test_node",
             "publishers": [{"subject_id": TEST_NODE_SUBJECT_ID, "type": "uavcan.si.unit.velocity.Scalar.1.0",
                             "rate_hz": 20, "value": {"meter_per_second": {"$wave": "count", "min": 0, "max": 1000}}}],
         }, lambda name: value_schema(dsdl.read_model(name)))
         test_id = session.test_nodes.add(definition)["id"]
         started = await session.test_nodes.start(test_id)  # the simulated bus asks for no confirmation
-        check(started["running"], f"a test node starts on node-ID {TEST_NODE_ID}")
+        test_node_id = started["assigned_node_id"]
+        check(started["running"] and test_node_id not in (None, int(own_id), 1, DEVICE_NODE_ID),
+              f"a test node starts on the node-ID Cynitor gives it, {test_node_id}, clear of the bus's")
 
         def test_node():
-            return session.telemetry.get_all_nodes_info()["nodes"].get(TEST_NODE_ID, {})
+            return session.telemetry.get_all_nodes_info()["nodes"].get(test_node_id, {})
 
         check(await wait_for(lambda: test_node().get("name") == "integration.test_node"), "Cynitor names it")
-        check(session.test_nodes.identify(TEST_NODE_ID, test_node().get("unique_id_hex")) == test_id,
+        check(session.test_nodes.identify(test_node_id, test_node().get("unique_id_hex")) == test_id,
               "and knows it for a test node by its unique-ID")
 
         def speed():
@@ -384,7 +386,7 @@ async def run() -> None:
         check(await wait_for(lambda: speed() > first, timeout=5), f"counting up: {first}, then {speed()}")
 
         await session.test_nodes.replace(test_id, {**definition, "mode": "maintenance"})
-        check(await wait_for(lambda: session.scanner.node_mode(TEST_NODE_ID) == "MAINTENANCE", timeout=5),
+        check(await wait_for(lambda: session.scanner.node_mode(test_node_id) == "MAINTENANCE", timeout=5),
               "its mode changes as it runs")
         await session.disconnect()
         check(not session.is_running and session.simulation is None, "disconnecting stops the simulated bus")

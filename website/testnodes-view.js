@@ -125,7 +125,7 @@ const TestNodesView = (() => {
         <div class="tn-card-head">
           <span class="tn-state tn-state-${stateClass}">${stateText}</span>
           <h3 class="tn-card-name">${name}</h3>
-          <span class="tn-card-id">node-ID ${node.node_id}</span>
+          <span class="tn-card-id">${escapeHtml(nodeIdText(node))}</span>
           <span class="tn-card-actions">
             ${toggle}
             <button type="button" class="svc-btn" data-action="edit" aria-label="Change ${name}"${off}>Change</button>
@@ -175,8 +175,15 @@ const TestNodesView = (() => {
   const findNode = (id) => listing?.test_nodes.find((node) => node.id === id);
 
   // A test node as the API takes it back: what the listing adds to it left out.
+  // A test node's node-ID on its card: the one it is set to; or, left to
+  // Cynitor, the one it was given when it last started, "auto" until then.
+  const nodeIdText = (node) => {
+    if (node.node_id != null) return `node-ID ${node.node_id}`;
+    return node.assigned_node_id != null ? `node-ID ${node.assigned_node_id} · auto` : 'node-ID auto';
+  };
+
   const definitionOf = (node) => {
-    const { id, unique_id, running, error, started_unix, ...definition } = node;
+    const { id, unique_id, assigned_node_id, running, error, started_unix, ...definition } = node;
     return definition;
   };
 
@@ -207,7 +214,8 @@ const TestNodesView = (() => {
       if (e.status !== 409 || e.data?.confirm !== 'real_bus') throw e;
       const question = `Start ${node.name} on the real bus ${listing.bus?.interface || ''}?\n\n`
         + 'Its messages reach every node on the bus, and may move real things: an actuator taking its '
-        + `setpoints from a subject it publishes, say. Node-ID ${node.node_id} must be free.`;
+        + 'setpoints from a subject it publishes, say. '
+        + (node.node_id != null ? `Node-ID ${node.node_id} must be free.` : 'Cynitor gives it a node-ID that is free.');
       if (!window.confirm(question)) return;
       await requestJson(`/api/testnodes/${node.id}/start`,
         { method: 'POST', body: JSON.stringify({ confirm_real_bus: true }) });
@@ -424,18 +432,6 @@ const TestNodesView = (() => {
 
   // ── Editor ────────────────────────────────────────────────────────────
 
-  // A node-ID for a new test node: the first one free from 100 up, else from 1.
-  const freeNodeId = () => {
-    const taken = new Set(listing.test_nodes.map((n) => n.node_id));
-    for (const node of Object.values(state.latestNodesPayload?.nodes || {})) {
-      if (Number.isInteger(node?.node_id) && !node.has_disappeared) taken.add(node.node_id);
-    }
-    const ids = [];
-    for (let id = 100; id <= NODE_ID_RANGE[1]; id += 1) ids.push(id);
-    for (let id = NODE_ID_RANGE[0]; id < 100; id += 1) ids.push(id);
-    return ids.find((id) => !taken.has(id)) ?? 100;
-  };
-
   // Who else has node-ID `nodeId`: a node online on the bus, or another test node.
   const nodeIdClash = (nodeId, ownId) => {
     if (!listing) return '';
@@ -514,7 +510,7 @@ const TestNodesView = (() => {
     if (!listing) return;
     const box = el('tnEditor');
     const definition = node ? definitionOf(node) : {
-      name: '', node_id: freeNodeId(), health: 'nominal', mode: 'operational', vendor_status: 0,
+      name: '', node_id: null, health: 'nominal', mode: 'operational', vendor_status: 0,
       software_version: { major: 1, minor: 0 }, publishers: [],
     };
     const select = (names, chosen, label) => {
@@ -526,14 +522,20 @@ const TestNodesView = (() => {
       step: '1', required: true, value, 'aria-label': label });
     const name = h('input', { type: 'text', required: true, maxlength: '50', value: definition.name,
       'aria-label': 'Name', placeholder: 'e.g. test.battery', spellcheck: 'false' });
-    const nodeId = number(definition.node_id, ...NODE_ID_RANGE, 'Node-ID');
+    // Left empty, the node-ID is Cynitor's to give: a free one when the node
+    // starts, the same from run to run while it stays free.
+    const nodeId = h('input', { type: 'number', min: String(NODE_ID_RANGE[0]), max: String(NODE_ID_RANGE[1]),
+      step: '1', value: definition.node_id ?? '', 'aria-label': 'Node-ID', placeholder: 'auto',
+      title: 'Empty: Cynitor gives it a free node-ID when it starts' });
     const health = select(listing.health, definition.health, 'Health');
     const mode = select(listing.modes, definition.mode, 'Mode');
     const vendor = number(definition.vendor_status, 0, 255, 'Vendor-specific status code');
     const major = number(definition.software_version.major, 0, 255, 'Software version, major');
     const minor = number(definition.software_version.minor, 0, 255, 'Software version, minor');
     const clash = h('p', { class: 'tn-field-error', role: 'status' });
-    const showClash = () => { clash.textContent = nodeIdClash(Number(nodeId.value), node?.id); };
+    const showClash = () => {
+      clash.textContent = nodeId.value.trim() === '' ? '' : nodeIdClash(Number(nodeId.value), node?.id);
+    };
     nodeId.addEventListener('input', showClash);
     showClash();
 
@@ -587,7 +589,8 @@ const TestNodesView = (() => {
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
       const sent = {
-        name: name.value.trim(), node_id: Number(nodeId.value), health: health.value, mode: mode.value,
+        name: name.value.trim(), node_id: nodeId.value.trim() === '' ? null : Number(nodeId.value),
+        health: health.value, mode: mode.value,
         vendor_status: Number(vendor.value), software_version: { major: Number(major.value), minor: Number(minor.value) },
         publishers: publishers.map((p) => p.get()),
       };

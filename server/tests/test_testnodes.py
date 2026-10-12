@@ -221,6 +221,10 @@ class TestNormalizeDefinition:
             "software_version": {"major": 1, "minor": 0}, "publishers": [],
         }
 
+    def test_no_node_id_leaves_it_to_cynitor(self):
+        for raw in ({"name": "probe"}, {"name": "probe", "node_id": None}):
+            assert normalize_definition(raw, _schema_of)["node_id"] is None
+
     def test_a_publisher(self):
         value = {"value": _wave("sine", 280, 300, 60)}
         node = normalize_definition({"name": "probe", "node_id": 60, "health": "caution",
@@ -500,6 +504,86 @@ class TestRunning:
             await manager.start(test_id)
 
 
+class TestNodeIdLeftToCynitor:
+    """A test node that sets no node-ID is given one when it starts."""
+
+    async def test_it_is_given_a_free_one(self, manager, started):
+        test_id = manager.add(_node(node_id=None))["id"]
+        assert manager.view(test_id)["assigned_node_id"] is None  # not before it has started
+        manager.attach(_bus(in_use={100, 101}))  # Cynitor's own, and a node on the bus
+        view = await manager.start(test_id)
+        assert (view["node_id"], view["assigned_node_id"], view["running"]) == (None, 102, True)
+        assert started[0].transport == ("transport", 102) and manager.running_node_ids() == {102}
+        assert manager.identify(102, None) == test_id
+
+    async def test_not_one_another_test_node_is_set_to_or_was_given(self, manager):
+        manager.add(_node("set to 100", node_id=100))  # not running, but 100 is its
+        a, b = manager.add(_node("a", node_id=None)), manager.add(_node("b", node_id=None))
+        manager.attach(_bus())
+        assert (await manager.start(a["id"]))["assigned_node_id"] == 101
+        await manager.stop(a["id"])
+        assert (await manager.start(b["id"]))["assigned_node_id"] == 102  # 101 is still a's
+
+    async def test_below_100_once_all_above_are_taken(self, manager):
+        test_id = manager.add(_node(node_id=None))["id"]
+        manager.attach(_bus(in_use=set(range(100, 126)) | {1}))
+        assert (await manager.start(test_id))["assigned_node_id"] == 2
+
+    async def test_none_is_free(self, manager, started):
+        test_id = manager.add(_node(node_id=None))["id"]
+        manager.attach(_bus(in_use=set(range(1, 126))))
+        with pytest.raises(RuntimeError, match="No node-ID is free"):
+            await manager.start(test_id)
+        assert started == [] and manager.view(test_id)["assigned_node_id"] is None
+
+    async def test_it_keeps_the_one_it_had_from_run_to_run(self, manager):
+        in_use = set()
+        manager.attach(TestNodeBus(lambda node_id: None, True, lambda: in_use))
+        test_id = manager.add(_node(node_id=None))["id"]
+        assert (await manager.start(test_id))["assigned_node_id"] == 100
+        await manager.stop(test_id)
+        in_use.add(101)
+        assert (await manager.start(test_id))["assigned_node_id"] == 100
+        # Kept with the definition: Cynitor started again gives it the same.
+        again = TestNodeManager(manager.path)
+        again.attach(_bus())
+        assert again.view(test_id)["assigned_node_id"] == 100
+        assert (await again.start(test_id))["assigned_node_id"] == 100
+
+    async def test_and_another_once_a_node_on_the_bus_has_taken_it(self, manager, monkeypatch):
+        monkeypatch.setattr(testnodes, "_STOPPED_GRACE_S", 0.0)
+        in_use = set()
+        manager.attach(TestNodeBus(lambda node_id: None, True, lambda: in_use))
+        test_id = manager.add(_node(node_id=None))["id"]
+        await manager.start(test_id)
+        await manager.stop(test_id)
+        in_use.add(100)  # another node has it now
+        assert (await manager.start(test_id))["assigned_node_id"] == 101
+
+    async def test_a_change_that_restarts_it_keeps_its_node_id(self, manager, started):
+        manager.attach(_bus())
+        test_id = manager.add(_node(node_id=None))["id"]
+        await manager.start(test_id)
+        view = await manager.replace(test_id, _node(node_id=None, publishers=[_running_publisher()]))
+        assert view["assigned_node_id"] == 100 and started[1].transport == ("transport", 100)
+
+    async def test_health_changes_as_it_runs_on_the_node_id_it_was_given(self, manager, started):
+        manager.attach(_bus())
+        test_id = manager.add(_node(node_id=None))["id"]
+        await manager.start(test_id)
+        await manager.replace(test_id, _node(node_id=None, health="warning"))
+        assert len(started) == 1 and started[0].definition["health"] == "warning"
+        assert manager.running_node_ids() == {100} and manager.identify(100, None) == test_id
+
+    async def test_setting_a_node_id_forgets_the_one_given(self, manager):
+        manager.attach(_bus())
+        test_id = manager.add(_node(node_id=None))["id"]
+        await manager.start(test_id)
+        await manager.stop(test_id)
+        view = await manager.replace(test_id, _node(node_id=70))
+        assert (view["node_id"], view["assigned_node_id"]) == (70, None)
+
+
 class TestChangesWhileRunning:
     @pytest.fixture
     async def running(self, manager) -> str:
@@ -555,6 +639,16 @@ class TestAPI:
         server = WebSocketServer(session=session, host="127.0.0.1", port=0, dsdl_manager=dsdl)
         async with TestClient(TestServer(server.app)) as c:
             yield c
+
+    async def test_one_with_no_node_id_is_given_one_when_it_starts(self, client, session):
+        resp = await client.post("/api/testnodes", json={"name": "probe"})
+        made = await resp.json()
+        assert resp.status == 201 and (made["node_id"], made["assigned_node_id"]) == (None, None)
+        session.test_nodes.attach(_bus(in_use={100}))
+        started = await (await client.post(f"/api/testnodes/{made['id']}/start")).json()
+        assert (started["running"], started["node_id"], started["assigned_node_id"]) == (True, None, 101)
+        listing = await (await client.get("/api/testnodes")).json()
+        assert listing["test_nodes"][0]["assigned_node_id"] == 101
 
     async def test_a_test_nodes_life(self, client, session):
         listing = await (await client.get("/api/testnodes")).json()

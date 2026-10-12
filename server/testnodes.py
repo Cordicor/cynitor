@@ -49,6 +49,9 @@ MAX_TOTAL_RATE_HZ = 1000.0
 # Node-IDs 0 and 126-127 are left alone: Cyphal reserves the top two for
 # diagnostic tools, and 0 is easily taken for "none".
 MIN_NODE_ID, MAX_NODE_ID = 1, 125
+# Where Cynitor looks first for a node-ID for a test node that sets none: from
+# here up, then below.
+AUTO_NODE_ID_FROM = 100
 MAX_SUBJECT_ID = 8191
 MAX_NAME_BYTES = 50  # uavcan.node.GetInfo's name
 MAX_PERIOD_S = 86_400.0
@@ -251,7 +254,8 @@ def normalize_definition(raw: Any, schema_of: Callable[[str], dict]) -> dict:
     name = raw.get("name")
     if not isinstance(name, str) or not name.strip() or len(name.strip().encode()) > MAX_NAME_BYTES:
         raise ValueError(f"name: 1 to {MAX_NAME_BYTES} bytes of text")
-    node_id = _integer(raw.get("node_id"), "node_id", MIN_NODE_ID, MAX_NODE_ID)
+    # None leaves it to Cynitor, which gives the node a free one when it starts.
+    node_id = None if raw.get("node_id") is None else _integer(raw["node_id"], "node_id", MIN_NODE_ID, MAX_NODE_ID)
     health = raw.get("health", "nominal")
     if health not in HEALTH:
         raise ValueError(f"health: one of {', '.join(HEALTH)}")
@@ -477,7 +481,8 @@ class TestNodeManager:
         """A test node as the API gives it: its definition, and whether it runs. UnknownTestNode if there is none."""
         definition = self._definition(test_id)
         running = self._running.get(test_id)
-        return {**definition, "running": running is not None,
+        # assigned_node_id: the node-ID Cynitor gave one that sets none, when it last started.
+        return {"assigned_node_id": None, **definition, "running": running is not None,
                 "error": running.error if running else None,
                 "started_unix": running.started_unix if running else None}
 
@@ -498,19 +503,21 @@ class TestNodeManager:
         async with self._lock:
             old = self._definition(test_id)
             node = {"id": test_id, "unique_id": old["unique_id"], **definition}
+            if node["node_id"] is None and old.get("assigned_node_id") is not None:
+                node["assigned_node_id"] = old["assigned_node_id"]  # still its own, for its next start
             running = self._running.get(test_id)
             live = running is not None and _status_changed_only(old, node)
             if running is not None and not live:
-                self._check_node_id(test_id, node["node_id"])
+                node_id = self._node_id_for(test_id, node)
                 self._check_rate(test_id, node)
             self._save({**self._nodes, test_id: node})
             self._nodes[test_id] = node
             if live:
-                running.set_status(node)
+                running.set_status({**node, "node_id": running.definition["node_id"]})
             elif running is not None:  # confirmed when it started, so no new confirmation
                 await self._close(test_id)
-                self._run(node)
-                logger.info("Test node %d restarted with its new definition", node["node_id"])
+                self._run(node, node_id)
+                logger.info("Test node %d restarted with its new definition", node_id)
             return self.view(test_id)
 
     async def delete(self, test_id: str) -> None:
@@ -574,10 +581,10 @@ class TestNodeManager:
                 raise ConfirmationRequired(
                     "This is a real bus: a test node's messages reach every node on it, and may move real "
                     "things. Confirm to start it")
-            self._check_node_id(test_id, definition["node_id"])
+            node_id = self._node_id_for(test_id, definition)
             self._check_rate(test_id, definition)
-            self._run(definition)
-            logger.info("Test node %d (%s) started%s", definition["node_id"], definition["name"],
+            self._run(definition, node_id)
+            logger.info("Test node %d (%s) started%s", node_id, definition["name"],
                         "" if self._bus.simulated else " on a real bus")
             return self.view(test_id)
 
@@ -585,33 +592,67 @@ class TestNodeManager:
         """Stop a test node; UnknownTestNode if there is none."""
         async with self._lock:
             self._definition(test_id)
-            if test_id in self._running:
+            running = self._running.get(test_id)
+            if running is not None:
                 await self._close(test_id)
-                logger.info("Test node %d stopped", self._nodes[test_id]["node_id"])
+                logger.info("Test node %d stopped", running.definition["node_id"])
             return self.view(test_id)
 
-    def _run(self, definition: dict) -> None:
+    def _run(self, definition: dict, node_id: int) -> None:
+        """Start the kept ``definition`` on ``node_id``: its own, or the one Cynitor gives it."""
         try:
-            self._running[definition["id"]] = _Running(definition, self._bus.make_transport)
+            self._running[definition["id"]] = _Running({**definition, "node_id": node_id}, self._bus.make_transport)
         except ValueError:
             raise
         except Exception as exc:  # the bus refused it, say: as much a conflict with the bus as a taken node-ID
             raise RuntimeError(f"Test node {definition['name']} did not start: {exc}") from exc
+        if definition["node_id"] is None and definition.get("assigned_node_id") != node_id:
+            definition["assigned_node_id"] = node_id  # kept, so that it is the same node at its next start
+            self._save(self._nodes)
 
     async def _close(self, test_id: str) -> None:
         running = self._running.pop(test_id)
         self._stopped_at[running.definition["node_id"]] = time.monotonic()
         await running.close()
 
-    def _check_node_id(self, test_id: str, node_id: int) -> None:
+    def _node_id_for(self, test_id: str, definition: dict) -> int:
+        """The node-ID a test node starts on: its own, which must be free, or a free one if it sets none.
+
+        One that sets none takes the one it was given last time while that is
+        free, so that it is the same node from run to run; else the first free
+        from AUTO_NODE_ID_FROM up, then below. Never one that another test node
+        is set to or was given, which that node would then find taken.
+        RuntimeError if its own is taken, or none is free.
+        """
+        if definition["node_id"] is not None:
+            self._check_node_id(test_id, definition["node_id"])
+            return definition["node_id"]
+        others = {node["node_id"] or node.get("assigned_node_id")
+                  for other_id, node in self._nodes.items() if other_id != test_id}
+        candidates = [definition.get("assigned_node_id"), *range(AUTO_NODE_ID_FROM, MAX_NODE_ID + 1),
+                      *range(MIN_NODE_ID, AUTO_NODE_ID_FROM)]
+        for node_id in candidates:
+            if node_id is not None and node_id not in others and self._why_taken(test_id, node_id) is None:
+                return node_id
+        raise RuntimeError("No node-ID is free on the bus for this test node")
+
+    def _why_taken(self, test_id: str, node_id: int) -> Optional[str]:
+        """Why test node ``test_id`` cannot start on ``node_id``, or None if it can."""
         for other_id, running in self._running.items():
             if other_id != test_id and running.definition["node_id"] == node_id:
-                raise RuntimeError(f"Test node {running.definition['name']} already runs on node-ID {node_id}")
+                return f"Test node {running.definition['name']} already runs on node-ID {node_id}"
         now = time.monotonic()
         ours = {r.definition["node_id"] for r in self._running.values()}
         ours |= {nid for nid, at in self._stopped_at.items() if now - at < _STOPPED_GRACE_S}
         if node_id in self._bus.node_ids_in_use() and node_id not in ours:
-            raise RuntimeError(f"Node-ID {node_id} is in use on the bus; give the test node another")
+            return (f"Node-ID {node_id} is in use on the bus; give the test node another, "
+                    "or none, for Cynitor to give it a free one")
+        return None
+
+    def _check_node_id(self, test_id: str, node_id: int) -> None:
+        reason = self._why_taken(test_id, node_id)
+        if reason:
+            raise RuntimeError(reason)
 
     def _check_rate(self, test_id: str, definition: dict) -> None:
         others = sum(r.rate_hz for other_id, r in self._running.items() if other_id != test_id)

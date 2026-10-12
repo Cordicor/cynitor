@@ -5339,7 +5339,7 @@ def _test_node(test_id, name, node_id=60, running=False):
             "mode": "operational", "vendor_status": 0, "software_version": {"major": 1, "minor": 0},
             "publishers": [{"subject_id": 1000, "type": _VOLTAGE, "rate_hz": 10.0, "port": "voltage_scalar",
                             "value": {"volt": 12}}],
-            "running": running, "error": None, "started_unix": None}
+            "assigned_node_id": None, "running": running, "error": None, "started_unix": None}
 
 
 class _TestNodesServer:
@@ -5375,6 +5375,8 @@ class _TestNodesServer:
                 return {"error": "Connect CAN first: test nodes run on the bus Cynitor is connected to"}, 409
             if not self.bus.startswith("sim:") and not (body or {}).get("confirm_real_bus"):
                 return {"error": "This is a real bus. Confirm to start it", "confirm": "real_bus"}, 409
+            if node["node_id"] is None:  # left to the server, which gives it a free one
+                node["assigned_node_id"] = node["assigned_node_id"] or 100
             node["running"] = True
         elif match[2] == "/stop":
             node["running"] = False
@@ -5435,13 +5437,45 @@ async def _(page):
         await page.wait_for_selector("#tnList .tn-card", timeout=WAIT_MS)
         [sent] = server.sent("POST", "/api/testnodes")
         card = await page.locator("#tnList .tn-card").inner_text()
-        assert (sent["name"], sent["node_id"], sent["health"]) == ("test.battery", 100, "nominal") and \
+        assert (sent["name"], sent["node_id"], sent["health"]) == ("test.battery", None, "nominal") and \
             sent["publishers"] == [{"subject_id": 1000, "type": _VOLTAGE, "rate_hz": 1,
                                     "value": {"volt": {"$wave": "sine", "min": 11, "max": 12.6, "period_s": 20}}}], \
             f"Sent: {sent}"
-        assert "test.battery" in card and "node-ID 100" in card and _VOLTAGE in card, f"The card: {card!r}"
+        assert "test.battery" in card and "node-ID auto" in card and _VOLTAGE in card, f"The card: {card!r}"
     finally:
         await testnodes_close(page, server)
+
+
+@test("Test nodes: the node-ID is left to Cynitor unless one is typed, and the card shows the one it was given")
+async def _(page):
+    server = _TestNodesServer()
+    await testnodes_open(page, server)
+    card_ids = page.locator("#tnList .tn-card .tn-card-id")
+    try:
+        await page.locator("#tnNew").click()
+        editor = page.locator("#tnEditor")
+        field = editor.get_by_label("Node-ID", exact=True)
+        offered = [await field.input_value(), await field.get_attribute("placeholder"), await field.get_attribute("required")]
+        await editor.get_by_label("Name", exact=True).fill("left.to.cynitor")
+        await editor.get_by_role("button", name="Make it").click()
+        await page.wait_for_selector("#tnList .tn-card", timeout=WAIT_MS)
+        before_start = await card_ids.first.inner_text()
+        await page.get_by_role("button", name="Start left.to.cynitor").click()
+        await page.wait_for_selector(".tn-state-running", timeout=WAIT_MS)
+        running = await card_ids.first.inner_text()
+        await page.locator("#tnNew").click()
+        await editor.get_by_label("Name", exact=True).fill("set.by.hand")
+        await editor.get_by_label("Node-ID", exact=True).fill("42")
+        await editor.get_by_role("button", name="Make it").click()
+        await page.wait_for_function("document.querySelectorAll('#tnList .tn-card').length === 2", timeout=WAIT_MS)
+        typed = await card_ids.nth(1).inner_text()
+        sent = [body["node_id"] for body in server.sent("POST", "/api/testnodes")]
+    finally:
+        await testnodes_close(page, server)
+    assert offered == ["", "auto", None], f"A new test node's Node-ID field (value, placeholder, required): {offered}"
+    assert sent == [None, 42], f"Node-IDs sent for the two test nodes: {sent}"
+    assert (before_start, running, typed) == ("node-ID auto", "node-ID 100 · auto", "node-ID 42"), \
+        f"The cards' node-IDs: {before_start!r}, running {running!r}; the typed one {typed!r}"
 
 
 @test("Test nodes: a definition the server refuses says why in the editor, which keeps what was typed")
@@ -5507,7 +5541,7 @@ async def _(page):
                                      timeout=WAIT_MS)
         [sent] = server.sent("PUT", "/api/testnodes/t1")
         expected = {key: value for key, value in _test_node("t1", "probe").items()
-                    if key not in ("id", "unique_id", "running", "error", "started_unix")}
+                    if key not in ("id", "unique_id", "assigned_node_id", "running", "error", "started_unix")}
         assert sent == {**expected, "health": "warning"}, f"Sent: {sent}"
     finally:
         await testnodes_close(page, server)
