@@ -46,8 +46,9 @@ SIM_BUSES: dict[str, tuple[int, Optional[int]]] = {
     "fd": (1_000_000, 4_000_000),
 }
 
-# Sample points of the CAN FD bit timings Cynitor works out itself, for PCAN
-# and candleLight adapters, in percent: what pycyphal uses for PCAN.
+# Sample points of the CAN FD bit timing Cynitor works out itself for PCAN, in
+# percent: what pycyphal uses there. candleLight adapters take the Linux
+# kernel's (gs_usb_fd.sample_point).
 FD_NOMINAL_SAMPLE_POINT = 80.0
 FD_DATA_SAMPLE_POINT = 80.0
 

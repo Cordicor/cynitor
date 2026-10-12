@@ -28,8 +28,6 @@ from typing import Optional
 import can
 from can.util import dlc2len, len2dlc
 
-from can_config import FD_DATA_SAMPLE_POINT, FD_NOMINAL_SAMPLE_POINT
-
 try:
     import usb.core
     import usb.util
@@ -145,20 +143,37 @@ def read_capability(device) -> Capability:
     return Capability(feature, clock, nominal, data)
 
 
+def sample_point(bitrate: int) -> float:
+    """Where in the bit a phase running at ``bitrate`` is sampled, in percent.
+
+    What the Linux kernel takes for a bitrate given without a sample point
+    (CiA's recommendation), so that an adapter runs here as it does as
+    SocketCAN. A node switches to the data bitrate at the sample point of
+    the BRS bit: sampled at 80 % among nodes sampling at 87.5 %, an adapter
+    sends frames at 500 kbit/s and 2 Mbit/s that they take for errors.
+    """
+    if bitrate > 800_000:
+        return 75.0
+    if bitrate > 500_000:
+        return 80.0
+    return 87.5
+
+
 def fd_bit_timing(capability: Capability, bitrate: int, data_bitrate: int) -> can.BitTimingFd:
     """A bit timing for ``bitrate`` with a ``data_bitrate`` data phase that the device takes.
 
-    Of python-can's timings for Cynitor's sample points (see can_config),
+    Of python-can's timings for each phase's sample point (see sample_point),
     those within the device's limits, ranked as python-can ranks them: one
     prescaler for both phases if there is such a timing, then the sample
     points nearest those asked for, then the smallest prescalers. Each
     synchronization jump width is cut to what the device takes. ValueError
     if there is none.
     """
+    nominal_point, data_point = sample_point(bitrate), sample_point(data_bitrate)
     fitting = [
         _within_sjw_limits(timing, capability)
         for timing in can.BitTimingFd.iterate_from_sample_point(
-            capability.clock, bitrate, FD_NOMINAL_SAMPLE_POINT, data_bitrate, FD_DATA_SAMPLE_POINT)
+            capability.clock, bitrate, nominal_point, data_bitrate, data_point)
         if capability.nominal.admits(timing.nom_brp, timing.nom_tseg1, timing.nom_tseg2)
         and capability.data.admits(timing.data_brp, timing.data_tseg1, timing.data_tseg2)
     ]
@@ -169,8 +184,8 @@ def fd_bit_timing(capability: Capability, bitrate: int, data_bitrate: int) -> ca
         )
     return min(fitting, key=lambda timing: (
         timing.nom_brp != timing.data_brp,
-        abs(timing.nom_sample_point - FD_NOMINAL_SAMPLE_POINT)
-        + abs(timing.data_sample_point - FD_DATA_SAMPLE_POINT),
+        abs(timing.nom_sample_point - nominal_point)
+        + abs(timing.data_sample_point - data_point),
         abs(timing.nom_brp - timing.data_brp),
         timing.nom_brp + timing.data_brp,
     ))
