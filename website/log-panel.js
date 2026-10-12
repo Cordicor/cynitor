@@ -111,6 +111,11 @@ const extractRecordEntry = (event) => {
 
 // ── Entry builders ──────────────────────────────────────────────────
 
+// The time of a message that brings no usable one: now, and not before the
+// newest entry, whose time is by the server's clock, which may be ahead.
+const _arrivalTime = () =>
+  Math.max(Date.now() / 1000, state.logBuffer[state.logBuffer.length - 1]?.t || 0);
+
 const buildCyphalEntry = (event, kind) => {
   let severity = null;
   let text = '';
@@ -121,9 +126,13 @@ const buildCyphalEntry = (event, kind) => {
   } else {
     text = firstStringValue(event);
   }
+  // A replayed message carries the time it was recorded at, which may be days
+  // ago: it is listed where it arrives, its row saying when it was recorded.
+  const replayed = event.replay === true;
   return {
     id: ++state._logSeq,
-    t: event.timestamp_unix || (Date.now() / 1000),
+    t: (!replayed && event.timestamp_unix) || _arrivalTime(),
+    recordedT: replayed ? event.timestamp_unix ?? null : null,
     source: 'cyphal',
     kind,
     severity,
@@ -176,6 +185,10 @@ const logRowSource = (entry) => {
   return [html, `${entry.nodeId} ${name}`, `node ${entry.nodeId}${name ? ` (${name})` : ''}`];
 };
 
+// A small label before a row's message, its tooltip saying more.
+const logRowTag = (label, title) =>
+  `<span class="log-row-tag" title="${escapeHtml(title)}">${escapeHtml(label)}</span> `;
+
 // time · severity · message, the source leading the message: one layout for
 // both sources, so the columns line up and the message keeps the width.
 const renderLogRow = (entry) => {
@@ -187,13 +200,15 @@ const renderLogRow = (entry) => {
   row.dataset.t = String(entry.t);
   const [srcHtml, srcText, srcTitle] = logRowSource(entry);
   const subject = entry.kind === 'subject' ? `s${entry.subjectId}` : '';
-  row.dataset.search = `${srcText} ${subject} ${entry.text}`.toLowerCase();
+  const replay = entry.recordedT != null ? 'replay' : '';
+  row.dataset.search = `${srcText} ${replay} ${subject} ${entry.text}`.toLowerCase();
   row.innerHTML = `
     <span class="log-row-time">${escapeHtml(formatLogTime(entry.t))}</span>
     <span class="log-row-sev" title="${escapeHtml(sev != null ? SEVERITY_LABELS[sev] : 'no severity')}">${
       sev != null ? SEVERITY_SHORT[sev] : '—'}</span>
     <span class="log-row-text">${srcHtml ? `<span class="log-row-src" title="${escapeHtml(srcTitle)}">${srcHtml}</span> ` : ''}${
-      subject ? `<span class="log-row-tag" title="${escapeHtml(entry.subjectName)}">${subject}</span> ` : ''}${
+      replay ? logRowTag(replay, `Replayed from a recording: recorded ${new Date(entry.recordedT * 1000).toLocaleString()}`) : ''}${
+      subject ? logRowTag(subject, entry.subjectName) : ''}${
       escapeHtml(entry.text)}</span>`;
   return row;
 };

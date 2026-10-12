@@ -5883,6 +5883,30 @@ async def _(page):
     assert seen["found"] == 1, f"The filter finds {seen['found']} rows for the oldest message kept, {seen['oldest']!r}"
 
 
+@test("Log panel: a replayed message is listed where it arrives, marked, with the time it was recorded")
+async def _(page):
+    was_open = await set_log_panel(page, True)
+    await page.locator("#logClearBtn").click()
+    try:
+        await page.evaluate(INGEST_DIAGNOSTIC, [-30, 2, "live, before it"])  # by a server clock 30 s ahead
+        # As server/replay.py sends it: the recording's time, two days old, and replay: true.
+        await page.evaluate("""() => ingestLogEvent({subject_id: 8184, message_type: 'Record_1_1', publisher_node_id: 50,
+            replay: true, timestamp_unix: new Date(2026, 9, 10, 9, 8, 7).getTime() / 1000,
+            attributes: [{attribute: 'severity', value: 5}, {attribute: 'text', value: 'replayed fault'}]})""")
+        rows = await page.evaluate(LOG_ROWS)
+        label, title = await page.evaluate("""() => { const tag = el('logList').lastElementChild.querySelector('.log-row-tag');
+            return [tag?.textContent, tag?.title]; }""")
+        await page.locator("#logFilterInput").fill("replay")
+        filtered = await page.locator("#logList .log-row:not(.hidden)").count()
+    finally:
+        await page.locator("#logFilterInput").fill("")
+        await page.locator("#logClearBtn").click()
+        await set_log_panel(page, was_open)
+    assert len(rows) == 2 and "replayed fault" in rows[1], f"The replayed message should come last: {rows}"
+    assert label == "replay" and "2026" in (title or "") and "9:08:07" in title, f"Its tag: {label!r}, saying {title!r}"
+    assert filtered == 1, f"'replay' in the filter lists {filtered} rows"
+
+
 # Keep last: it reloads the page with every other host unreachable.
 @test("Dashboard works with no internet access")
 async def _(page):

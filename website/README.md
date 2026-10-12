@@ -96,6 +96,7 @@ Open in browser:
   - Per-source toggle pills (`CYPHAL`, `SERVER`) with live count badges
   - `Min: TRACE…ALERT` severity floor applies across all sources via mapped levels; user-added subjects always show
   - `+` button opens a subject picker listing every subject whose payload carries a string field
+  - A message from a replayed recording is listed where it arrives, tagged `replay`; the tag's tooltip gives the time it was recorded
   - Cyphal row layout: `time · n<id> · s<id> · MessageType · text`; Server: `time · LEVEL · logger · message`
   - SERVER pill turns amber with a corner dot, its tooltip saying why, while nothing can come from it: no backend connection, or a log that cannot be read
   - The server's log is asked only for what came since the last record shown; where more came than one request takes, a line says records are missing there
