@@ -448,6 +448,11 @@ body {
   border-color: var(--accent);
 }
 
+/* Beside the sources, at the header's right: it takes the whole log away. */
+.log-save-btn {
+  margin-left: auto;
+}
+
 .log-panel-body {
   flex: 1;
   overflow-y: auto;

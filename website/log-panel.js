@@ -351,6 +351,49 @@ const updateEmptyHint = () => {
   const text = _emptyHintText();
   if (text && empty.textContent !== text) empty.textContent = text;
   empty.classList.toggle('hidden', !text);
+  // Save has something to save exactly when the list shows a message.
+  const save = el('logSaveBtn');
+  if (save) {
+    save.disabled = Boolean(text);
+    save.title = text ? 'No messages listed to save' : 'Save the messages listed to a file';
+  }
+};
+
+// ── Saving the log to a file ────────────────────────────────────────
+
+const LOG_FILE_HEADER = '# Cynitor log. Tab-separated: time (UTC), severity, who said it, message.';
+
+// One message as a line of the file.
+const logFileLine = (entry) => {
+  const who = entry.source === 'server' ? `server ${entry.loggerName || ''}`.trim()
+    : entry.nodeId == null ? 'node (anonymous)'
+    : `node ${entry.nodeId} ${entryNodeName(entry)}`.trim();
+  const tags = [
+    entry.recordedT != null ? 'replay' : '',
+    entry.kind === 'subject' ? `s${entry.subjectId}` : '',
+    entry.count > 1 ? `×${entry.count}` : '',
+  ].filter(Boolean);
+  return [
+    new Date(entry.t * 1000).toISOString(),
+    entry.severity != null ? SEVERITY_LABELS[entry.severity] : '-',
+    [who, ...tags].join(' '),
+    entry.text,
+  ].join('\t');
+};
+
+// The messages the list shows now, filters applied, oldest first.
+const listedLogEntries = () => {
+  const listed = new Set([...el('logList').querySelectorAll('.log-row:not(.hidden)')].map((row) => row.dataset.id));
+  return state.logBuffer.filter((entry) => listed.has(String(entry.id)));
+};
+
+const saveLogToFile = () => {
+  const entries = listedLogEntries();
+  if (!entries.length) return;
+  const text = [LOG_FILE_HEADER, ...entries.map(logFileLine)].join('\n') + '\n';
+  const stamp = new Date().toISOString().slice(0, 19).replace(/:/g, '-');
+  downloadBlob(new Blob([text], { type: 'text/plain' }), `cynitor-log-${stamp}Z.log`);
+  showToast(`Saved ${entries.length} log ${entries.length === 1 ? 'message' : 'messages'}`, 'info', 2000);
 };
 
 // ── Ingest (push entry into buffer + DOM) ───────────────────────────
@@ -828,6 +871,8 @@ const initLogPanel = () => {
       if (state.logNewBelow && isAtBottom(body)) clearLogNewBelow();
     }, { passive: true });
   }
+
+  el('logSaveBtn')?.addEventListener('click', saveLogToFile);
 
   const addBtn = el('logAddSubjectBtn');
   if (addBtn) {

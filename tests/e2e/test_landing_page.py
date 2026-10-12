@@ -6379,6 +6379,43 @@ async def _(page):
     assert unread == {"unread": 3, "kept": 5}, f"Shut, an error said three times in a row: {unread}"
 
 
+@test("Log panel: Save writes the messages listed, filters applied, to a file, and is off with none listed")
+async def _(page):
+    was_open = await set_log_panel(page, True)
+    await page.locator("#logClearBtn").click()
+    try:
+        off_when_empty = await page.evaluate("el('logSaveBtn')?.disabled")
+        server_time = await page.evaluate("""() => {
+            const earlier = new Date(Date.now() - 5000).toISOString();
+            ingestServerEntry({timestamp: earlier, level: 'WARNING', logger: 'scanner_node', message: 'two types on subject 1620'});
+            return earlier; }""")
+        await page.evaluate(INGEST_DIAGNOSTIC, [3, 2, "temperature 21.4 C"])
+        await page.evaluate(INGEST_DIAGNOSTIC, [2, 5, "I2C timeout on bus 1"])
+        await page.evaluate(INGEST_DIAGNOSTIC, [1.5, 5, "I2C timeout on bus 1"])
+        await page.locator("#logSrcServer").click()  # its rows are listed too
+        await page.locator("#logSeveritySelect").select_option("4")  # Min WARNING leaves the INFO out
+        assert off_when_empty is True and not await page.locator("#logSaveBtn").is_disabled(), \
+            f"Save should be off with nothing listed ({off_when_empty}) and on with messages listed"
+        async with page.expect_download() as download:
+            await page.locator("#logSaveBtn").click()
+        saved = await download.value
+        name, text = saved.suggested_filename, Path(await saved.path()).read_text()
+    finally:
+        await page.locator("#logSeveritySelect").select_option("0")
+        if await page.evaluate("state.logShowServer"):
+            await page.locator("#logSrcServer").click()
+        await page.locator("#logClearBtn").click()
+        await set_log_panel(page, was_open)
+    lines = text.splitlines()
+    assert re.fullmatch(r"cynitor-log-[\dTZ-]+\.log", name), f"The file's name: {name}"
+    assert lines[0].startswith("#") and "UTC" in lines[0], f"Its first line should say what the columns are: {lines[0]!r}"
+    rows = [line.split("\t") for line in lines[1:]]
+    assert len(rows) == 2 and rows[0] == [server_time, "WARNING", "server scanner_node", "two types on subject 1620"], \
+        f"The file's lines: {lines[1:]}"
+    assert rows[1][1:] == ["ERROR", "node 50 ×2", "I2C timeout on bus 1"] and rows[1][0].endswith("Z"), \
+        f"The folded error's line: {rows[1]}"
+
+
 # Keep last: it reloads the page with every other host unreachable.
 @test("Dashboard works with no internet access")
 async def _(page):

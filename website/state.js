@@ -559,6 +559,15 @@ const showToast = (message, type = 'info', durationMs = 5000) => {
   }, durationMs);
 };
 
+// Hands the browser a file made in the page, to save under `name`.
+const downloadBlob = (blob, name) => {
+  const link = document.createElement('a');
+  link.href = URL.createObjectURL(blob);
+  link.download = name;
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+};
+
 // ── API helpers ──
 
 const apiBase = () => el('apiBase').value.trim().replace(/\/$/, '');

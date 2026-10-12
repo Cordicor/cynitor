@@ -1545,20 +1545,12 @@ const GraphView = (() => {
     return { text: new XMLSerializer().serializeToString(copy), width: x1 - x0, height: y1 - y0 };
   };
 
-  const _download = (blob, name) => {
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = name;
-    a.click();
-    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
-  };
-
   const _exportImage = (format) => {
     if (!simulation?.nodes().length) return;
     const { text, width, height } = _exportSvgText();
     const name = `cynitor-graph-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}`;
     const svgBlob = new Blob([text], { type: 'image/svg+xml' });
-    if (format === 'svg') { _download(svgBlob, `${name}.svg`); return; }
+    if (format === 'svg') { downloadBlob(svgBlob, `${name}.svg`); return; }
     // PNG at twice the size, for sharp text on a report or a ticket.
     const image = new Image();
     image.onload = () => {
@@ -1569,7 +1561,7 @@ const GraphView = (() => {
       ctx.scale(2, 2);
       ctx.drawImage(image, 0, 0, width, height);
       URL.revokeObjectURL(image.src);
-      canvas.toBlob((png) => png && _download(png, `${name}.png`), 'image/png');
+      canvas.toBlob((png) => png && downloadBlob(png, `${name}.png`), 'image/png');
     };
     image.src = URL.createObjectURL(svgBlob);
   };
