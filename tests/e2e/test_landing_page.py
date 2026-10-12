@@ -5780,6 +5780,30 @@ async def _(page):
     assert hovered == left, f"Under the pointer the toggle moved: {hovered}, then {left} with the pointer away"
 
 
+def _contrast(colour, behind):
+    """The WCAG contrast of two opaque colours given as the browser writes them, rgb(r, g, b)."""
+    def luminance(css):
+        channels = [int(n) / 255 for n in re.findall(r"\d+", css)[:3]]
+        r, g, b = (c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4 for c in channels)
+        return 0.2126 * r + 0.7152 * g + 0.0722 * b
+    light, dark = sorted((luminance(colour), luminance(behind)), reverse=True)
+    return round((light + 0.05) / (dark + 0.05), 2)
+
+
+@test("Themes: muted text reads against the page and its panels, in the dark theme as in the light one")
+async def _(page):
+    seen = {}
+    for _ in range(2):  # the theme in use, then the other, and back to the first
+        theme = await page.evaluate("document.documentElement.getAttribute('data-theme') || 'light'")
+        muted = await page.evaluate(TOKEN_COLOUR, "muted")
+        seen[theme] = {surface: _contrast(muted, await page.evaluate(TOKEN_COLOUR, surface))
+                       for surface in ("bg", "surface", "surface-2")}
+        await page.locator("#themeToggle").click()
+    faint = {f"{theme}, on --{surface}": ratio for theme, ratios in seen.items()
+             for surface, ratio in ratios.items() if ratio < 4.5}
+    assert set(seen) == {"light", "dark"} and not faint, f"Muted text with less than 4.5:1 behind it: {faint}; all: {seen}"
+
+
 # ── Log panel ──
 
 class _LogServer(_SidebarServer):

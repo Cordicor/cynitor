@@ -109,7 +109,8 @@
   --border-subtle: #2e3440;
   --text: #d0d4dc;
   --text-bright: #eceff4;
-  --muted: #7b8394;
+  /* At least 4.5:1 on --bg, --surface and --surface-2, as the light theme's is. */
+  --muted: #9097a6;
   --accent: #58a6ff;
   --accent-muted: rgba(88, 166, 255, 0.18);
   --ok: #3fb950;
