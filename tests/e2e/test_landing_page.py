@@ -6735,6 +6735,27 @@ async def _(page):
     assert times == 2 and opened == "", f"It was told {times} times; with the panel open it holds {opened!r}"
 
 
+@test("Log panel: the subject picker takes the focus when it opens, so its boxes are ticked by keyboard")
+async def _(page):
+    was_open = await set_log_panel(page, True)
+    try:
+        await page.evaluate("""() => cacheEvent({subject_id: 1800, message_type: 'String_1_0', publisher_node_id: 50,
+            attributes: [{attribute: 'value', value: 'state: idle'}]})""")
+        await page.locator("#logAddSubjectBtn").focus()
+        await page.keyboard.press("Enter")
+        focused = await page.evaluate("document.activeElement.className + ' ' + (document.activeElement.dataset.subjectId || '')")
+        await page.keyboard.press("Space")
+        ticked = await page.evaluate("[...state.logSubjectIds]")
+        await page.keyboard.press("Escape")
+        after = await page.evaluate("[document.activeElement.id, el('logSubjectPickerPopover').classList.contains('hidden')]")
+    finally:
+        await page.evaluate("""() => { closeLogPicker(); state.logSubjectIds.delete(1800); state.latestBySubject.delete(1800);
+            state.latestByNode.delete(50); _writeSettingsNow(); document.activeElement.blur(); }""")
+        await set_log_panel(page, was_open)
+    assert focused == "log-subject-checkbox 1800", f"Opened with Enter, the focus is on: {focused!r}"
+    assert ticked == [1800] and after == ["logAddSubjectBtn", True], f"Space ticked {ticked}; after Escape: {after}"
+
+
 # Keep last: it reloads the page with every other host unreachable.
 @test("Dashboard works with no internet access")
 async def _(page):

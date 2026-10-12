@@ -649,6 +649,9 @@ const toggleLogPickerPopover = () => {
   positionPopover(popover, btn);
   popover.classList.remove('hidden');
   btn.setAttribute('aria-expanded', 'true');
+  // Its first box takes the focus: the picker sits at the page's end, a long
+  // way to Tab to. Escape gives the focus back to the button.
+  popover.querySelector('.log-subject-checkbox')?.focus();
 };
 
 // ── Server log poller ───────────────────────────────────────────────
