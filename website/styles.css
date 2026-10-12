@@ -549,6 +549,37 @@ body {
 .log-row-sev-critical,
 .log-row-sev-alert    { box-shadow: inset 0.1875rem 0 0 var(--error); background: var(--error-muted); }
 
+/* Over the list's foot while its end is out of view: the messages that came
+   meanwhile. Centred by its margins: buttons lose their transform on hover. */
+.log-new-btn {
+  position: absolute;
+  bottom: 0.625rem;
+  left: 0;
+  right: 0;
+  width: fit-content;
+  margin: 0 auto;
+  z-index: 4;
+  padding: 0.125rem 0.625rem;
+  border: 1px solid currentColor;
+  border-radius: 1rem;
+  background: var(--surface-2);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 0.6875rem;
+}
+
+.log-new-btn:hover {
+  border-color: currentColor;
+}
+
+.log-new-btn--warn {
+  color: var(--warn);
+}
+
+.log-new-btn--error {
+  color: var(--error);
+}
+
 .log-subject-popover {
   min-width: 15rem;
   max-height: 24rem;

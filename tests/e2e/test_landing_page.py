@@ -6211,6 +6211,44 @@ async def _(page):
     assert not reopened["shown"] and "warning" not in reopened["title"], f"Opened, the count is gone: {reopened}"
 
 
+@test("Log panel: scrolled up, it counts the messages that come below, and a click goes to them")
+async def _(page):
+    was_open = await set_log_panel(page, True)
+    await page.locator("#logClearBtn").click()
+    cue = """() => { const cue = el('logNewBtn');
+        return {shown: Boolean(cue) && !cue.classList.contains('hidden') && cue.getBoundingClientRect().height > 0,
+                text: cue?.textContent, error: Boolean(cue?.classList.contains('log-new-btn--error')),
+                atEnd: isAtBottom(el('logPanelBody'))}; }"""
+    try:
+        for i in range(80):  # more than the panel shows at once
+            await page.evaluate(INGEST_DIAGNOSTIC, [0, 2, f"line {i}"])
+        following = await page.evaluate(cue)
+        await page.evaluate("el('logPanelBody').scrollTop = 0")
+        await page.wait_for_timeout(100)
+        await page.evaluate(INGEST_DIAGNOSTIC, [0, 2, "a new info"])
+        await page.evaluate(INGEST_DIAGNOSTIC, [0, 5, "a new error"])
+        reading = await page.evaluate(cue)
+        kept_place = await page.evaluate("el('logPanelBody').scrollTop")
+        if reading["shown"]:
+            await page.locator("#logNewBtn").click(timeout=2000)
+            await page.wait_for_timeout(200)
+        clicked = await page.evaluate(cue)
+        await page.evaluate("el('logPanelBody').scrollTop = 0")
+        await page.wait_for_timeout(100)
+        await page.evaluate(INGEST_DIAGNOSTIC, [0, 2, "one more"])
+        await page.evaluate("el('logPanelBody').scrollTop = el('logPanelBody').scrollHeight")
+        await page.wait_for_timeout(200)
+        scrolled_back = await page.evaluate(cue)
+    finally:
+        await page.locator("#logClearBtn").click()
+        await set_log_panel(page, was_open)
+    assert not following["shown"] and following["atEnd"], f"Following the end, there is nothing to count: {following}"
+    assert reading["shown"] and reading["text"].startswith("2 new") and reading["error"] and kept_place == 0, \
+        f"Reading the top while an info and an error came: {reading}, scrolled to {kept_place}"
+    assert not clicked["shown"] and clicked["atEnd"], f"After a click on the count: {clicked}"
+    assert not scrolled_back["shown"], f"After scrolling to the end oneself: {scrolled_back}"
+
+
 # Keep last: it reloads the page with every other host unreachable.
 @test("Dashboard works with no internet access")
 async def _(page):

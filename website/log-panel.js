@@ -109,6 +109,29 @@ const renderLogToggle = () => {
   badge.classList.toggle('log-unread--error', state.logUnreadWorst >= SEVERITY_ERROR);
 };
 
+// ── New messages below ──────────────────────────────────────────────
+
+// Over the list's foot while its end is out of view: how many messages came
+// meanwhile, in the colour of the worst when that is a warning or an error.
+// A click goes to them.
+const renderLogNewBelow = () => {
+  const cue = el('logNewBtn');
+  if (!cue) return;
+  const n = state.logNewBelow;
+  cue.classList.toggle('hidden', n === 0);
+  cue.classList.toggle('log-new-btn--warn', state.logNewBelowWorst === SEVERITY_WARNING);
+  cue.classList.toggle('log-new-btn--error', state.logNewBelowWorst >= SEVERITY_ERROR);
+  cue.textContent = `${n} new ↓`;
+  cue.setAttribute('aria-label', `${n} new ${n === 1 ? 'message' : 'messages'}: go to the newest`);
+};
+
+const clearLogNewBelow = () => {
+  if (!state.logNewBelow) return;
+  state.logNewBelow = 0;
+  state.logNewBelowWorst = 0;
+  renderLogNewBelow();
+};
+
 // ── Width plumbing ──────────────────────────────────────────────────
 
 const applyLogPanelWidth = (panel) => {
@@ -287,6 +310,7 @@ const reapplyFiltersToAllRows = () => {
   if (!list) return;
   for (const row of list.children) applyAllFiltersToRow(row);
   updateEmptyHint();
+  clearLogNewBelow();  // other rows are in view now
 };
 
 // "a", "a and b", "a, b and c".
@@ -381,6 +405,11 @@ const _pushEntry = (entry) => {
   updateEmptyHint();
   if (state.logAutoscroll && wasAtBottom) {
     list.parentElement.scrollTop = list.parentElement.scrollHeight;
+  } else if (listed && after === null && !state.logPanelCollapsed && !isAtBottom(list.parentElement)) {
+    // Added under what is in view, which keeps its place: the cue counts it.
+    state.logNewBelow++;
+    state.logNewBelowWorst = Math.max(state.logNewBelowWorst, entry.severity ?? 0);
+    renderLogNewBelow();
   }
 };
 
@@ -411,6 +440,7 @@ const rebuildLogList = () => {
     list.appendChild(row);
   }
   updateEmptyHint();
+  clearLogNewBelow();
   if (state.logAutoscroll) {
     list.parentElement.scrollTop = list.parentElement.scrollHeight;
   }
@@ -726,7 +756,22 @@ const initLogPanel = () => {
       if (list) list.replaceChildren();
       _refreshSourcePillBadges();
       updateEmptyHint();
+      clearLogNewBelow();
     });
+  }
+
+  // The count of messages below goes once they are in view: by its own click,
+  // or by scrolling there.
+  const body = el('logPanelBody');
+  const newBtn = el('logNewBtn');
+  if (body && newBtn) {
+    newBtn.addEventListener('click', () => {
+      body.scrollTop = body.scrollHeight;
+      clearLogNewBelow();
+    });
+    body.addEventListener('scroll', () => {
+      if (state.logNewBelow && isAtBottom(body)) clearLogNewBelow();
+    }, { passive: true });
   }
 
   const addBtn = el('logAddSubjectBtn');

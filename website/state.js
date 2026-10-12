@@ -74,6 +74,8 @@ const state = {
   logTextFilter: '',
   logUnreadCount: 0,        // warnings and worse listed since the log panel was shut; its toggle shows it
   logUnreadWorst: 0,        // the highest severity among them
+  logNewBelow: 0,           // messages added under what the log panel shows, its end out of view
+  logNewBelowWorst: 0,      // the highest severity among them
   busErrors: null,          // errors on the bus (GET /api/status), or null while it has none
   cyphalV11: null,          // Cyphal v1.1 traffic seen on the bus (GET /api/status), or null       // the log panel's filter box, lowercased; not persisted
   _logSeq: 0,
