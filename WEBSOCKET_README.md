@@ -540,6 +540,19 @@ What the compiler (pydsdl) reads in the type comes with it: `doc` (the type's co
 
 `size_bytes` is the serialized size, smallest and largest; `extent_bytes` how far a type that is not sealed may grow in later versions (for a sealed type, its largest size). A service has one layout each way: `{"request": {...}, "response": {...}}`. When pydsdl cannot read the type, `doc` is empty, `deprecated` false and `layout` null.
 
+**Value schema of a message type** (what the Test nodes editor builds its form from):
+```bash
+curl http://localhost:8080/api/dsdl/value-schema/uavcan.si.unit.voltage.Scalar.1.0
+```
+
+```json
+{"kind": "struct", "type": "uavcan.si.unit.voltage.Scalar.1.0", "constants": [],
+ "fields": [{"name": "volt", "schema": {"kind": "float", "type": "saturated float32",
+                                        "min": -3.4028234663852886e+38, "max": 3.4028234663852886e+38}}]}
+```
+
+`kind` is `struct` (`fields`), `union` (`variants`, the first the default), `array` (`capacity`, `fixed`, `element`, and `text: true` for bytes, which take a string), `int` or `float` (`min`, `max`: the field's range) or `bool`; a composite has its `constants`. Read from the type's source; `400` for a service type, a type that is not compiled, or none of that name.
+
 `problem` is null for a type that compiles. For one that does not, it says why, as a compile would: `{"message": "Syntax error", "line": 2}`, where `line` is the line of the type's own source, or null when the fault is with the file as a whole (a missing `@sealed`) or in a type it uses, which the message then names.
 
 **Create custom namespace:**
@@ -697,6 +710,8 @@ Response:
     }
 }
 ```
+
+A node that is one of the test nodes Cynitor runs (see "Test nodes" below) carries `"test_node": "<test id>"`: matched by its unique-ID, so one stopped keeps it, or, while one runs, by its node-ID.
 
 `subject_types` holds every decoded subject's type and where it came from: a publisher's registers, or the user (see "Subject types" below). A subject a node publishes that is missing from it cannot be decoded until its type is set. It is absent during a replay.
 
@@ -1277,6 +1292,36 @@ GET    /api/subjects/{subject_id}/type-guesses  → { samples, matches, candidat
 `type` is a DSDL name, `uavcan.si.unit.velocity.Vector3.1.0` (the compiled spelling `..._1_0` works too). The registers' word wins: once a publisher names the subject's type, the user's type stops applying.
 
 `type-guesses` listens to the subject for 3 s (up to 20 messages) and returns the compiled message types every payload fits: decoded and encoded again, it gives back exactly the same bytes (on CAN FD, plus the zeros that fill a frame up). Up to 100, best first: plausible values (no NaN, infinity, or float beyond 1e12 or below 1e-12), then custom types, then types without a fixed subject-ID of their own. `preview` is the latest payload decoded as that type. `samples` is 0 if nothing was published on the subject meanwhile.
+
+### Test nodes
+
+Cyphal nodes Cynitor runs on the bus for testing, made in the Test nodes tab (`server/testnodes.py`). Each has a name, node-ID, health and mode, and up to 8 publishers. They are kept in the data folder (`test_nodes.json`), run while CAN is connected (not while a raw log plays), and all stop when it disconnects.
+
+```http
+GET    /api/testnodes                      → { test_nodes: [node], bus, health, modes, waves, limits }
+POST   /api/testnodes          definition  → 201 node        (400 not a valid definition, 409 at the limit of 16)
+PUT    /api/testnodes/{id}     definition  → node            (400, 404, 409 its node-ID is taken while it runs)
+DELETE /api/testnodes/{id}                 → { deleted }     (404); a running one stops first
+POST   /api/testnodes/{id}/start { confirm_real_bus? } → node   (404, 409 see below, 400 its type changed under it)
+POST   /api/testnodes/{id}/stop            → node            (404)
+```
+
+A definition:
+
+```json
+{"name": "test.battery", "node_id": 100, "health": "nominal", "mode": "operational", "vendor_status": 0,
+ "software_version": {"major": 1, "minor": 0},
+ "publishers": [{"subject_id": 1000, "type": "uavcan.si.unit.voltage.Scalar.1.0", "rate_hz": 10, "port": "battery",
+                 "value": {"volt": {"$wave": "sine", "min": 11, "max": 12.6, "period_s": 20}}}]}
+```
+
+`name` is 1 to 50 bytes; `node_id` 1 to 125; `health` `nominal`, `advisory`, `caution` or `warning`; `mode` `operational`, `initialization`, `maintenance` or `software_update`; `vendor_status` 0 to 255. Each publisher has a `subject_id` (0 to 8191; not 7509 or 7510, the node's own heartbeat and port list), a compiled message `type`, a `rate_hz` (0.01 to 100, default 1) and a `port` name for its registers (`uavcan.pub.<port>.id` and `.type`), which defaults to one made from the type (`voltage_scalar`). Only `name` and `node_id` are required; a 400 says which field is wrong, as `publishers[0].value.volt: ...`.
+
+`value` is the message in pycyphal's builtin form: an object for a composite, its fields left out keeping their defaults; a list for an array; a string for a byte array; an object of one variant for a union. Any number may instead be a waveform, `{"$wave", "min", "max", "period_s"}`: `sine`, `ramp` and `square` run from `min` to `max` over `period_s` seconds (a sine starting at `min`; a square at `min` for its first half), `noise` is random between them, and `count` adds one per message, from `min` and wrapping after `max` (no period). Every number is rounded and clamped to its field's range as it is sent.
+
+A node, as listed, is its definition with its `id`, the `unique_id` it gives in GetInfo (hex), `running`, `started_unix`, and `error`: why one of its publishers stopped, while it runs. `bus` is null while CAN is not connected, else `{"simulated", "interface"}`; `limits` gives the ranges above (`node_id`, `subject_id`, `rate_hz`), the most test nodes (`test_nodes`), publishers each (`publishers`) and messages a second of all running test nodes together (`total_rate_hz`, 1000).
+
+A change of `health`, `mode` or `vendor_status` a running node takes as it runs; any other change restarts it. Starting one is refused with 409 while CAN is not connected, when another test node runs on its node-ID, when a node on the bus has it (Cynitor's own included), or when it would take all of them over `total_rate_hz`. On a real bus, as opposed to a simulated one, it is also refused, with `{"error", "confirm": "real_bus"}`, until it is asked for again with `{"confirm_real_bus": true}`: its messages reach every node on the bus, and may move real things.
 
 ### Firmware updates
 

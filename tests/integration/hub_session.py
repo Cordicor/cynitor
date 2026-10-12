@@ -29,7 +29,10 @@ Checks, in order:
   6. the databases are written to the session's data folder;
   7. a raw log plays back as a bus;
   8. the simulated bus (sim:classic, or sim:fd with --fd) runs its demo
-     sensor, which Cynitor sees, names and decodes.
+     sensor, which Cynitor sees, names and decodes;
+  9. a test node made as the Test nodes tab makes one runs on it: Cynitor
+     names it, decodes its waveform through the registers it fills in, sees
+     its mode change as it runs, and stops it on disconnect.
 
 With --fd the device and Cynitor run Cyphal/CAN FD (500 kbit/s, 2 Mbit/s data
 phase), and Cynitor's own frames on the wire must be CAN FD frames.
@@ -63,6 +66,8 @@ DATA_BITRATE = 2_000_000 if FD else None
 DEVICE_NODE_ID = 50
 TEMPERATURE_SUBJECT_ID = 1620
 UNNAMED_SUBJECT_ID = 1700  # published with no register naming its type
+TEST_NODE_ID = 60
+TEST_NODE_SUBJECT_ID = 1900
 TIMEOUT = 30.0
 
 
@@ -350,8 +355,41 @@ async def run() -> None:
         decoded = await wait_for(lambda: TEMPERATURE_SUBJECT_ID in session.telemetry.latest_by_subject)
         check(decoded, f"and its subject {TEMPERATURE_SUBJECT_ID} decodes")
 
+        # A test node, defined as the dashboard defines one, counting up.
+        from testnodes import normalize_definition, value_schema
+        dsdl = DsdlManager(ROOT, data_dir=data)
+        definition = normalize_definition({
+            "name": "integration.test_node", "node_id": TEST_NODE_ID,
+            "publishers": [{"subject_id": TEST_NODE_SUBJECT_ID, "type": "uavcan.si.unit.velocity.Scalar.1.0",
+                            "rate_hz": 20, "value": {"meter_per_second": {"$wave": "count", "min": 0, "max": 1000}}}],
+        }, lambda name: value_schema(dsdl.read_model(name)))
+        test_id = session.test_nodes.add(definition)["id"]
+        started = await session.test_nodes.start(test_id)  # the simulated bus asks for no confirmation
+        check(started["running"], f"a test node starts on node-ID {TEST_NODE_ID}")
+
+        def test_node():
+            return session.telemetry.get_all_nodes_info()["nodes"].get(TEST_NODE_ID, {})
+
+        check(await wait_for(lambda: test_node().get("name") == "integration.test_node"), "Cynitor names it")
+        check(session.test_nodes.identify(TEST_NODE_ID, test_node().get("unique_id_hex")) == test_id,
+              "and knows it for a test node by its unique-ID")
+
+        def speed():
+            event = session.telemetry.latest_by_subject.get(TEST_NODE_SUBJECT_ID)
+            return None if event is None else event["attributes"][0]["value"]
+
+        check(await wait_for(lambda: speed() is not None),
+              f"its subject {TEST_NODE_SUBJECT_ID} decodes, its type named in its registers")
+        first = speed()
+        check(await wait_for(lambda: speed() > first, timeout=5), f"counting up: {first}, then {speed()}")
+
+        await session.test_nodes.replace(test_id, {**definition, "mode": "maintenance"})
+        check(await wait_for(lambda: session.scanner.node_mode(TEST_NODE_ID) == "MAINTENANCE", timeout=5),
+              "its mode changes as it runs")
         await session.disconnect()
         check(not session.is_running and session.simulation is None, "disconnecting stops the simulated bus")
+        check(session.test_nodes.running_node_ids() == set() and not session.test_nodes.view(test_id)["running"],
+              "and the test node")
     finally:
         temperature_task.cancel()
         velocity_task.cancel()

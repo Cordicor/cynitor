@@ -35,6 +35,7 @@ def _make_session(is_running=False, can_interface=None):
     session.replay = None
     session.event_logger = None
     session.frame_capture = None
+    session.test_nodes.identify.return_value = None  # no node on the bus is a test node
     session.connect = AsyncMock()
     session.disconnect = AsyncMock()
     return session

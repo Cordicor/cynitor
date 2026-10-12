@@ -20,6 +20,7 @@ from can_config import (
     FD_MTU,
     is_simulated,
     is_socketcan,
+    media_bitrate,
     media_mtu,
     normalize_can_iface,
     socketcan_supports_fd,
@@ -33,12 +34,14 @@ from bus_errors import BusErrors
 from can_discovery import AdapterCatalog, discover_adapters, simulated_adapters
 from can_hub import CANHub, HubBusLoad, pick_free_node_id
 from cyphal_v11 import SOCKETCAN_FILTER, V11Traffic
-from data_dir import ALLOCATOR_DB, EVENTS_DB, SCANNER_DB, SUBJECT_TYPES_FILE, prepare_data_dir, resolve_data_dir
+from data_dir import (ALLOCATOR_DB, EVENTS_DB, SCANNER_DB, SUBJECT_TYPES_FILE, TEST_NODES_FILE, prepare_data_dir,
+                      resolve_data_dir)
 from firmware import COMMAND_STATUS, FIRMWARE_DIR, FirmwareServer, firmware_path, send_update_command
 from log_store import InMemoryLogStore, APILogHandler
 from raw_log import (RAW_LOG_DIR, LogPlayer, RawLog, SocketcanTap, log_has_fd_frames, log_path,
                      new_log_name, read_sidecar, write_sidecar)
 from simulation import SimulatedBus
+from testnodes import TestNodeBus, TestNodeManager
 from type_guess import load_candidates, rank_types
 from startup_setup import ensure_libusb_on_path, prepare_runtime, resolve_project_root
 from version import __version__
@@ -252,6 +255,8 @@ class CANSession:
         self.bus_errors: Optional[BusErrors] = None
         # The simulated bus and its demo devices, when connected to one.
         self.simulation: Optional[SimulatedBus] = None
+        # The nodes made in the Test nodes tab; they run while CAN is connected.
+        self.test_nodes = TestNodeManager(self.data_dir / TEST_NODES_FILE)
         # Serves firmware files to nodes being updated; None when Cynitor has
         # no node-ID or plays a raw log, since nothing can be sent then.
         self.firmware: Optional[FirmwareServer] = None
@@ -433,6 +438,9 @@ class CANSession:
                     # Last, so that the devices join a bus Cynitor already watches.
                     self.simulation = simulation
                     simulation.start()
+                if offline is None:  # nothing can be sent while a raw log plays
+                    self.test_nodes.attach(TestNodeBus(self._test_node_transport, simulation is not None,
+                                                       self._node_ids_in_use))
                 logger.info("CAN session started on %s", can_iface)
             except Exception:
                 try:
@@ -467,6 +475,29 @@ class CANSession:
         if getattr(node, "id", None) is not None:
             own.add(node.id)
         return own
+
+    def _node_ids_in_use(self) -> set[int]:
+        """Cynitor's own node-IDs, and those of the nodes online on the bus."""
+        in_use = self._own_node_ids()
+        if self.scanner is not None:
+            in_use |= {node_id for node_id, node in self.scanner.all_nodes.items()
+                       if node.has_appeared and not node.has_disappeared}
+        return in_use
+
+    def _test_node_transport(self, node_id: int):
+        """A transport for a test node with ``node_id``, on the bus Cynitor is connected to.
+
+        Behind the hub on its channel, as the scanner is; on SocketCAN a socket
+        of its own, whose frames the kernel loops back to Cynitor's.
+        """
+        from pycyphal.transport.can import CANTransport
+        if self.hub is not None:
+            from pycyphal.transport.can.media.pythoncan import PythonCANMedia
+            media = PythonCANMedia(self.hub.local_spec, media_bitrate(self.hub.local_spec), media_mtu())
+        else:
+            from pycyphal.transport.can.media.socketcan import SocketCANMedia
+            media = SocketCANMedia(socketcan_device(self.can_interface), media_mtu())
+        return CANTransport(media, node_id)
 
     @staticmethod
     def _open_v11_tap(device: str, traffic: V11Traffic) -> Optional[SocketcanTap]:
@@ -803,7 +834,8 @@ class CANSession:
         """Internal cleanup — caller must hold self._lock."""
         logger.info("Tearing down CAN session...")
 
-        # The simulated bus's devices first, as a bus's go quiet when it is let go.
+        # Test nodes and the simulated bus's devices first, as a bus's go quiet when it is let go.
+        await self.test_nodes.detach()
         if self.simulation is not None:
             await self.simulation.stop()
         self.simulation = None

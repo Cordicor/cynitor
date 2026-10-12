@@ -95,6 +95,7 @@ it:
 | **Subjects**, subject 1700 | A velocity no register names: click it and Cynitor guesses its type |
 | The log panel, at the right edge | Diagnostics every 3 s, at every severity from DEBUG to CRITICAL. Its **+** adds subject 1800, the node's state as text |
 | The node's **Servers** tab | Restart restarts it. **Update firmware…** makes it read the file from Cynitor, as a bootloader does |
+| The **Test nodes** tab | Nodes of your own beside the demo, publishing what you set |
 
 The same demo nodes run on a bus of your own. On Linux, with Cynitor installed
 from source, beside it on a virtual CAN interface:
@@ -124,6 +125,7 @@ Then connect Cynitor to `vcan0`. There the demo takes options:
 | **Compare** | Any series side by side, in independent graphs: derived series (delta, ratio, moving average, min/max, rate of change), thresholds, markers, drawings, synced crosshairs, export and import |
 | **DSDL** | Every loaded type in a searchable tree, marked when it is seen on the bus. Create, edit and compile your own types |
 | **Record** | Record chosen subjects, services and nodes, up to a time or a number of events; save the last N seconds; export CSV or JSONL; replay a recording through the dashboard. Raw CAN logs in candump format, which python-can, SavvyCAN and can-utils read, play back as if they were the live bus |
+| **Test nodes** | Nodes of your own on the bus, to test a dashboard, a controller or Cynitor against: a name, node-ID, health and mode (changed as it runs), and up to eight publishers of any compiled type, your own DSDL included, at up to 100 messages a second. Every number in a message is a constant or a sine, ramp or square wave, noise, or a count. Their registers name what they publish, so Cynitor decodes it at once. They run on the simulated bus at a click, and on a real bus once you confirm, with a free node-ID and at most 1000 messages a second in all; all stop when CAN disconnects. They are marked *test* in the node table and the graph |
 | **Debug** | The bus's health, transport diagnostics, and a raw CAN frame monitor |
 | **Log panel** | One timeline of `uavcan.diagnostic.Record` messages, any text subject you add, and Cynitor's own log, timed to the millisecond and filtered by severity and text. Shut, it counts the warnings and errors that came since; what it lists saves to a file |
 
@@ -237,9 +239,9 @@ which:
 | macOS | `~/Library/Application Support/Cynitor` |
 
 It holds bus history (24 h), node history (30 days), service-call history,
-recordings, device names, the types you set for subjects, and the allocator's
-table of which device got which node-ID. Raw CAN logs are in `raw/`, firmware
-files in `firmware/`, your DSDL types in `dsdl/`.
+recordings, device names, the types you set for subjects, the test nodes you
+make, and the allocator's table of which device got which node-ID. Raw CAN
+logs are in `raw/`, firmware files in `firmware/`, your DSDL types in `dsdl/`.
 
 Earlier versions wrote next to where Cynitor was started. Data found there is
 moved in once, on the first start, and never overwrites what the data folder

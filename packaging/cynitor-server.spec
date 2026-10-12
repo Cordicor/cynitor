@@ -29,6 +29,7 @@ server_modules = [
     "gs_usb_fd",
     "simulation",
     "demo_devices",
+    "testnodes",
     "data_dir",
     "startup_setup",
     "log_store",

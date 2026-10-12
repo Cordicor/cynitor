@@ -687,6 +687,7 @@ const clearCanSession = () => {
   renderNodesTable();
   refreshSubjectsTable();
   renderSelectedNodeContent();
+  TestNodesView.refreshIndicator();
 };
 
 const disconnectAll = ({ persist = true } = {}) => {
@@ -816,6 +817,7 @@ const getAllNodes = async () => {
     renderNodesTable();
     renderSelectedNodeContent();
   }
+  TestNodesView.refreshIndicator();
 };
 
 const NODES_POLL_INTERVAL_MS = 1000;

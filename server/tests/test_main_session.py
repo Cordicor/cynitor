@@ -199,6 +199,47 @@ class TestConnectSimulatedBus:
         assert stopped == [True] and s.simulation is None
 
 
+class TestTestNodes:
+    """The nodes made in the Test nodes tab run on the bus the session is connected to.
+
+    Started on a connected bus in the integration test (tests/integration/hub_session.py).
+    """
+
+    async def test_they_stop_with_the_session(self, tmp_path):
+        from main import CANSession
+        from testnodes import TestNodeBus
+        s = CANSession(data_dir=tmp_path)
+        s.test_nodes.attach(TestNodeBus(lambda node_id: None, True, set))
+        await s._teardown()
+        assert s.test_nodes.bus is None
+
+    def test_node_ids_in_use_are_cynitors_own_and_those_online(self, tmp_path):
+        from types import SimpleNamespace
+        from can_config import ALLOCATOR_NODE_ID
+        from main import CANSession
+        s = CANSession(data_dir=tmp_path)
+
+        def node(appeared, disappeared):
+            return SimpleNamespace(has_appeared=appeared, has_disappeared=disappeared)
+        s.scanner = SimpleNamespace(node=SimpleNamespace(id=10),
+                                    all_nodes={20: node(True, False), 21: node(True, True), 22: node(False, False)})
+        assert s._node_ids_in_use() == {ALLOCATOR_NODE_ID, 10, 20}
+
+    @pytest.mark.parametrize("bitrate, mtu, payload", [("1000000 1000000", "8", 7), ("1000000 4000000", "64", 63)])
+    async def test_behind_the_hub_they_share_its_channel(self, tmp_path, monkeypatch, bitrate, mtu, payload):
+        from types import SimpleNamespace
+        from main import CANSession
+        monkeypatch.setenv("UAVCAN__CAN__BITRATE", bitrate)  # as prepare_runtime publishes them
+        monkeypatch.setenv("UAVCAN__CAN__MTU", mtu)
+        s = CANSession(data_dir=tmp_path)
+        s.hub = SimpleNamespace(local_spec="virtual:test-node-hub")
+        transport = s._test_node_transport(60)
+        try:
+            assert transport.local_node_id == 60 and transport.protocol_parameters.mtu == payload
+        finally:
+            transport.close()
+
+
 class TestConnectCanFd:
     """A data bitrate opens a hub adapter as CAN FD; SocketCAN decides for itself."""
 
