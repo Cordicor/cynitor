@@ -167,6 +167,7 @@ const updateSemaphores = () => {
   el('canDataBitrateSelect').disabled = canFormOff;
   renderRecordStart();  // the Record tab's Start needs both connections
   DebugView.renderControls();  // so does the Debug tab's Start capture, and its socket
+  renderLogConnection();  // and the log panel says what can reach it
 
   if (serverInfo) {
     if (state.dashboardConnected && state.wsThroughput > 0) {

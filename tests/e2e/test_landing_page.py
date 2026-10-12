@@ -5883,7 +5883,7 @@ async def _(page):
     finally:
         await log_close(page, server)
     assert failing["marked"] and "Log store is not configured" in failing["title"], f"While it fails: {failing}"
-    assert answering == {"marked": False, "title": ""}, f"Once it answers: {answering}"
+    assert not answering["marked"] and "could not be read" not in answering["title"], f"Once it answers: {answering}"
 
 
 @test("Log panel: every message it counts is in its list, so the filters find the oldest too")
@@ -6099,6 +6099,42 @@ async def _(page):
         f"Shut, the panel should take no room and leave its toggle in reach: {shut}"
     # The pointer is still on the toggle it clicked: it must not move from under it.
     assert shut["toggleTop"] == shut["bottom"], f"Under the pointer the toggle left its row: {shut}"
+
+
+LOG_PILLS = """() => Object.fromEntries([['cyphal', 'logSrcCyphal'], ['server', 'logSrcServer']].map(([source, id]) =>
+    [source, {marked: el(id).classList.contains('disconnected'), title: el(id).title}]))"""
+
+# What the log panel is told of the connection, set as the dashboard sets it and
+# shown through the call every change of connection makes (updateSemaphores).
+LOG_CONNECTION = """(now) => { Object.assign(state, {dashboardConnected: false, canConnected: false, replayActive: false,
+    logShowCyphal: true, logShowServer: false}, now); updateSemaphores(); }"""
+
+
+@test("Log panel: a source's pill says what it is, and, turned on with nothing to come from, why")
+async def _(page):
+    try:
+        await page.evaluate(LOG_CONNECTION, {"logShowServer": True})
+        no_backend = await page.evaluate(LOG_PILLS)
+        await page.evaluate(LOG_CONNECTION, {"logShowServer": True, "dashboardConnected": True})
+        no_bus = await page.evaluate(LOG_PILLS)
+        await page.evaluate(LOG_CONNECTION, {"logShowServer": True, "dashboardConnected": True, "canConnected": True})
+        all_on = await page.evaluate(LOG_PILLS)
+        await page.evaluate(LOG_CONNECTION, {"dashboardConnected": True, "replayActive": True})
+        replaying = await page.evaluate(LOG_PILLS)
+        await page.evaluate(LOG_CONNECTION, {"logShowCyphal": False})
+        turned_off = await page.evaluate(LOG_PILLS)
+    finally:
+        await page.evaluate(LOG_CONNECTION, {})
+    assert no_backend["cyphal"]["marked"] and no_backend["server"]["marked"] \
+        and "Not connected to backend" in no_backend["cyphal"]["title"] \
+        and "Not connected to backend" in no_backend["server"]["title"], f"With no backend: {no_backend}"
+    assert no_bus["cyphal"]["marked"] and "CAN bus not connected" in no_bus["cyphal"]["title"] \
+        and not no_bus["server"]["marked"], f"With a backend and no bus: {no_bus}"
+    assert not all_on["cyphal"]["marked"] and not all_on["server"]["marked"] \
+        and "uavcan.diagnostic.Record" in all_on["cyphal"]["title"] and "log" in all_on["server"]["title"], \
+        f"With both connected, each should say what it is: {all_on}"
+    assert not replaying["cyphal"]["marked"], f"A replay sends the nodes' messages with no bus: {replaying}"
+    assert not turned_off["cyphal"]["marked"], f"A source turned off is not marked: {turned_off}"
 
 
 # Keep last: it reloads the page with every other host unreachable.

@@ -41,6 +41,27 @@ const _recomputeSrcCounts = () => {
   }
 };
 
+// What each source is, for its pill's tooltip.
+const LOG_SOURCE_ABOUT = {
+  cyphal: 'What the nodes say: uavcan.diagnostic.Record, and the text subjects added with +',
+  server: "Cynitor's own log, from its server",
+};
+
+// Why nothing can come from a source now, as connectionProblem's parts
+// (message, helper), or null when its messages can come.
+const logSourceProblem = (src) => {
+  // Without the backend neither source has anything to come from.
+  if (!state.dashboardConnected) return connectionProblem('see log messages');
+  if (src === 'server') {
+    return _serverLogError ? { message: "The server's log could not be read:", helper: _serverLogError } : null;
+  }
+  // A replay sends the nodes' messages with no bus connected.
+  return state.replayActive ? null : connectionProblem('see what the nodes say');
+};
+
+const _problemText = (problem) =>
+  `${problem.message}${/[.…:]$/.test(problem.message) ? '' : '.'} ${problem.helper}`;
+
 const _refreshSourcePillBadges = () => {
   for (const pill of document.querySelectorAll('.log-source-pill')) {
     const src = pill.dataset.source;
@@ -50,15 +71,19 @@ const _refreshSourcePillBadges = () => {
       countEl.textContent = n > 0 ? String(n) : '';
       countEl.classList.toggle('hidden', n === 0);
     }
-    if (src === 'server') {
-      // Nothing comes from it: no backend, or its log could not be read.
-      const why = !state.logShowServer ? ''
-        : !state.dashboardConnected ? 'Not connected to the server'
-        : _serverLogError ? `The server's log could not be read: ${_serverLogError}` : '';
-      pill.classList.toggle('disconnected', Boolean(why));
-      pill.title = why;
-    }
+    // Amber, with a dot: turned on, with nothing to come from. Its tooltip says why.
+    const problem = _isSourceOn(src) ? logSourceProblem(src) : null;
+    const title = problem ? _problemText(problem) : LOG_SOURCE_ABOUT[src];
+    pill.classList.toggle('disconnected', Boolean(problem));
+    if (pill.title !== title) pill.title = title;
   }
+};
+
+// The connection changed (connection.js says so): the panel shows what can
+// reach it now.
+const renderLogConnection = () => {
+  _refreshSourcePillBadges();
+  updateEmptyHint();
 };
 
 // ── Width plumbing ──────────────────────────────────────────────────
