@@ -107,24 +107,25 @@ const favFormatter = (cell) => {
   return `<button type="button" class="fav-star ${isFav ? 'active' : ''}" aria-label="Toggle favourite">${isFav ? '★' : '☆'}</button>`;
 };
 
+// A node Cynitor runs from the Test nodes tab, marked as such wherever it is named.
+const TEST_NODE_BADGE = '<span class="test-node-badge" title="A test node Cynitor runs: see the Test nodes tab">test</span>';
+
 const nameFormatter = (cell) => {
   const row = cell.getRow().getData();
   const alias = getNodeAlias(row._uid);
-  const original = (() => {
-    const nodes = state.latestNodesPayload?.nodes || {};
-    const node = nodes[row.id];
-    return node?.name || null;
-  })();
+  const node = (state.latestNodesPayload?.nodes || {})[row.id];
+  const original = node?.name || null;
   const editIcon = row._uid?.length
     ? '<span class="name-edit-icon" aria-hidden="true">✎</span>'
     : '';
+  const badge = node?.test_node ? TEST_NODE_BADGE : '';
   if (!alias && !original) {
     // Heartbeats arrive, but GetInfo (which carries the name) does not answer.
     const why = row._noInfo ? 'no name: GetInfo unanswered' : '-';
-    return `<span class="name-cell">${editIcon}<span class="name-display name-missing">${why}</span></span>`;
+    return `<span class="name-cell">${editIcon}<span class="name-display name-missing">${why}</span>${badge}</span>`;
   }
   const tooltip = alias && original ? ` title="${escapeHtml(original)}"` : '';
-  return `<span class="name-cell">${editIcon}<span class="name-display"${tooltip}>${escapeHtml(alias || original)}</span></span>`;
+  return `<span class="name-cell">${editIcon}<span class="name-display"${tooltip}>${escapeHtml(alias || original)}</span>${badge}</span>`;
 };
 
 const startNameEdit = (cell) => {

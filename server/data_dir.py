@@ -6,6 +6,7 @@
   device on the same node-ID across restarts;
 - monitor_app.db: the scanner node's registers.
 - subject_types.json: the types the user set for subjects no register names.
+- test_nodes.json: the test nodes made in the Test nodes tab (see testnodes).
 
 They used to be written to the working directory, so every folder Cynitor was
 started from got a history of its own, a double-clicked executable wrote next
@@ -31,6 +32,7 @@ EVENTS_DB = "telemetry_events.db"
 ALLOCATOR_DB = "allocator_2app.db"
 SCANNER_DB = "monitor_app.db"
 SUBJECT_TYPES_FILE = "subject_types.json"
+TEST_NODES_FILE = "test_nodes.json"
 
 # Files a working directory may hold from before the data folder existed.
 # The scanner's registers lived next to its module instead, and only hold

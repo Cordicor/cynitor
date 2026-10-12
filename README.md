@@ -84,15 +84,10 @@ connect to another interface without restarting Cynitor.
 
 ### Try it without hardware
 
-On Linux, with Cynitor installed from source, a virtual CAN interface and the
-demo nodes give it something to watch:
-
-```bash
-sudo ip link add dev vcan0 type vcan && sudo ip link set vcan0 up
-python3 tools/demo_nodes.py --iface vcan0
-```
-
-Then connect Cynitor to `vcan0`.
+Pick **Simulated bus (no hardware)** in the CAN list, or start with
+`cynitor-server --can sim:classic` (`sim:fd` for CAN FD). It is a bus inside
+Cynitor, on every system and in the release builds too, with demo nodes on
+it:
 
 | Try | What it shows |
 |---|---|
@@ -100,6 +95,20 @@ Then connect Cynitor to `vcan0`.
 | **Subjects**, subject 1700 | A velocity no register names: click it and Cynitor guesses its type |
 | The log panel, at the right edge | Diagnostics every 3 s, at every severity from DEBUG to CRITICAL. Its **+** adds subject 1800, the node's state as text |
 | The node's **Servers** tab | Restart restarts it. **Update firmware…** makes it read the file from Cynitor, as a bootloader does |
+| The **Test nodes** tab | Nodes of your own beside the demo, publishing what you set |
+
+The same demo nodes run on a bus of your own. On Linux, with Cynitor installed
+from source, beside it on a virtual CAN interface:
+
+```bash
+sudo ip link add dev vcan0 type vcan && sudo ip link set vcan0 up
+python3 tools/demo_nodes.py --iface vcan0
+```
+
+Then connect Cynitor to `vcan0`. There the demo takes options:
+
+| Option | What it does |
+|---|---|
 | `--conflict` | A second node on the same node-ID after 10 s, which Cynitor flags |
 | `--node-id 51`, in a second terminal | A second demo: every subject then has two publishers, which the plots and Compare show apart |
 | `--fd` | Needed on a CAN FD vcan (`cat /sys/class/net/vcan0/mtu` says 72). Cynitor runs CAN FD there, and a demo without `--fd` gets none of its requests: no name, no services |
@@ -116,6 +125,7 @@ Then connect Cynitor to `vcan0`.
 | **Compare** | Any series side by side, in independent graphs: derived series (delta, ratio, moving average, min/max, rate of change), thresholds, markers, drawings, synced crosshairs, export and import |
 | **DSDL** | Every loaded type in a searchable tree, marked when it is seen on the bus. Create, edit and compile your own types |
 | **Record** | Record chosen subjects, services and nodes, up to a time or a number of events; save the last N seconds; export CSV or JSONL; replay a recording through the dashboard. Raw CAN logs in candump format, which python-can, SavvyCAN and can-utils read, play back as if they were the live bus |
+| **Test nodes** | Nodes of your own on the bus, to test a dashboard, a controller or Cynitor against: a name, node-ID, health and mode (changed as it runs), and up to eight publishers of any compiled type, your own DSDL included, at up to 100 messages a second. Every number in a message is a constant or a sine, ramp or square wave, noise, or a count. Their registers name what they publish, so Cynitor decodes it at once. They run on the simulated bus at a click, and on a real bus once you confirm, with a free node-ID and at most 1000 messages a second in all; all stop when CAN disconnects. They are marked *test* in the node table and the graph |
 | **Debug** | The bus's health, transport diagnostics, and a raw CAN frame monitor |
 | **Log panel** | One timeline of `uavcan.diagnostic.Record` messages, any text subject you add, and Cynitor's own log, timed to the millisecond and filtered by severity and text. Shut, it counts the warnings and errors that came since; what it lists saves to a file |
 
@@ -142,6 +152,7 @@ An adapter that is not found can be named, with `--can` or under **Other…**:
 | CANable, candleLight firmware | `gs_usb:0`. On Linux it is a SocketCAN interface | If its firmware does CAN FD; a CANable 1.0's does not |
 | CANable, slcan firmware | `slcan:COM5@115200`. On Linux, `slcan:/dev/ttyACM0` with no `slcand` attached | CANable 2.0, at 2 or 5 Mbit/s only |
 | Anything else python-can drives | `<interface>:<channel>` | No |
+| The [simulated bus](#try-it-without-hardware), no hardware | `sim:classic`, `sim:fd`; listed on every system | `sim:fd` |
 
 A name with a `:` in it is passed on as it is, without being checked against
 what was found. The older `pythoncan:pcan:PCAN_USBBUS1` spelling still works.
@@ -198,8 +209,8 @@ topics to v1.0 subject-IDs on the device (`name#1234`).
 
 | Flag | Effect |
 |---|---|
-| `--can <name>` | Connect at startup. Without it, or if the name does not exist, you pick the interface in the dashboard |
-| `--bitrate <n>` | Bus speed in bit/s. Required with `--can` for every adapter but SocketCAN |
+| `--can <name>` | Connect at startup. Without it, or if the name does not exist, you pick the interface in the dashboard. `sim:classic` and `sim:fd` are the [simulated bus](#try-it-without-hardware) |
+| `--bitrate <n>` | Bus speed in bit/s. Required with `--can` for every adapter but SocketCAN and the simulated bus |
 | `--data-bitrate <n>` | CAN FD data-phase speed in bit/s; leave it out for Classic CAN. Ignored for SocketCAN |
 | `--bind <host>` | Listen on `<host>`. Default `127.0.0.1`; `0.0.0.0` for the whole network |
 | `--port <n>` | Listen on `<n>`. Default 8080 |
@@ -228,9 +239,9 @@ which:
 | macOS | `~/Library/Application Support/Cynitor` |
 
 It holds bus history (24 h), node history (30 days), service-call history,
-recordings, device names, the types you set for subjects, and the allocator's
-table of which device got which node-ID. Raw CAN logs are in `raw/`, firmware
-files in `firmware/`, your DSDL types in `dsdl/`.
+recordings, device names, the types you set for subjects, the test nodes you
+make, and the allocator's table of which device got which node-ID. Raw CAN
+logs are in `raw/`, firmware files in `firmware/`, your DSDL types in `dsdl/`.
 
 Earlier versions wrote next to where Cynitor was started. Data found there is
 moved in once, on the first start, and never overwrites what the data folder
@@ -273,7 +284,7 @@ comments show how to narrow that to a dedicated user.
 
 | What you see | What to do |
 |---|---|
-| No nodes, or only node 1, Cynitor's own allocator | Check that something publishes: `yakut sub uavcan.node.Heartbeat.1.0`. A `vcan` is empty until something publishes on it, such as the [demo nodes](#try-it-without-hardware) |
+| No nodes, or only node 1, Cynitor's own allocator | Check that something publishes: `yakut sub uavcan.node.Heartbeat.1.0`. A `vcan` is empty until something publishes on it, such as the [demo nodes](#try-it-without-hardware), which the simulated bus has of its own |
 | A node with no name and no registers | Its heartbeats reach Cynitor, but Cynitor's requests do not reach it. On a CAN FD bus the usual cause is a node running Classic CAN: run every node in CAN FD, or set the interface to Classic CAN |
 | CAN will not connect | Check that the interface exists (`ip link show can0`) and that you may open it. The log panel's Server source and stderr have the full error |
 | Bus load stays at 0 % on SocketCAN | Install `can-utils` |

@@ -123,6 +123,13 @@
           </svg>
           <span>Record</span>
         </button>
+        <button class="view-graph-btn" data-view="testnodes" role="tab" aria-selected="false" id="viewTabTestNodes" aria-controls="testNodesContainer">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M10 2v7.527a2 2 0 0 1-.211.896L4.72 20.55a1 1 0 0 0 .9 1.45h12.76a1 1 0 0 0 .9-1.45l-5.069-10.127A2 2 0 0 1 14 9.527V2"/>
+            <path d="M8.5 2h7"/><path d="M7 16h10"/>
+          </svg>
+          <span>Test nodes</span>
+        </button>
         <button class="view-graph-btn" data-view="debug" role="tab" aria-selected="false" id="viewTabDebug" aria-controls="debugContainer">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <path d="m8 2 1.88 1.88"/><path d="M14.12 3.88 16 2"/>
@@ -173,6 +180,7 @@
       <div id="compareContainer" class="hidden" role="tabpanel" aria-labelledby="viewTabCompare"></div>
       <div id="dsdlContainer" class="hidden" role="tabpanel" aria-labelledby="viewTabDsdl"></div>
       <div id="recordContainer" class="hidden" role="tabpanel" aria-labelledby="viewTabRecord"></div>
+      <div id="testNodesContainer" class="hidden" role="tabpanel" aria-labelledby="viewTabTestNodes"></div>
       <div id="debugContainer" class="hidden" role="tabpanel" aria-labelledby="viewTabDebug"></div>
       <div class="detail-resize-handle" id="detailResizeHandle">
         <button class="detail-collapse-btn" id="detailCollapseBtn" aria-label="Toggle detail panel">
@@ -329,6 +337,7 @@
   <script src="./replay-strip.js"></script>
   <script src="./log-panel.js"></script>
   <script src="./debug-view.js"></script>
+  <script src="./testnodes-view.js"></script>
   <script src="./connection.js"></script>
   <script src="./app.js"></script>
 </body>

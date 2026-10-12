@@ -432,8 +432,14 @@ const GraphView = (() => {
   // What is unusual about a device, said under its name, the gravest first:
   // since when it has been offline, a node-ID it shares with another node, a
   // recent restart, a subject published with another type, a mode other than
-  // OPERATIONAL. Null when all is usual.
+  // OPERATIONAL. Null when all is usual. A test node says it is one, first.
   const _deviceStatus = (raw, nodeId) => {
+    const status = _unusual(raw, nodeId);
+    if (!raw?.test_node) return status;
+    return status ? { ...status, text: `test node · ${status.text}` } : { text: 'test node', level: null, kind: 'test' };
+  };
+
+  const _unusual = (raw, nodeId) => {
     if (raw?.has_disappeared) {
       const ago = typeof formatLastSeen === 'function' ? formatLastSeen(raw.last_seen) : '-';
       return { text: ago === '-' ? 'offline' : `offline · ${ago}`, level: 'err', kind: 'offline' };

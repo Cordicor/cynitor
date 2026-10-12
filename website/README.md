@@ -22,6 +22,7 @@ The current UI is network-centric: it emphasizes topology, live traffic, and sel
 - `dsdl-editor.js` – DSDL custom-type editor: new, edit and new-version form with live preview and compile-state lock
 - `dsdl-view.js` – DSDL Inspector: namespace tree, field search, dependency navigation; opens the editor
 - `record-view.js` – Record tab: subject/service/node pickers, per-recording cards with progress bars, limits, edit-limits modal, duplicate, CSV/JSON export
+- `testnodes-view.js` – Test nodes tab: cards to start, stop and change test nodes, and the editor that builds a publisher's form from its type, each number a constant or a waveform
 - `log-panel.js` – Right log panel: Cyphal + Server feeds, subject picker, severity floor, per-source toggle pills with count badges
 - `connection.js` – WebSocket lifecycle, REST polling, reconnect
 - `app.js` – boot, DOM bindings, view switching
@@ -33,6 +34,8 @@ The current UI is network-centric: it emphasizes topology, live traffic, and sel
 ```bash
 cd server && python3 main.py --can vcan0
 ```
+
+Or, with no hardware, on the simulated bus: `python3 main.py --can sim:classic`.
 
 Or (selection mode — pick CAN interface from the UI):
 

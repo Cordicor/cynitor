@@ -11,7 +11,7 @@ import types
 import pytest
 
 import can_discovery
-from can_discovery import Adapter, AdapterCatalog, discover_adapters
+from can_discovery import Adapter, AdapterCatalog, discover_adapters, simulated_adapters
 
 
 @pytest.fixture
@@ -54,6 +54,12 @@ class TestDiscoverAdapters:
         assert discover_adapters(["can0", "can1"], platform="linux") == [
             Adapter("can0", "can0 (SocketCAN)", False, False),
             Adapter("can1", "can1 (SocketCAN)", False, True),
+        ]
+
+    def test_simulated_buses_need_no_bitrate(self):
+        assert simulated_adapters() == [
+            Adapter("sim:classic", "Simulated bus (no hardware)", False, False),
+            Adapter("sim:fd", "Simulated bus, CAN FD (no hardware)", False, True),
         ]
 
     def test_as_dict(self):
