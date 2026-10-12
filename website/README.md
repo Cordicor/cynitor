@@ -92,6 +92,7 @@ Open in browser:
   - Resizable split between card list and plot area (drag handle)
   - Vertical resize handle between nodes table and detail panel
 - Right log panel (hidden by default, toggled from the right edge):
+  - Its left edge drags to resize it, and a double-click there resets it; the width is kept. It is never narrower than its controls need (20rem), and in a small window takes no more than leaves the main area room
   - Unified timeline of Cyphal diagnostic messages, user-picked text subjects, and the backend's `/api/logs` stream
   - Per-source toggle pills (`CYPHAL`, `SERVER`) with live count badges
   - `Min: TRACE…ALERT` severity floor applies across all sources via mapped levels; user-added subjects always show

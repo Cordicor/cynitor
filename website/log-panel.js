@@ -8,7 +8,7 @@
 //               state.logSeverityFloor, state.logAutoscroll,
 //               state.logSubjectIds, state.logShowCyphal, state.logShowServer.
 
-const LOG_PANEL_MIN_WIDTH_PX = 224;   // ~14rem
+const LOG_PANEL_MIN_WIDTH_PX = 320;   // 20rem, as --log-w-fit in styles.css: what the controls and a readable message need
 const LOG_PANEL_MAX_WIDTH_PX = 800;   // ~50rem
 // Entries kept, every one of them drawn: the counts, the filters and the list
 // then speak of the same rows. Drawing a new one costs about 1 ms at 1000 rows

@@ -6011,6 +6011,34 @@ async def _(page):
     assert len(rows) == 1 and rows[0].endswith("s1900 valve stuck"), f"Rows: {rows}"
 
 
+@test("Log panel: a width saved on a wide screen leaves the main area room in a smaller window, and is never too narrow to read")
+async def _(page):
+    size = page.viewport_size
+    was_open = await set_log_panel(page, True)
+    saved = await page.evaluate("state.logPanelWidth")
+    measure = """async (width) => { state.logPanelWidth = width; applyLogPanelWidth(el('logPanel'));
+        await new Promise((done) => setTimeout(done, 400));  // the width's transition
+        const box = (e) => e.getBoundingClientRect(); const toggle = box(el('logPanelCollapseBtn'));
+        const cut = [...document.querySelectorAll('.log-panel-header button, .log-panel-header input, .log-panel-header select')]
+            .filter((e) => box(e).right > box(el('logPanel')).right).map((e) => e.id);
+        return {panel: box(el('logPanel')).width, main: box(document.querySelector('.main-area')).width, cut,
+                toggleOff: Math.abs(toggle.left + toggle.width / 2 - box(el('logPanel')).left)}; }"""
+    try:
+        await page.set_viewport_size({"width": 1100, "height": 700})
+        wide = await page.evaluate(measure, 800)  # dragged to its widest on a large screen
+        narrow = await page.evaluate(measure, 120)
+    finally:
+        await page.evaluate("(width) => { state.logPanelWidth = width; applyLogPanelWidth(el('logPanel')); }", saved)
+        await page.set_viewport_size(size)
+        await set_log_panel(page, was_open)
+    assert wide["main"] >= 380 and wide["panel"] >= 380, \
+        f"A panel saved 800 px wide, in a 1100 px window: panel {wide['panel']}, main area {wide['main']} px"
+    assert narrow["panel"] >= 300 and not narrow["cut"], \
+        f"A panel saved 120 px wide is {narrow['panel']} px wide; controls cut off at its edge: {narrow['cut']}"
+    assert wide["toggleOff"] <= 8 and narrow["toggleOff"] <= 8, \
+        f"The toggle is {wide['toggleOff']} and {narrow['toggleOff']} px from the panel's edge"
+
+
 # Keep last: it reloads the page with every other host unreachable.
 @test("Dashboard works with no internet access")
 async def _(page):
