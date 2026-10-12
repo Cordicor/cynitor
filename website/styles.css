@@ -4667,8 +4667,18 @@ details.svc-history-entry[open] > summary::before {
     opacity: 1;
   }
 
+  /* Under the pointer it stays in its row: side by side, the same shift centres it. */
+  .sidebar-collapse-btn:hover {
+    transform: none;
+  }
+
   .sidebar-collapse-btn svg {
     transform: rotate(-90deg);
+  }
+
+  /* Collapsed, it gives up its height too, or a blank as tall as itself stays above the page. */
+  .sidebar.collapsed {
+    height: 0;
   }
 
   .sidebar.collapsed ~ .sidebar-collapse-btn {

@@ -5754,6 +5754,32 @@ async def _(page):
         f"{seen['darkHammer']!r}; the version's font size: {seen['version']} px"
 
 
+@test("Sidebar: in a narrow window, collapsed, it leaves no blank behind, and its toggle stays put under the pointer")
+async def _(page):
+    size = page.viewport_size
+    toggle = page.locator("#sidebarCollapseBtn")
+    box = """() => { const rect = (e) => e.getBoundingClientRect();
+        return {sidebar: Math.round(rect(document.querySelector('nav.sidebar')).height),
+                toggleTop: Math.round(rect(el('sidebarCollapseBtn')).top)}; }"""
+    await page.set_viewport_size({"width": 900, "height": 700})
+    try:
+        await page.wait_for_timeout(300)
+        await toggle.click()  # collapsed; the pointer stays on the toggle
+        await page.wait_for_timeout(400)
+        hovered = await page.evaluate(box)
+        await page.mouse.move(450, 600)
+        await page.wait_for_timeout(200)
+        left = await page.evaluate(box)
+    finally:
+        await page.evaluate("scrollTo(0, 0)")
+        if await page.evaluate("state.sidebarCollapsed"):
+            await toggle.click()
+        await page.locator("nav.sidebar:not(.collapsed)").wait_for(state="attached", timeout=WAIT_MS)
+        await page.set_viewport_size(size)
+    assert left == {"sidebar": 0, "toggleTop": 0}, f"Collapsed in a 900 px window, the sidebar's height and its toggle's top: {left}"
+    assert hovered == left, f"Under the pointer the toggle moved: {hovered}, then {left} with the pointer away"
+
+
 # ── Log panel ──
 
 class _LogServer(_SidebarServer):
