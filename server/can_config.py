@@ -36,6 +36,16 @@ FD_INTERFACES = frozenset({"pcan", "kvaser", "vector", "ixxat", "gs_usb", "slcan
 # firmware that does CAN FD, and all that python-can's slcan can set.
 FD_DATA_BITRATES: dict[str, tuple[int, ...]] = {"slcan": (2_000_000, 5_000_000)}
 
+# Simulated buses, an in-process bus with demo devices on it for trying Cynitor
+# without hardware, on any OS (see simulation.py). Their rates are their own,
+# as SocketCAN's are the kernel's: given ones are ignored. Only the bus-load
+# estimate depends on them.
+SIM_INTERFACE = "sim"
+SIM_BUSES: dict[str, tuple[int, Optional[int]]] = {
+    "classic": (1_000_000, None),
+    "fd": (1_000_000, 4_000_000),
+}
+
 # Sample points of the CAN FD bit timings Cynitor works out itself, for PCAN
 # and candleLight adapters, in percent: what pycyphal uses for PCAN.
 FD_NOMINAL_SAMPLE_POINT = 80.0
@@ -98,6 +108,21 @@ def _interface_name(iface: str) -> str:
     return normalize_can_iface(iface).split(":", 1)[0]
 
 
+def is_simulated(iface: str) -> bool:
+    """Whether ``iface`` names a simulated bus (``sim:classic``, ``sim:fd``)."""
+    return _interface_name(iface) == SIM_INTERFACE
+
+
+def simulated_rates(iface: str) -> tuple[int, Optional[int]]:
+    """(bitrate, CAN FD data bitrate or None) of simulated bus ``iface``; ValueError for no such bus."""
+    name = normalize_can_iface(iface).split(":", 1)[1]
+    try:
+        return SIM_BUSES[name]
+    except KeyError:
+        known = " or ".join(f"{SIM_INTERFACE}:{bus}" for bus in SIM_BUSES)
+        raise ValueError(f"There is no simulated bus {name!r}; there are {known}") from None
+
+
 def validate_bitrate(bitrate: object) -> int:
     """Return ``bitrate`` as an int, or raise ValueError if it is not a usable classic-CAN bitrate."""
     # bool is an int subclass; True would otherwise pass as 1 bit/s.
@@ -126,9 +151,13 @@ def resolve_data_bitrate(iface: str, data_bitrate: Optional[object]) -> Optional
 
     SocketCAN always gets None: the kernel owns its rates, and whether it runs
     CAN FD follows the interface's own setting (see socketcan_supports_fd).
-    Raises ValueError for an adapter that cannot run CAN FD, or not at that
-    data bitrate.
+    A simulated bus has its own, whatever is given. Raises ValueError for an
+    adapter that cannot run CAN FD, or not at that data bitrate.
     """
+    if is_simulated(iface):
+        if data_bitrate is not None:
+            validate_data_bitrate(data_bitrate)
+        return simulated_rates(iface)[1]
     if data_bitrate is None or is_socketcan(iface):
         return None
     interface = _interface_name(iface)
@@ -170,15 +199,22 @@ def supports_fd(iface: str) -> bool:
     """
     if is_socketcan(iface):
         return socketcan_supports_fd(socketcan_device(iface))
+    if is_simulated(iface):
+        return simulated_rates(iface)[1] is not None
     return _interface_name(iface) in FD_INTERFACES
 
 
 def resolve_bitrate(iface: str, bitrate: Optional[object]) -> Optional[int]:
     """The bitrate to open ``iface`` at: validated, and required unless it is SocketCAN.
 
-    Returns None only for SocketCAN given no bitrate. Raises ValueError when
-    any other interface is given none, since there is no safe default.
+    Returns None only for SocketCAN given no bitrate. A simulated bus has its
+    own, whatever is given. Raises ValueError when any other interface is
+    given none, since there is no safe default.
     """
+    if is_simulated(iface):
+        if bitrate is not None:
+            validate_bitrate(bitrate)
+        return simulated_rates(iface)[0]
     if bitrate is None:
         if is_socketcan(iface):
             return None

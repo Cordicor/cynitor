@@ -64,16 +64,20 @@ const state = {
   tableSort: { key: 'id', dir: 'asc' },
   sidebarCollapsed: false,
   logPanelCollapsed: true,
-  logPanelWidth: null,
+  logPanelWidth: null,      // in rem, as dragged; null for the stylesheet's own width
   logBuffer: [],
   logSeverityFloor: 0,
   logAutoscroll: true,
   logSubjectIds: new Set(),
   logShowCyphal: true,
   logShowServer: false,
-  logTextFilter: '',
+  logTextFilter: '',        // the log panel's filter box, lowercased; not persisted
+  logUnreadCount: 0,        // warnings and worse listed since the log panel was shut; its toggle shows it
+  logUnreadWorst: 0,        // the highest severity among them
+  logNewBelow: 0,           // messages added under what the log panel shows, its end out of view
+  logNewBelowWorst: 0,      // the highest severity among them
   busErrors: null,          // errors on the bus (GET /api/status), or null while it has none
-  cyphalV11: null,          // Cyphal v1.1 traffic seen on the bus (GET /api/status), or null       // the log panel's filter box, lowercased; not persisted
+  cyphalV11: null,          // Cyphal v1.1 traffic seen on the bus (GET /api/status), or null
   _logSeq: 0,
   detailPanelHeight: null,
   detailPanelCollapsed: false,
@@ -98,6 +102,7 @@ const state = {
   subjectsKind: 'all',   // what the Subjects table lists: 'all', 'Subject' or 'Service'
   compactRows: false,    // the tables' rows at about 70% height (Compact, in their strips)
   nodesFocus: null,      // the kind picked out in a table's status strip, or null
+  hideOfflineNodes: false,  // Nodes table: offline nodes left out (Hide offline, in its strip)
   subjectsFocus: null,
   recordings: [],
   activeRecordingId: null,
@@ -453,8 +458,9 @@ const bindRowKeys = (tabulator, activate, keys = {}) => {
 // A strip over a table saying what needs a look: the total, then a count of
 // each kind of row that does, which, clicked, picks those rows out (see the
 // Graph's strip); last, the Compact toggle (see applyRowDensity). `before` is
-// markup to put first. Returns the kinds counted.
-const renderStatusStrip = (strip, total, kinds, rows, focus, before = '') => {
+// markup to put first, `tools` markup for the table's own toggles, put before
+// Compact. Returns the kinds counted.
+const renderStatusStrip = (strip, total, kinds, rows, focus, before = '', tools = '') => {
   const counts = kinds.map((k) => ({ ...k, count: rows.filter(k.test).length })).filter((k) => k.count);
   const fresh = document.createElement('div');
   fresh.innerHTML = `${before}<span class="table-status-total">${escapeHtml(total)}</span>`
@@ -462,6 +468,7 @@ const renderStatusStrip = (strip, total, kinds, rows, focus, before = '') => {
       ? counts.map((k) => `<button type="button" class="table-chip table-chip--${k.level}" data-focus="${k.key}"`
         + ` aria-pressed="${focus === k.key}">${k.count} ${escapeHtml(k.label)}</button>`).join('')
       : '<span class="table-status-usual">nothing unusual</span>')
+    + tools
     + `<button type="button" class="table-kind-btn table-density-btn${state.compactRows ? ' active' : ''}"`
     + ` data-density aria-pressed="${state.compactRows}">Compact</button>`;
   patchChildren(strip, fresh);
@@ -553,6 +560,18 @@ const showToast = (message, type = 'info', durationMs = 5000) => {
     toast.classList.add('toast-exit');
     toast.addEventListener('transitionend', () => toast.remove());
   }, durationMs);
+};
+
+// How many px one rem is here: sizes dragged with the mouse are kept in rem.
+const remPx = () => parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+
+// Hands the browser a file made in the page, to save under `name`.
+const downloadBlob = (blob, name) => {
+  const link = document.createElement('a');
+  link.href = URL.createObjectURL(blob);
+  link.download = name;
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(link.href), 1000);
 };
 
 // ── API helpers ──
@@ -774,7 +793,7 @@ const _writeSettingsNow = () => {
     tableSort: state.tableSort,
     sidebarCollapsed: state.sidebarCollapsed,
     logPanelCollapsed: state.logPanelCollapsed,
-    logPanelWidth: state.logPanelWidth,
+    logPanelWidthRem: state.logPanelWidth,
     logSeverityFloor: state.logSeverityFloor,
     logAutoscroll: state.logAutoscroll,
     logSubjectIds: [...state.logSubjectIds],
@@ -807,6 +826,7 @@ const _writeSettingsNow = () => {
     subjectsTableSort: state.subjectsTableSort,
     subjectsKind: state.subjectsKind,
     compactRows: state.compactRows,
+    hideOfflineNodes: state.hideOfflineNodes,
     subjectsHeaderFilters: typeof getSubjectsHeaderFilters === 'function' ? getSubjectsHeaderFilters() : null,
     recordFilterDraft: state.recordFilterDraft,
     rawLogPlaybackSpeed: state.rawLogPlaybackSpeed,
@@ -860,8 +880,11 @@ const loadSettings = () => {
     state.logPanelCollapsed = false;
     document.querySelector('.log-panel')?.classList.remove('collapsed');
   }
-  if (typeof settings.logPanelWidth === 'number' && settings.logPanelWidth >= 0) {
-    state.logPanelWidth = settings.logPanelWidth;
+  // In rem; earlier versions saved it in px, as logPanelWidth.
+  if (settings.logPanelWidthRem > 0) {
+    state.logPanelWidth = settings.logPanelWidthRem;
+  } else if (settings.logPanelWidth > 0) {
+    state.logPanelWidth = settings.logPanelWidth / remPx();
   }
   if (Number.isInteger(settings.logSeverityFloor)
       && settings.logSeverityFloor >= 0 && settings.logSeverityFloor <= 7) {
@@ -967,6 +990,7 @@ const loadSettings = () => {
     state.subjectsKind = settings.subjectsKind;
   }
   if (settings.compactRows === true) state.compactRows = true;
+  if (settings.hideOfflineNodes === true) state.hideOfflineNodes = true;
   if (typeof settings.plotTimeWindow === 'number' && settings.plotTimeWindow >= 0) {
     state.plotTimeWindow = settings.plotTimeWindow;
   }

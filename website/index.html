@@ -8,7 +8,7 @@
   <link rel="stylesheet" href="./styles.css" />
 </head>
 <body>
-  <div class="app-shell">
+  <div class="app-shell restoring">
 
     <!-- ── Sidebar ── -->
     <nav class="sidebar">
@@ -123,6 +123,13 @@
           </svg>
           <span>Record</span>
         </button>
+        <button class="view-graph-btn" data-view="testnodes" role="tab" aria-selected="false" id="viewTabTestNodes" aria-controls="testNodesContainer">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M10 2v7.527a2 2 0 0 1-.211.896L4.72 20.55a1 1 0 0 0 .9 1.45h12.76a1 1 0 0 0 .9-1.45l-5.069-10.127A2 2 0 0 1 14 9.527V2"/>
+            <path d="M8.5 2h7"/><path d="M7 16h10"/>
+          </svg>
+          <span>Test nodes</span>
+        </button>
         <button class="view-graph-btn" data-view="debug" role="tab" aria-selected="false" id="viewTabDebug" aria-controls="debugContainer">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <path d="m8 2 1.88 1.88"/><path d="M14.12 3.88 16 2"/>
@@ -173,6 +180,7 @@
       <div id="compareContainer" class="hidden" role="tabpanel" aria-labelledby="viewTabCompare"></div>
       <div id="dsdlContainer" class="hidden" role="tabpanel" aria-labelledby="viewTabDsdl"></div>
       <div id="recordContainer" class="hidden" role="tabpanel" aria-labelledby="viewTabRecord"></div>
+      <div id="testNodesContainer" class="hidden" role="tabpanel" aria-labelledby="viewTabTestNodes"></div>
       <div id="debugContainer" class="hidden" role="tabpanel" aria-labelledby="viewTabDebug"></div>
       <div class="detail-resize-handle" id="detailResizeHandle">
         <button class="detail-collapse-btn" id="detailCollapseBtn" aria-label="Toggle detail panel">
@@ -210,6 +218,13 @@
             <span class="log-source-count hidden" aria-hidden="true"></span>
           </button>
         </div>
+        <button class="log-icon-btn log-save-btn" id="logSaveBtn" aria-label="Save the messages listed to a file">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+            <polyline points="7 10 12 15 17 10"/>
+            <line x1="12" y1="15" x2="12" y2="3"/>
+          </svg>
+        </button>
         <div class="log-panel-controls">
           <input type="search" id="logFilterInput" class="log-filter-input" placeholder="Filter"
                  aria-label="Filter log messages" autocomplete="off" spellcheck="false">
@@ -226,7 +241,8 @@
               <option value="7">ALERT</option>
             </select>
           </label>
-          <button class="log-icon-btn" id="logAddSubjectBtn" aria-label="Add text subject to log" title="Add subject">
+          <button class="log-icon-btn" id="logAddSubjectBtn" aria-label="Add text subject to log" title="Add subject"
+                  aria-expanded="false" aria-controls="logSubjectPickerPopover">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
               <line x1="12" y1="5" x2="12" y2="19"/>
               <line x1="5" y1="12" x2="19" y2="12"/>
@@ -252,13 +268,17 @@
         <div class="log-empty" id="logEmpty">Waiting for log messages…</div>
         <div class="log-list" id="logList" role="log" aria-live="off"></div>
       </div>
+      <button class="log-new-btn hidden" id="logNewBtn" type="button" title="Go to the newest message"></button>
     </aside>
 
-    <button class="log-panel-collapse-btn" id="logPanelCollapseBtn" aria-label="Toggle log panel">
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <button class="log-panel-collapse-btn" id="logPanelCollapseBtn" aria-label="Toggle log panel" aria-controls="logPanel">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
         <polyline points="9 18 15 12 9 6"></polyline>
       </svg>
+      <span class="log-unread hidden" id="logUnread" aria-hidden="true"></span>
     </button>
+    <!-- Read out, not drawn: the first warning, then the first error, to come while the panel is shut. -->
+    <div class="visually-hidden" id="logAnnounce" role="status"></div>
 
   </div><!-- /app-shell -->
 
@@ -317,6 +337,7 @@
   <script src="./replay-strip.js"></script>
   <script src="./log-panel.js"></script>
   <script src="./debug-view.js"></script>
+  <script src="./testnodes-view.js"></script>
   <script src="./connection.js"></script>
   <script src="./app.js"></script>
 </body>

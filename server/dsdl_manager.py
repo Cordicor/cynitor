@@ -72,6 +72,9 @@ class DsdlManager:
 
         self._tree_cache: Optional[dict] = None
         self._type_index: dict[str, Path] = {}
+        # read_model's, by full name. A new dict after every change, so that a
+        # read a change overtakes keeps what it read in the old one only.
+        self._models: dict[str, Any] = {}
         self._status_cache: Optional[dict] = None
         self._status_read_at = 0.0
         # Held while the status is read, so a change made meanwhile resets
@@ -219,6 +222,25 @@ class DsdlManager:
         self._add_compiler_view(detail, path)
         return detail
 
+    def read_model(self, full_name: str) -> Any:
+        """Type ``full_name`` as the compiler (pydsdl) reads it from its source.
+        ValueError if there is no such type, or the compiler refuses it."""
+        models = self._models
+        if full_name in models:
+            return models[full_name]
+        if not self._type_index:
+            self.get_namespaces()
+        path = self._type_index.get(full_name)
+        if path is None:
+            raise ValueError(f"There is no DSDL type {full_name}")
+        custom = self.custom_dir.is_dir() and path.is_relative_to(self.custom_dir)
+        try:
+            models[full_name] = self._read_type(path, full_name.split(".")[0], custom)
+        except Exception as exc:
+            problem = self._problem(exc, path)
+            raise ValueError(f"{full_name} does not compile: {problem['message'] if problem else exc}") from None
+        return models[full_name]
+
     def _add_compiler_view(self, detail: dict[str, Any], path: Path) -> None:
         """Add what the compiler (pydsdl) reads in a type beyond its fields: its
         comments, whether it is a union, sealed or how far it may grow, its
@@ -293,6 +315,7 @@ class DsdlManager:
     def invalidate_cache(self) -> None:
         self._tree_cache = None
         self._type_index.clear()
+        self._models = {}
         with self._status_lock:
             self._status_cache = None
 

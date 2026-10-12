@@ -432,8 +432,14 @@ const GraphView = (() => {
   // What is unusual about a device, said under its name, the gravest first:
   // since when it has been offline, a node-ID it shares with another node, a
   // recent restart, a subject published with another type, a mode other than
-  // OPERATIONAL. Null when all is usual.
+  // OPERATIONAL. Null when all is usual. A test node says it is one, first.
   const _deviceStatus = (raw, nodeId) => {
+    const status = _unusual(raw, nodeId);
+    if (!raw?.test_node) return status;
+    return status ? { ...status, text: `test node · ${status.text}` } : { text: 'test node', level: null, kind: 'test' };
+  };
+
+  const _unusual = (raw, nodeId) => {
     if (raw?.has_disappeared) {
       const ago = typeof formatLastSeen === 'function' ? formatLastSeen(raw.last_seen) : '-';
       return { text: ago === '-' ? 'offline' : `offline · ${ago}`, level: 'err', kind: 'offline' };
@@ -466,7 +472,7 @@ const GraphView = (() => {
   // another device took, the one it last had, as the Nodes table shows it.
   const _shownNodeId = (raw) => (raw?._ghost === true ? raw.last_node_id : raw?.node_id) ?? '-';
 
-  // A displaced device goes without its alias, as in the Nodes table.
+  // A ghost device, which holds no node-ID now, goes without its alias, as in the Nodes table.
   const _deviceFullName = (raw, shownId) => {
     const alias = typeof getNodeAlias === 'function' && raw?._ghost !== true ? getNodeAlias(raw?.unique_id) : null;
     return alias || raw?.name || `Node ${shownId}`;
@@ -1545,20 +1551,12 @@ const GraphView = (() => {
     return { text: new XMLSerializer().serializeToString(copy), width: x1 - x0, height: y1 - y0 };
   };
 
-  const _download = (blob, name) => {
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = name;
-    a.click();
-    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
-  };
-
   const _exportImage = (format) => {
     if (!simulation?.nodes().length) return;
     const { text, width, height } = _exportSvgText();
     const name = `cynitor-graph-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}`;
     const svgBlob = new Blob([text], { type: 'image/svg+xml' });
-    if (format === 'svg') { _download(svgBlob, `${name}.svg`); return; }
+    if (format === 'svg') { downloadBlob(svgBlob, `${name}.svg`); return; }
     // PNG at twice the size, for sharp text on a report or a ticket.
     const image = new Image();
     image.onload = () => {
@@ -1569,7 +1567,7 @@ const GraphView = (() => {
       ctx.scale(2, 2);
       ctx.drawImage(image, 0, 0, width, height);
       URL.revokeObjectURL(image.src);
-      canvas.toBlob((png) => png && _download(png, `${name}.png`), 'image/png');
+      canvas.toBlob((png) => png && downloadBlob(png, `${name}.png`), 'image/png');
     };
     image.src = URL.createObjectURL(svgBlob);
   };
@@ -1627,9 +1625,10 @@ const GraphView = (() => {
   //
   // What needs a look, counted over what is drawn. A count, clicked, picks
   // those nodes out of the graph; clicked again, it lets them go.
+  // Offline is every device not on the bus now, as in the Nodes table: one that
+  // fell silent, and one remembered from before that holds no node-ID (a ghost).
   const FOCUS_KINDS = [
-    { key: 'offline', label: 'offline', level: 'err', test: (d) => d.type === 'device' && d.disappeared && !d.ghost },
-    { key: 'displaced', label: 'displaced', level: 'err', test: (d) => d.type === 'device' && d.ghost },
+    { key: 'offline', label: 'offline', level: 'err', test: (d) => d.type === 'device' && (d.disappeared || d.ghost) },
     { key: 'health', label: 'unusual health', level: 'warn',
       test: (d) => d.type === 'device' && !d.disappeared && !!getStatusClass('health', d.health) },
     { key: 'conflict', label: 'node-ID conflict', level: 'err', test: (d) => d.type === 'device' && d.status?.kind === 'conflict' },
@@ -1811,7 +1810,7 @@ const GraphView = (() => {
     const health = node.health || 'UNKNOWN';
     const hClass = getStatusClass('health', health);
     const displayName = raw ? _deviceFullName(raw, node.shownId) : node.fullName;
-    // A displaced device goes without an alias, so it offers no renaming.
+    // A ghost device goes without an alias, so it offers no renaming.
     const renameButton = node.ghost ? '' : `<button class="graph-info-icon-btn" id="graphInfoRename" aria-label="Rename device" title="Rename">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
         </button>`;
@@ -1902,7 +1901,7 @@ const GraphView = (() => {
 
   const _hideFromGraph = (node) => {
     if (node.type === 'device') {
-      // hideNode() takes a node-ID; a displaced device has only its key.
+      // hideNode() takes a node-ID; a ghost device has only its key.
       if (typeof hideNode === 'function') hideNode(node.nodeId ?? node.payloadKey);
     } else if (typeof hideSubject === 'function') {
       hideSubject({ id: node.subjectId });

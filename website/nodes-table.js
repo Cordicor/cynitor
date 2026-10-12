@@ -107,24 +107,25 @@ const favFormatter = (cell) => {
   return `<button type="button" class="fav-star ${isFav ? 'active' : ''}" aria-label="Toggle favourite">${isFav ? '★' : '☆'}</button>`;
 };
 
+// A node Cynitor runs from the Test nodes tab, marked as such wherever it is named.
+const TEST_NODE_BADGE = '<span class="test-node-badge" title="A test node Cynitor runs: see the Test nodes tab">test</span>';
+
 const nameFormatter = (cell) => {
   const row = cell.getRow().getData();
   const alias = getNodeAlias(row._uid);
-  const original = (() => {
-    const nodes = state.latestNodesPayload?.nodes || {};
-    const node = nodes[row.id];
-    return node?.name || null;
-  })();
+  const node = (state.latestNodesPayload?.nodes || {})[row.id];
+  const original = node?.name || null;
   const editIcon = row._uid?.length
     ? '<span class="name-edit-icon" aria-hidden="true">✎</span>'
     : '';
+  const badge = node?.test_node ? TEST_NODE_BADGE : '';
   if (!alias && !original) {
     // Heartbeats arrive, but GetInfo (which carries the name) does not answer.
     const why = row._noInfo ? 'no name: GetInfo unanswered' : '-';
-    return `<span class="name-cell">${editIcon}<span class="name-display name-missing">${why}</span></span>`;
+    return `<span class="name-cell">${editIcon}<span class="name-display name-missing">${why}</span>${badge}</span>`;
   }
   const tooltip = alias && original ? ` title="${escapeHtml(original)}"` : '';
-  return `<span class="name-cell">${editIcon}<span class="name-display"${tooltip}>${escapeHtml(alias || original)}</span></span>`;
+  return `<span class="name-cell">${editIcon}<span class="name-display"${tooltip}>${escapeHtml(alias || original)}</span>${badge}</span>`;
 };
 
 const startNameEdit = (cell) => {
@@ -321,10 +322,11 @@ const toggleHiddenPopover = () => {
 };
 
 // What needs a look in the Nodes table, as the Graph's strip counts it, and
-// nodes that send heartbeats but answer no request (GetInfo).
+// nodes that send heartbeats but answer no request (GetInfo). Offline is every
+// node not on the bus now: one that fell silent, and one remembered from
+// before that holds no node-ID (a ghost row).
 const NODE_FOCUS_KINDS = [
-  { key: 'offline', label: 'offline', level: 'err', test: (r) => r._offline && !r._ghost },
-  { key: 'displaced', label: 'displaced', level: 'err', test: (r) => r._ghost },
+  { key: 'offline', label: 'offline', level: 'err', test: (r) => r._offline },
   { key: 'health', label: 'unusual health', level: 'warn', test: (r) => !r._offline && !!getStatusClass('health', r.health) },
   { key: 'mode', label: 'unusual mode', level: 'warn',
     test: (r) => !r._offline && r.mode !== '-' && !!getStatusClass('mode', r.mode) },
@@ -347,12 +349,29 @@ const toggleRowDensity = () => {
   applyRowDensity();
 };
 
+// Whether Hide offline (in the strip) leaves a row out of the table.
+const isHiddenOffline = (row) => state.hideOfflineNodes && row._offline;
+
+// The rows the table lists: all but the offline ones while those are hidden,
+// and of them only the kind picked out in the strip, if one is.
+const applyNodesFilter = () => {
+  const kind = NODE_FOCUS_KINDS.find((k) => k.key === state.nodesFocus);
+  if (!kind && !state.hideOfflineNodes) nodesTabulator.clearFilter();
+  else nodesTabulator.setFilter((row) => !isHiddenOffline(row) && (!kind || kind.test(row)));
+};
+
 const setNodesFocus = (key) => {
   state.nodesFocus = key;
-  const kind = NODE_FOCUS_KINDS.find((k) => k.key === key);
-  if (kind) nodesTabulator.setFilter(kind.test);
-  else nodesTabulator.clearFilter();
+  applyNodesFilter();
 };
+
+const toggleHideOfflineNodes = () => {
+  state.hideOfflineNodes = !state.hideOfflineNodes;
+  saveSettings();
+  applyNodesFilter();
+};
+
+const nodesCount = (n, what = 'node') => `${n} ${what}${n === 1 ? '' : 's'}`;
 
 const renderNodesStatus = (rows) => {
   const strip = el('nodesStatus');
@@ -360,14 +379,27 @@ const renderNodesStatus = (rows) => {
     strip.replaceChildren();
     return;
   }
-  const counts = renderStatusStrip(strip, `${rows.length} node${rows.length === 1 ? '' : 's'}`,
-    NODE_FOCUS_KINDS, rows, state.nodesFocus);
+  // Counted over what is listed; the offline nodes hidden are said beside the total.
+  const listed = rows.filter((row) => !isHiddenOffline(row));
+  const hidden = rows.length - listed.length;
+  const total = nodesCount(listed.length) + (hidden ? ` · ${hidden} offline hidden` : '');
+  const hideOffline = `<button type="button" class="table-kind-btn table-offline-btn${state.hideOfflineNodes ? ' active' : ''}"`
+    + ` data-hide-offline aria-pressed="${state.hideOfflineNodes}"`
+    + ' title="Leave the nodes that are not on the bus out of the table">Hide offline</button>';
+  const counts = renderStatusStrip(strip, total, NODE_FOCUS_KINDS, listed, state.nodesFocus, '', hideOffline);
   if (state.nodesFocus && !counts.some((k) => k.key === state.nodesFocus)) setNodesFocus(null);
 };
 
 const tablePlaceholder = () => {
-  return eventSourcePlaceholder('discover CAN nodes')
-    || svcStateMsg('<span class="svc-spinner"></span>', 'Waiting for nodes…', 'Listening on the CAN bus. Nodes will appear as they send heartbeats.');
+  const waiting = eventSourcePlaceholder('discover CAN nodes');
+  if (waiting) return waiting;
+  // Every node known is offline, and those are hidden: say where they went.
+  const hidden = buildTableData().filter(isHiddenOffline).length;
+  if (hidden) {
+    return svcStateMsg('⏻', `${nodesCount(hidden, 'offline node')} ${hidden === 1 ? 'is' : 'are'} hidden`,
+      'No node is on the bus now. Turn Hide offline off, above the table, to list them.');
+  }
+  return svcStateMsg('<span class="svc-spinner"></span>', 'Waiting for nodes…', 'Listening on the CAN bus. Nodes will appear as they send heartbeats.');
 };
 
 const buildTableData = () => {
@@ -501,6 +533,7 @@ const initNodesTable = () => {
   el('nodesStatus').addEventListener('click', (e) => {
     const key = e.target.closest('[data-focus]')?.dataset.focus;
     if (e.target.closest('[data-density]')) toggleRowDensity();
+    else if (e.target.closest('[data-hide-offline]')) toggleHideOfflineNodes();
     else if (key) setNodesFocus(state.nodesFocus === key ? null : key);
     else return;
     renderNodesTable();
@@ -516,6 +549,7 @@ const initNodesTable = () => {
     }
     injectHiddenChip();
     updateHiddenChip();
+    applyNodesFilter();  // Hide offline, as it was left
     renderNodesTable();
   });
 };

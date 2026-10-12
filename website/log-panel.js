@@ -3,15 +3,20 @@
 //   - cyphal: uavcan.diagnostic.Record + user-added text subjects (WS push)
 //   - server: GET /api/logs poller (Python `logging` records)
 //
-// Source of truth: state.logBuffer (in-memory ring buffer, NOT persisted).
+// Source of truth: state.logBuffer (the newest LOG_CAP entries, in time order,
+// NOT persisted). The list draws every entry, one row each, in the same order.
 // Persisted UI: state.logPanelCollapsed, state.logPanelWidth,
 //               state.logSeverityFloor, state.logAutoscroll,
 //               state.logSubjectIds, state.logShowCyphal, state.logShowServer.
 
-const LOG_PANEL_MIN_WIDTH_PX = 224;   // ~14rem
-const LOG_PANEL_MAX_WIDTH_PX = 800;   // ~50rem
-const LOG_BUFFER_CAP = 2000;
-const LOG_DOM_CAP = 1000;
+// How far the panel's edge drags, in rem. The least is --log-w-fit's in
+// styles.css: what the controls and a readable message need.
+const LOG_PANEL_MIN_WIDTH_REM = 20;
+const LOG_PANEL_MAX_WIDTH_REM = 50;
+// Entries kept, every one of them drawn: the counts, the filters and the list
+// then speak of the same rows. Drawing a new one costs about 1 ms at 1000 rows
+// and twice that at 2000.
+const LOG_CAP = 1000;
 const AUTOSCROLL_STICKY_PX = 16;
 const SERVER_LOG_POLL_MS = 2000;
 const SERVER_LOG_FETCH_LIMIT = 200;
@@ -27,17 +32,34 @@ const SERVER_LEVEL_TO_SEVERITY = {
 
 const DIAGNOSTIC_SUBJECT_ID = 8184;
 
-// Per-source entry counters mirror state.logBuffer composition.
-// Kept in sync via _pushEntry, _onClearLog, _recomputeSrcCounts.
+// From this severity on a message is one to notice: the shut panel's toggle counts it.
+const SEVERITY_WARNING = 4;
+const SEVERITY_ERROR = 5;
+
+// How many of state.logBuffer's entries each source has: _pushEntry and Clear
+// keep them in step with it.
 const _srcCounts = { cyphal: 0, server: 0 };
 
-const _recomputeSrcCounts = () => {
-  _srcCounts.cyphal = 0;
-  _srcCounts.server = 0;
-  for (const e of state.logBuffer) {
-    if (e.source in _srcCounts) _srcCounts[e.source]++;
-  }
+// What each source is, for its pill's tooltip.
+const LOG_SOURCE_ABOUT = {
+  cyphal: 'What the nodes say: uavcan.diagnostic.Record, and the text subjects added with +',
+  server: "Cynitor's own log, from its server",
 };
+
+// Why nothing can come from a source now, as connectionProblem's parts
+// (message, helper), or null when its messages can come.
+const logSourceProblem = (src) => {
+  // Without the backend neither source has anything to come from.
+  if (!state.dashboardConnected) return connectionProblem('see log messages');
+  if (src === 'server') {
+    return _serverLogError ? { message: "The server's log could not be read:", helper: _serverLogError } : null;
+  }
+  // A replay sends the nodes' messages with no bus connected.
+  return state.replayActive ? null : connectionProblem('see what the nodes say');
+};
+
+const _problemText = (problem) =>
+  `${problem.message}${/[.…:]$/.test(problem.message) ? '' : '.'} ${problem.helper}`;
 
 const _refreshSourcePillBadges = () => {
   for (const pill of document.querySelectorAll('.log-source-pill')) {
@@ -48,15 +70,61 @@ const _refreshSourcePillBadges = () => {
       countEl.textContent = n > 0 ? String(n) : '';
       countEl.classList.toggle('hidden', n === 0);
     }
-    if (src === 'server') {
-      // Nothing comes from it: no backend, or its log could not be read.
-      const why = !state.logShowServer ? ''
-        : !state.dashboardConnected ? 'Not connected to the server'
-        : _serverLogError ? `The server's log could not be read: ${_serverLogError}` : '';
-      pill.classList.toggle('disconnected', Boolean(why));
-      pill.title = why;
-    }
+    // Amber, with a dot: turned on, with nothing to come from. Its tooltip says why.
+    const problem = _isSourceOn(src) ? logSourceProblem(src) : null;
+    const title = problem ? _problemText(problem) : LOG_SOURCE_ABOUT[src];
+    pill.classList.toggle('disconnected', Boolean(problem));
+    if (pill.title !== title) pill.title = title;
   }
+};
+
+// The connection changed (connection.js says so): the panel shows what can
+// reach it now.
+const renderLogConnection = () => {
+  _refreshSourcePillBadges();
+  updateEmptyHint();
+};
+
+// ── The toggle at the window's edge ─────────────────────────────────
+
+// A bare arrow: it says what it opens, and, while the panel is shut, how many
+// warnings and errors came since, in the colour of the worst of them.
+const renderLogToggle = () => {
+  const toggle = el('logPanelCollapseBtn');
+  const badge = el('logUnread');
+  if (!toggle || !badge) return;
+  const n = state.logUnreadCount;
+  const since = n ? `: ${n} ${n === 1 ? 'warning or error' : 'warnings or errors'} since it was shut` : '';
+  toggle.setAttribute('aria-expanded', String(!state.logPanelCollapsed));
+  toggle.setAttribute('aria-label', `Toggle log panel${since}`);
+  toggle.title = state.logPanelCollapsed ? `Show the log panel${since}` : 'Hide the log panel';
+  toggle.classList.toggle('has-unread', n > 0);
+  badge.textContent = n > 99 ? '99+' : String(n);
+  badge.classList.toggle('hidden', n === 0);
+  badge.classList.toggle('log-unread--error', state.logUnreadWorst >= SEVERITY_ERROR);
+};
+
+// ── New messages below ──────────────────────────────────────────────
+
+// Over the list's foot while its end is out of view: how many messages came
+// meanwhile, in the colour of the worst when that is a warning or an error.
+// A click goes to them.
+const renderLogNewBelow = () => {
+  const cue = el('logNewBtn');
+  if (!cue) return;
+  const n = state.logNewBelow;
+  cue.classList.toggle('hidden', n === 0);
+  cue.classList.toggle('log-new-btn--warn', state.logNewBelowWorst === SEVERITY_WARNING);
+  cue.classList.toggle('log-new-btn--error', state.logNewBelowWorst >= SEVERITY_ERROR);
+  cue.textContent = `${n} new ↓`;
+  cue.setAttribute('aria-label', `${n} new ${n === 1 ? 'message' : 'messages'}: go to the newest`);
+};
+
+const clearLogNewBelow = () => {
+  if (!state.logNewBelow) return;
+  state.logNewBelow = 0;
+  state.logNewBelowWorst = 0;
+  renderLogNewBelow();
 };
 
 // ── Width plumbing ──────────────────────────────────────────────────
@@ -65,7 +133,7 @@ const applyLogPanelWidth = (panel) => {
   const shell = panel.closest('.app-shell');
   if (!shell) return;
   if (state.logPanelWidth != null) {
-    shell.style.setProperty('--log-w', state.logPanelWidth + 'px');
+    shell.style.setProperty('--log-w', `${state.logPanelWidth}rem`);
   } else {
     shell.style.removeProperty('--log-w');
   }
@@ -73,28 +141,24 @@ const applyLogPanelWidth = (panel) => {
 
 // ── Cyphal source helpers ───────────────────────────────────────────
 
-const isDiagnosticRecord = (event) => {
-  const mt = event?.message_type;
-  return typeof mt === 'string' && mt.startsWith('Record_');
-};
+// By its fixed subject-ID, not its class name: a type of another namespace
+// may be called Record too.
+const isDiagnosticRecord = (event) => event?.subject_id === DIAGNOSTIC_SUBJECT_ID;
 
 const isUserLoggedSubject = (event) => {
   return Number.isInteger(event?.subject_id) && state.logSubjectIds.has(event.subject_id);
 };
 
-const hasStringAttribute = (event) => {
-  for (const a of event?.attributes || []) {
-    if (typeof a.value === 'string' && a.value.length > 0) return true;
-  }
-  return false;
-};
-
+// The text of a message that is no diagnostic record: its first string that
+// says something, or ''.
 const firstStringValue = (event) => {
   for (const a of event?.attributes || []) {
-    if (typeof a.value === 'string') return a.value;
+    if (typeof a.value === 'string' && a.value.length > 0) return a.value;
   }
   return '';
 };
+
+const hasStringAttribute = (event) => firstStringValue(event) !== '';
 
 const extractRecordEntry = (event) => {
   let severity = null;
@@ -109,6 +173,11 @@ const extractRecordEntry = (event) => {
 
 // ── Entry builders ──────────────────────────────────────────────────
 
+// The time of a message that brings no usable one: now, and not before the
+// newest entry, whose time is by the server's clock, which may be ahead.
+const _arrivalTime = () =>
+  Math.max(Date.now() / 1000, state.logBuffer[state.logBuffer.length - 1]?.t || 0);
+
 const buildCyphalEntry = (event, kind) => {
   let severity = null;
   let text = '';
@@ -119,13 +188,17 @@ const buildCyphalEntry = (event, kind) => {
   } else {
     text = firstStringValue(event);
   }
+  // A replayed message carries the time it was recorded at, which may be days
+  // ago: it is listed where it arrives, its row saying when it was recorded.
+  const replayed = event.replay === true;
   return {
     id: ++state._logSeq,
-    t: event.timestamp_unix || (Date.now() / 1000),
+    t: (!replayed && event.timestamp_unix) || _arrivalTime(),
+    recordedT: replayed ? event.timestamp_unix ?? null : null,
     source: 'cyphal',
     kind,
     severity,
-    nodeId: event.publisher_node_id ?? null,
+    nodeId: Number.isInteger(event.publisher_node_id) ? event.publisher_node_id : null,
     subjectId: event.subject_id ?? null,
     subjectName: typeof event.message_type === 'string' ? event.message_type : '',
     text,
@@ -150,16 +223,21 @@ const buildServerEntry = (raw) => {
 
 // ── Render ──────────────────────────────────────────────────────────
 
-const formatLogTime = (unix) => {
-  const d = new Date(unix * 1000);
-  const hh = String(d.getHours()).padStart(2, '0');
-  const mm = String(d.getMinutes()).padStart(2, '0');
-  const ss = String(d.getSeconds()).padStart(2, '0');
-  return `${hh}:${mm}:${ss}`;
-};
+// "11:13:40.250": to the millisecond, as the Debug tab times its frames, so a
+// message can be set beside the frames around it.
+const formatLogTime = (unix) =>
+  `${formatPlotTime(unix)}.${String(new Date(unix * 1000).getMilliseconds()).padStart(3, '0')}`;
 
 const isAtBottom = (container) => {
   return container.scrollHeight - container.scrollTop - container.clientHeight <= AUTOSCROLL_STICKY_PX;
+};
+
+// The name of the node an entry comes from, kept from when it is first known:
+// a list drawn again later finds the node gone with the bus, or its ID taken
+// by another device.
+const entryNodeName = (entry) => {
+  if (!entry.nodeName) entry.nodeName = nodeDisplayName(entry.nodeId);
+  return entry.nodeName;
 };
 
 // Who a row comes from: [html, plain text for the filter, tooltip].
@@ -169,10 +247,14 @@ const logRowSource = (entry) => {
     return [escapeHtml(logger), logger, `backend logger: ${logger}`];
   }
   if (entry.nodeId == null) return ['', '', ''];
-  const name = nodeDisplayName(entry.nodeId);
-  const html = `<span class="log-row-nid">${entry.nodeId}</span>${name ? ` ${escapeHtml(name)}` : ''}`;
+  const name = entryNodeName(entry);
+  const html = `<span class="log-row-nid">${escapeHtml(entry.nodeId)}</span>${name ? ` ${escapeHtml(name)}` : ''}`;
   return [html, `${entry.nodeId} ${name}`, `node ${entry.nodeId}${name ? ` (${name})` : ''}`];
 };
+
+// A small label before a row's message, its tooltip saying more.
+const logRowTag = (label, title) =>
+  `<span class="log-row-tag" title="${escapeHtml(title)}">${escapeHtml(label)}</span> `;
 
 // time · severity · message, the source leading the message: one layout for
 // both sources, so the columns line up and the message keeps the width.
@@ -182,33 +264,33 @@ const renderLogRow = (entry) => {
   row.className = `log-row log-row-sev-${sev != null ? SEVERITY_CSS[sev] : 'none'} log-row-src-${entry.source}`;
   row.dataset.severity = String(sev ?? -1);
   row.dataset.source = entry.source;
+  row.dataset.id = String(entry.id);
   row.dataset.t = String(entry.t);
   const [srcHtml, srcText, srcTitle] = logRowSource(entry);
   const subject = entry.kind === 'subject' ? `s${entry.subjectId}` : '';
-  row.dataset.search = `${srcText} ${subject} ${entry.text}`.toLowerCase();
+  const replay = entry.recordedT != null ? 'replay' : '';
+  const times = entry.count > 1 ? `×${entry.count}` : '';
+  row.dataset.search = `${srcText} ${replay} ${subject} ${entry.text}`.toLowerCase();
   row.innerHTML = `
-    <span class="log-row-time">${escapeHtml(formatLogTime(entry.t))}</span>
+    <span class="log-row-time" title="${escapeHtml(new Date(entry.t * 1000).toLocaleString())}">${
+      escapeHtml(formatLogTime(entry.t))}</span>
     <span class="log-row-sev" title="${escapeHtml(sev != null ? SEVERITY_LABELS[sev] : 'no severity')}">${
       sev != null ? SEVERITY_SHORT[sev] : '—'}</span>
     <span class="log-row-text">${srcHtml ? `<span class="log-row-src" title="${escapeHtml(srcTitle)}">${srcHtml}</span> ` : ''}${
-      subject ? `<span class="log-row-tag" title="${escapeHtml(entry.subjectName)}">${subject}</span> ` : ''}${
+      replay ? logRowTag(replay, `Replayed from a recording: recorded ${new Date(entry.recordedT * 1000).toLocaleString()}`) : ''}${
+      subject ? logRowTag(subject, entry.subjectName) : ''}${
+      times ? logRowTag(times, `Said ${entry.count} times in a row, first at ${formatLogTime(entry.firstT)}`) : ''}${
       escapeHtml(entry.text)}</span>`;
   return row;
 };
 
 // ── Filters ─────────────────────────────────────────────────────────
 
-const _sourceIsShown = (src) => {
-  if (src === 'cyphal') return state.logShowCyphal;
-  if (src === 'server') return state.logShowServer;
-  return true;
-};
-
 const applyAllFiltersToRow = (row) => {
   const sev = Number(row.dataset.severity);
   const floor = state.logSeverityFloor;
   const sevPasses = sev < 0 ? true : sev >= floor;
-  const srcPasses = _sourceIsShown(row.dataset.source);
+  const srcPasses = _isSourceOn(row.dataset.source);
   const textPasses = !state.logTextFilter || row.dataset.search.includes(state.logTextFilter);
   row.classList.toggle('hidden', !(sevPasses && srcPasses && textPasses));
 };
@@ -218,25 +300,89 @@ const reapplyFiltersToAllRows = () => {
   if (!list) return;
   for (const row of list.children) applyAllFiltersToRow(row);
   updateEmptyHint();
+  clearLogNewBelow();  // other rows are in view now
+};
+
+// "a", "a and b", "a, b and c".
+const _listInWords = (items) =>
+  (items.length > 1 ? `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}` : items[0] || '');
+
+// Every message kept is hidden: which settings hide some of them.
+const _hiddenMessagesText = () => {
+  const by = [];
+  const floor = state.logSeverityFloor;
+  if (state.logBuffer.some((e) => e.severity != null && e.severity < floor)) by.push(`Min ${SEVERITY_LABELS[floor]}`);
+  if (state.logTextFilter) by.push(`the filter “${el('logFilterInput').value.trim()}”`);
+  if (['cyphal', 'server'].some((src) => !_isSourceOn(src) && _srcCounts[src] > 0)) by.push('the sources turned on');
+  const n = state.logBuffer.length;
+  return n === 1 ? `The one message kept does not match ${_listInWords(by)}.`
+    : `None of the ${n} messages kept match ${_listInWords(by)}.`;
+};
+
+// What the list says while it shows no message: why, and what would change
+// it. '' when it shows some.
+const _emptyHintText = () => {
+  const on = ['cyphal', 'server'].filter(_isSourceOn);
+  if (!on.length) return 'All log sources are off — enable one above.';
+  if (state.logBuffer.length > 0) {
+    return el('logList')?.querySelector('.log-row:not(.hidden)') ? '' : _hiddenMessagesText();
+  }
+  // No backend is one problem, though it stops both sources.
+  const problems = on.map(logSourceProblem).filter(Boolean).map(_problemText);
+  const stopped = [...new Set(problems)].join(' ');
+  // With a source that can still send, it waits, and says what the other lacks.
+  return problems.length === on.length ? stopped : `Waiting for log messages… ${stopped}`.trim();
 };
 
 const updateEmptyHint = () => {
   const empty = el('logEmpty');
   if (!empty) return;
-  const allOff = !state.logShowCyphal && !state.logShowServer;
-  const noEntries = state.logBuffer.length === 0;
-  if (allOff) {
-    empty.textContent = 'All log sources are off — enable one above.';
-    empty.classList.remove('hidden');
-  } else if (noEntries) {
-    empty.textContent = 'Waiting for log messages…';
-    empty.classList.remove('hidden');
-  } else if (!el('logList')?.querySelector('.log-row:not(.hidden)')) {
-    empty.textContent = 'No messages match the filters.';
-    empty.classList.remove('hidden');
-  } else {
-    empty.classList.add('hidden');
+  const text = _emptyHintText();
+  if (text && empty.textContent !== text) empty.textContent = text;
+  empty.classList.toggle('hidden', !text);
+  // Save has something to save exactly when the list shows a message.
+  const save = el('logSaveBtn');
+  if (save) {
+    save.disabled = Boolean(text);
+    save.title = text ? 'No messages listed to save' : 'Save the messages listed to a file';
   }
+};
+
+// ── Saving the log to a file ────────────────────────────────────────
+
+const LOG_FILE_HEADER = '# Cynitor log. Tab-separated: time (UTC), severity, who said it, message.';
+
+// One message as a line of the file.
+const logFileLine = (entry) => {
+  const who = entry.source === 'server' ? `server ${entry.loggerName || ''}`.trim()
+    : entry.nodeId == null ? 'node (anonymous)'
+    : `node ${entry.nodeId} ${entryNodeName(entry)}`.trim();
+  const tags = [
+    entry.recordedT != null ? 'replay' : '',
+    entry.kind === 'subject' ? `s${entry.subjectId}` : '',
+    entry.count > 1 ? `×${entry.count}` : '',
+  ].filter(Boolean);
+  return [
+    new Date(entry.t * 1000).toISOString(),
+    entry.severity != null ? SEVERITY_LABELS[entry.severity] : '-',
+    [who, ...tags].join(' '),
+    entry.text,
+  ].join('\t');
+};
+
+// The messages the list shows now, filters applied, oldest first.
+const listedLogEntries = () => {
+  const listed = new Set([...el('logList').querySelectorAll('.log-row:not(.hidden)')].map((row) => row.dataset.id));
+  return state.logBuffer.filter((entry) => listed.has(String(entry.id)));
+};
+
+const saveLogToFile = () => {
+  const entries = listedLogEntries();
+  if (!entries.length) return;
+  const text = [LOG_FILE_HEADER, ...entries.map(logFileLine)].join('\n') + '\n';
+  const stamp = new Date().toISOString().slice(0, 19).replace(/:/g, '-');
+  downloadBlob(new Blob([text], { type: 'text/plain' }), `cynitor-log-${stamp}Z.log`);
+  showToast(`Saved ${entries.length} log ${entries.length === 1 ? 'message' : 'messages'}`, 'info', 2000);
 };
 
 // ── Ingest (push entry into buffer + DOM) ───────────────────────────
@@ -249,43 +395,159 @@ const _bufferIndexFor = (t) => {
   return i;
 };
 
-// The row to insert a row with time ``t`` before: null to append, undefined
-// if it is older than every row shown while the list is full.
+// An entry's row: the first one, for the oldest entry, or found by its id.
+const _rowOf = (list, entry) => {
+  const first = list.firstElementChild;
+  return first?.dataset.id === String(entry.id) ? first : list.querySelector(`.log-row[data-id="${entry.id}"]`);
+};
+
+// Whether a row that is drawn lies wholly above what the list shows.
+const _isAboveView = (row, body) =>
+  row.offsetParent !== null && row.offsetTop + row.offsetHeight <= body.scrollTop;
+
+// A row's height to the fraction of a pixel it is laid out at.
+const _heightOf = (row) => row.getBoundingClientRect().height;
+
+// Scrolls the list by `pixels`, which is rarely a whole number: what the
+// browser rounds off is owed to the next call, or a reader's place would
+// creep away a fraction of a pixel per message.
+let _scrollOwed = 0;
+const _scrollBy = (body, pixels) => {
+  const from = body.scrollTop;
+  body.scrollTop = from + pixels + _scrollOwed;
+  _scrollOwed = from + pixels + _scrollOwed - body.scrollTop;
+};
+
+// The row to insert a row with time ``t`` before, or null to append.
 const _rowAfter = (list, t) => {
   let after = null;
   for (let r = list.lastElementChild; r && Number(r.dataset.t) > t; r = r.previousElementSibling) after = r;
-  if (after === list.firstElementChild && after && list.childElementCount >= LOG_DOM_CAP) return undefined;
   return after;
 };
 
+// A text subject added with + may say something new many times a second. Its
+// rows fill what room the list has, but once they are more than this share of
+// it, a new message pushes out the oldest of them, not what the nodes and the
+// server reported.
+const SUBJECT_ROWS_SHARE = 0.5;
+
+// Which entry goes when the list is over its cap: the oldest, or, with the
+// text subjects over their share, the oldest of theirs.
+const _indexToDrop = () => {
+  let subjectRows = 0;
+  let oldestSubjectRow = 0;
+  for (let i = state.logBuffer.length - 1; i >= 0; i--) {
+    if (state.logBuffer[i].kind !== 'subject') continue;
+    subjectRows++;
+    oldestSubjectRow = i;
+  }
+  return subjectRows > LOG_CAP * SUBJECT_ROWS_SHARE ? oldestSubjectRow : 0;
+};
+
+// A message just listed, while the panel is shut: its toggle counts it if it
+// is a warning or worse.
+const _countUnread = (entry) => {
+  if (!state.logPanelCollapsed || !(entry.severity >= SEVERITY_WARNING)) return;
+  const worstBefore = state.logUnreadWorst;
+  state.logUnreadCount++;
+  state.logUnreadWorst = Math.max(state.logUnreadWorst, entry.severity);
+  renderLogToggle();
+  announceLogUnread(worstBefore);
+};
+
+const _unreadKind = (severity) =>
+  (severity >= SEVERITY_ERROR ? 'an error' : severity >= SEVERITY_WARNING ? 'a warning' : '');
+
+// A screen reader is told when the first warning comes while the panel is
+// shut, and again if an error follows: not of every message, which the
+// toggle's label counts.
+const announceLogUnread = (worstBefore) => {
+  const region = el('logAnnounce');
+  const kind = _unreadKind(state.logUnreadWorst);
+  if (!region || kind === _unreadKind(worstBefore)) return;
+  region.textContent = kind ? `Log panel: ${kind} arrived` : '';
+};
+
+// The list follows a message to its end if it was there; otherwise a message
+// listed under what is in view, which keeps its place, is counted as new below.
+const _followOrCountBelow = (entry, list, listedAtEnd, wasAtBottom) => {
+  const body = list.parentElement;
+  if (state.logAutoscroll && wasAtBottom) {
+    body.scrollTop = body.scrollHeight;
+  } else if (listedAtEnd && !state.logPanelCollapsed && !isAtBottom(body)) {
+    state.logNewBelow++;
+    state.logNewBelowWorst = Math.max(state.logNewBelowWorst, entry.severity ?? 0);
+    renderLogNewBelow();
+  }
+};
+
+// How soon after a message the same message counts as said again.
+const REPEAT_WITHIN_S = 5;
+
+// Whether `entry` says again what `last`, the newest entry, said: the same
+// message from the same sender, soon after. An error that comes back a minute
+// later is news, and gets its row.
+const _isRepeat = (entry, last) => Boolean(last)
+  && entry.t >= last.t && entry.t - last.t <= REPEAT_WITHIN_S
+  && entry.source === last.source && entry.kind === last.kind && entry.severity === last.severity
+  && entry.nodeId === last.nodeId && entry.subjectId === last.subjectId
+  && entry.loggerName === last.loggerName && entry.text === last.text
+  && (entry.recordedT == null) === (last.recordedT == null);
+
+// A repeat adds no row: the newest entry counts it and takes its time, so a
+// subject sending one text 50 times a second does not push all else out.
+const _foldRepeat = (last, entry) => {
+  last.firstT = last.firstT ?? last.t;
+  last.count = (last.count || 1) + 1;
+  last.t = entry.t;
+  const list = el('logList');
+  const row = list?.lastElementChild;
+  if (!row || row.dataset.id !== String(last.id)) return;
+  const wasAtBottom = isAtBottom(list.parentElement);
+  const fresh = renderLogRow(last);
+  applyAllFiltersToRow(fresh);
+  row.replaceWith(fresh);
+  const listed = !fresh.classList.contains('hidden');
+  if (listed) _countUnread(last);
+  _followOrCountBelow(last, list, listed, wasAtBottom);
+};
+
 const _pushEntry = (entry) => {
+  const last = state.logBuffer[state.logBuffer.length - 1];
+  if (_isRepeat(entry, last)) {
+    _foldRepeat(last, entry);
+    return;
+  }
   state.logBuffer.splice(_bufferIndexFor(entry.t), 0, entry);
   if (entry.source in _srcCounts) _srcCounts[entry.source]++;
-  if (state.logBuffer.length > LOG_BUFFER_CAP) {
-    const excess = state.logBuffer.length - LOG_BUFFER_CAP;
-    for (let i = 0; i < excess; i++) {
-      const s = state.logBuffer[i].source;
-      if (s in _srcCounts) _srcCounts[s]--;
-    }
-    state.logBuffer.splice(0, excess);
+  let dropped = null;  // the entry that made room for this one, the list being full
+  if (state.logBuffer.length > LOG_CAP) {
+    [dropped] = state.logBuffer.splice(_indexToDrop(), 1);
+    if (dropped.source in _srcCounts) _srcCounts[dropped.source]--;
   }
   _refreshSourcePillBadges();
   const list = el('logList');
-  if (!list) return;
-  const wasAtBottom = isAtBottom(list.parentElement);
+  if (!list || dropped === entry) return;  // older than all the full list keeps: never drawn
+  const body = list.parentElement;
+  const wasAtBottom = isAtBottom(body);
   const after = _rowAfter(list, entry.t);
-  if (after !== undefined) {
-    const row = renderLogRow(entry);
-    applyAllFiltersToRow(row);
-    list.insertBefore(row, after);
-  }
-  while (list.childElementCount > LOG_DOM_CAP) {
-    list.removeChild(list.firstElementChild);
-  }
+  const droppedRow = dropped ? _rowOf(list, dropped) : null;
+  // A reader scrolled up keeps their place: a row that goes from above what
+  // is in view, or comes in there, would move it by its height, which the
+  // list takes back. Measured before the rows change, while nothing is to lay out.
+  const holdsPlace = !(state.logAutoscroll && wasAtBottom);
+  const goesAbove = holdsPlace && droppedRow && _isAboveView(droppedRow, body) ? _heightOf(droppedRow) : 0;
+  const comesAbove = holdsPlace && after && after.offsetParent && after.offsetTop <= body.scrollTop;
+  const row = renderLogRow(entry);
+  applyAllFiltersToRow(row);
+  list.insertBefore(row, after);
+  const listed = !row.classList.contains('hidden');  // drawn, and not hidden by a filter
+  if (listed) _countUnread(entry);
+  const moved = (comesAbove ? _heightOf(row) : 0) - goesAbove;
+  droppedRow?.remove();
+  if (moved) _scrollBy(body, moved);
   updateEmptyHint();
-  if (state.logAutoscroll && wasAtBottom) {
-    list.parentElement.scrollTop = list.parentElement.scrollHeight;
-  }
+  _followOrCountBelow(entry, list, listed && after === null, wasAtBottom);
 };
 
 // Cyphal WS hook (called unconditionally from connection.js).
@@ -309,13 +571,13 @@ const rebuildLogList = () => {
   const list = el('logList');
   if (!list) return;
   list.replaceChildren();
-  const slice = state.logBuffer.slice(-LOG_DOM_CAP);
-  for (const entry of slice) {
+  for (const entry of state.logBuffer) {
     const row = renderLogRow(entry);
     applyAllFiltersToRow(row);
     list.appendChild(row);
   }
   updateEmptyHint();
+  clearLogNewBelow();
   if (state.logAutoscroll) {
     list.parentElement.scrollTop = list.parentElement.scrollHeight;
   }
@@ -396,17 +658,27 @@ const renderLogPickerPopover = () => {
   }
 };
 
+// Shuts the picker; its button says so. Escape and a click elsewhere (app.js) do it too.
+const closeLogPicker = () => {
+  el('logSubjectPickerPopover')?.classList.add('hidden');
+  el('logAddSubjectBtn')?.setAttribute('aria-expanded', 'false');
+};
+
 const toggleLogPickerPopover = () => {
   const popover = ensureLogPickerPopover();
   const btn = el('logAddSubjectBtn');
   if (!btn) return;
-  if (popover.classList.contains('hidden')) {
-    renderLogPickerPopover();
-    positionPopover(popover, btn);
-    popover.classList.remove('hidden');
-  } else {
-    popover.classList.add('hidden');
+  if (!popover.classList.contains('hidden')) {
+    closeLogPicker();
+    return;
   }
+  renderLogPickerPopover();
+  positionPopover(popover, btn);
+  popover.classList.remove('hidden');
+  btn.setAttribute('aria-expanded', 'true');
+  // Its first box takes the focus: the picker sits at the page's end, a long
+  // way to Tab to. Escape gives the focus back to the button.
+  popover.querySelector('.log-subject-checkbox')?.focus();
 };
 
 // ── Server log poller ───────────────────────────────────────────────
@@ -416,6 +688,7 @@ let _serverLastSeenTs = '';
 let _serverKeysAtLastTs = new Set();  // entries already taken at that timestamp
 
 let _serverLogError = '';              // why the last request for the log failed, or ''
+let _serverLogRead = false;            // whether a request for the log has been answered yet
 
 const _serverEntryKey = (e) => `${e.timestamp}|${e.logger}|${e.message}`;
 
@@ -437,9 +710,14 @@ const _fetchServerLogsOnce = async () => {
     const data = await requestJson(`/api/logs?limit=${SERVER_LOG_FETCH_LIMIT}${since}`);
     const logs = Array.isArray(data.logs) ? data.logs : [];
     _serverLogError = '';
-    if (_serverLastSeenTs && logs.length >= SERVER_LOG_FETCH_LIMIT && logs[0].timestamp > _serverLastSeenTs) {
+    // As many as one request takes, the first of them newer than the newest
+    // taken: some in between were left out. Not so for the first answer,
+    // which is the backlog.
+    const full = logs.length >= SERVER_LOG_FETCH_LIMIT;
+    if (_serverLogRead && full && (!_serverLastSeenTs || logs[0].timestamp > _serverLastSeenTs)) {
       _pushEntry(_serverGapEntry(logs[0]));
     }
+    _serverLogRead = true;
     // Oldest first. Several entries can share a timestamp, so one equal to the
     // newest seen is new unless that very entry was taken.
     for (const e of logs) {
@@ -509,7 +787,6 @@ const _onSourceToggle = (pill) => {
   }
   reapplyFiltersToAllRows();
   _refreshSourcePillBadges();
-  updateEmptyHint();
   saveSettings();
 };
 
@@ -521,9 +798,6 @@ const initLogPanel = () => {
   const resizeHandle = el('logPanelResizeHandle');
   if (!panel || !collapseBtn || !resizeHandle) return;
 
-  panel.style.width = '';
-  panel.style.minWidth = '';
-
   if (state.logPanelCollapsed) {
     panel.classList.add('collapsed');
   } else {
@@ -531,9 +805,16 @@ const initLogPanel = () => {
     applyLogPanelWidth(panel);
   }
 
+  renderLogToggle();
+
   collapseBtn.addEventListener('click', () => {
     state.logPanelCollapsed = !state.logPanelCollapsed;
     panel.classList.toggle('collapsed', state.logPanelCollapsed);
+    const worstBefore = state.logUnreadWorst;
+    state.logUnreadCount = 0;  // opened, they are read; shut, the count starts again
+    state.logUnreadWorst = 0;
+    renderLogToggle();
+    announceLogUnread(worstBefore);
     if (!state.logPanelCollapsed) {
       applyLogPanelWidth(panel);
       rebuildLogList();
@@ -547,8 +828,8 @@ const initLogPanel = () => {
 
   const onMove = (e) => {
     const dx = startX - e.clientX;
-    const newW = Math.max(LOG_PANEL_MIN_WIDTH_PX, Math.min(LOG_PANEL_MAX_WIDTH_PX, startW + dx));
-    if (shell) shell.style.setProperty('--log-w', newW + 'px');
+    const rem = Math.max(LOG_PANEL_MIN_WIDTH_REM, Math.min(LOG_PANEL_MAX_WIDTH_REM, (startW + dx) / remPx()));
+    if (shell) shell.style.setProperty('--log-w', `${rem}rem`);
   };
 
   const onUp = () => {
@@ -556,7 +837,7 @@ const initLogPanel = () => {
     document.removeEventListener('mouseup', onUp);
     panel.classList.remove('no-transition');
     resizeHandle.classList.remove('dragging');
-    state.logPanelWidth = panel.getBoundingClientRect().width;
+    state.logPanelWidth = panel.getBoundingClientRect().width / remPx();
     saveSettings();
   };
 
@@ -620,8 +901,25 @@ const initLogPanel = () => {
       if (list) list.replaceChildren();
       _refreshSourcePillBadges();
       updateEmptyHint();
+      clearLogNewBelow();
     });
   }
+
+  // The count of messages below goes once they are in view: by its own click,
+  // or by scrolling there.
+  const body = el('logPanelBody');
+  const newBtn = el('logNewBtn');
+  if (body && newBtn) {
+    newBtn.addEventListener('click', () => {
+      body.scrollTop = body.scrollHeight;
+      clearLogNewBelow();
+    });
+    body.addEventListener('scroll', () => {
+      if (state.logNewBelow && isAtBottom(body)) clearLogNewBelow();
+    }, { passive: true });
+  }
+
+  el('logSaveBtn')?.addEventListener('click', saveLogToFile);
 
   const addBtn = el('logAddSubjectBtn');
   if (addBtn) {
@@ -629,6 +927,12 @@ const initLogPanel = () => {
     addBtn.addEventListener('click', (e) => {
       e.stopPropagation();
       toggleLogPickerPopover();
+    });
+    // Escape shuts the picker and gives the focus back to its button.
+    document.addEventListener('keydown', (e) => {
+      if (e.key !== 'Escape' || el('logSubjectPickerPopover').classList.contains('hidden')) return;
+      closeLogPicker();
+      addBtn.focus();
     });
   }
 
@@ -639,7 +943,6 @@ const initLogPanel = () => {
 
   if (state.logShowServer) startServerLogPoll();
 
-  _recomputeSrcCounts();
   _refreshSourcePillBadges();
   updateEmptyHint();
 };

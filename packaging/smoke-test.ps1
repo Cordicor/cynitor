@@ -4,7 +4,8 @@
 # prove: modules or DLLs PyInstaller could not see, which only surface when
 # the CAN stack is imported, i.e. on connect. No CAN hardware is needed and
 # none is touched: the gs_usb check asks for a device index that does not
-# exist, and the full session runs on a python-can virtual bus.
+# exist, and the full sessions run on a python-can virtual bus and on the
+# simulated bus.
 #
 # Usage (from the repository root or anywhere):
 #   powershell -ExecutionPolicy Bypass -File packaging/smoke-test.ps1
@@ -117,7 +118,24 @@ try {
     Write-Host "ok: data kept in the data folder"
 } finally { Stop-Server $server }
 
-# 5. The dashboard is served from the bundle, and a token protects the API.
+# 5. The simulated bus runs its demo devices from the bundle: the demo sensor
+#    is seen, by name, with nothing but the executable.
+$server = Start-Server @('--can', 'sim:classic')
+try {
+    if (-not (Wait-Log $server 'CAN session started|Could not attach')) { Fail "session neither started nor failed" $server.Log }
+    Assert-NoMissingModules $server
+    if (-not (Select-String -Path $server.Log -Pattern 'CAN session started' -Quiet)) { Fail "could not connect to the simulated bus" $server.Log }
+    $named = $false
+    for ($i = 0; $i -lt 30; $i++) {
+        $nodes = Invoke-RestMethod "$base/api/nodes"
+        if ($nodes.nodes.'50'.name -eq 'demo.sensor') { $named = $true; break }
+        Start-Sleep 1
+    }
+    if (-not $named) { Fail "the simulated bus's demo sensor never appeared" $server.Log }
+    Write-Host "ok: the simulated bus runs its demo devices inside the bundle"
+} finally { Stop-Server $server }
+
+# 6. The dashboard is served from the bundle, and a token protects the API.
 $server = Start-Server @() @{ CYNITOR_AUTH_TOKEN = 'smoke-test-token' }
 try {
     $page = Invoke-WebRequest "$base/" -UseBasicParsing
@@ -131,7 +149,7 @@ try {
     Write-Host "ok: dashboard served, API requires the token"
 } finally { Stop-Server $server }
 
-# 6. Killing the bootloader ends the server too, instead of leaving it holding
+# 7. Killing the bootloader ends the server too, instead of leaving it holding
 #    the port (main._exit_when_windows_parent_dies).
 $server = Start-Server @()
 try {

@@ -879,6 +879,7 @@ const switchView = (view) => {
   const dsdlEl = el('dsdlContainer');
   const recordEl = el('recordContainer');
   const debugEl = el('debugContainer');
+  const testNodesEl = el('testNodesContainer');
   const detailHandle = el('detailResizeHandle');
   const detailPanel = el('detailPanel');
 
@@ -907,6 +908,8 @@ const switchView = (view) => {
     setRecordViewActive(false);
   } else if (prevView === 'debug') {
     DebugView.hide();
+  } else if (prevView === 'testnodes') {
+    TestNodesView.hide();
   }
 
   // Hide all content panes
@@ -919,6 +922,7 @@ const switchView = (view) => {
   dsdlEl.classList.add('hidden');
   recordEl.classList.add('hidden');
   debugEl.classList.add('hidden');
+  testNodesEl.classList.add('hidden');
 
   // Activate target view
   if (view === 'subjects') {
@@ -974,6 +978,11 @@ const switchView = (view) => {
     detailPanel.classList.add('hidden');
     debugEl.classList.remove('hidden');
     DebugView.init();
+  } else if (view === 'testnodes') {
+    detailHandle.classList.add('hidden');
+    detailPanel.classList.add('hidden');
+    testNodesEl.classList.remove('hidden');
+    TestNodesView.init();
   } else {
     state.selectedPlotSubject = state._nodesPlotSubject ?? null;
     stopPlotAnim();

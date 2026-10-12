@@ -203,7 +203,7 @@ const bind = () => {
     const addBtn = el('logAddSubjectBtn');
     if (logPick && !logPick.classList.contains('hidden')
       && !logPick.contains(e.target) && !(addBtn && addBtn.contains(e.target))) {
-      logPick.classList.add('hidden');
+      closeLogPicker();
     }
   });
 
@@ -254,6 +254,11 @@ updateDashboardConnectButton();
 updateCanConnectButton();
 renderSelectedNodeContent();
 updateSemaphores();
+// The saved layout is back in place, drawn without sliding there (.restoring
+// in styles.css): once that is painted, panels slide when toggled.
+requestAnimationFrame(() => requestAnimationFrame(() => {
+  document.querySelector('.app-shell').classList.remove('restoring');
+}));
 
 // Restore previous connection state
 (async () => {

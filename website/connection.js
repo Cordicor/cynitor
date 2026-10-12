@@ -167,6 +167,7 @@ const updateSemaphores = () => {
   el('canDataBitrateSelect').disabled = canFormOff;
   renderRecordStart();  // the Record tab's Start needs both connections
   DebugView.renderControls();  // so does the Debug tab's Start capture, and its socket
+  renderLogConnection();  // and the log panel says what can reach it
 
   if (serverInfo) {
     if (state.dashboardConnected && state.wsThroughput > 0) {
@@ -434,11 +435,12 @@ const disconnectWs = () => {
 const OTHER_CAN_INTERFACE = '__other__';
 
 // Mirrors the backend's rule (server/can_config.py): a bare name such as vcan0
-// is SocketCAN, whose bitrate the kernel owns; every other adapter runs at
-// whatever bitrate it is opened with, so one has to be chosen.
+// is SocketCAN, whose bitrate the kernel owns, and a simulated bus (sim:...)
+// has its own; every other adapter runs at whatever bitrate it is opened
+// with, so one has to be chosen.
 const canSpecNeedsBitrate = (spec) => {
   const value = spec.trim().replace(/^pythoncan:/i, '');
-  return value.includes(':') && !value.toLowerCase().startsWith('socketcan:');
+  return value.includes(':') && !value.toLowerCase().startsWith('socketcan:') && !value.startsWith('sim:');
 };
 
 // python-can interfaces the backend can open as CAN FD; keep in step with
@@ -685,6 +687,7 @@ const clearCanSession = () => {
   renderNodesTable();
   refreshSubjectsTable();
   renderSelectedNodeContent();
+  TestNodesView.refreshIndicator();
 };
 
 const disconnectAll = ({ persist = true } = {}) => {
@@ -814,6 +817,7 @@ const getAllNodes = async () => {
     renderNodesTable();
     renderSelectedNodeContent();
   }
+  TestNodesView.refreshIndicator();
 };
 
 const NODES_POLL_INTERVAL_MS = 1000;
