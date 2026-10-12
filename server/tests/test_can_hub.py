@@ -624,6 +624,32 @@ class TestFrameCallback:
         finally:
             a.shutdown()
 
+    def test_cynitors_own_frame_carries_the_time_it_was_sent(self):
+        # A quick node's answer can come back, stamped by the adapter, while
+        # the sending thread is still on its way to the listeners. Stamped
+        # only then, the request would look later than its answer.
+        class LateAfterSending(StubAdapter):
+            def send(self, msg, timeout=None):
+                super().send(msg, timeout)
+                self.on_the_wire = time.time()
+                time.sleep(0.05)
+
+        adapter = LateAfterSending()
+        seen = []
+        h = CANHub("stub:0", 500_000, open_bus=lambda spec, bitrate, data_bitrate: adapter)
+        h.add_listener(seen.append)
+        a = _component(h)
+        h.start()
+        try:
+            a.send(_frame(0xA03))
+            deadline = time.monotonic() + _TIMEOUT
+            while not seen and time.monotonic() < deadline:
+                time.sleep(0.01)
+            assert seen[0].timestamp <= adapter.on_the_wire
+        finally:
+            a.shutdown()
+            h.stop()
+
     def test_error_frames_are_passed_on(self):
         adapter = StubAdapter(incoming=[can.Message(arbitration_id=0x600, is_error_frame=True), _frame(0x601)])
         seen = []

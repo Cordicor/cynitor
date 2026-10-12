@@ -351,6 +351,9 @@ class CANHub:
                 return
             if msg is None:
                 continue
+            # Taken before the send: a quick node's answer can come back,
+            # with the adapter's time on it, before this thread runs again.
+            sent_at = time.time()
             try:
                 self._adapter.send(msg)
             except Exception as exc:
@@ -364,8 +367,8 @@ class CANHub:
             self.frames_to_bus += 1
             self.busy_to_bus += self._wire_seconds(msg)
             if self._listeners:
-                msg.is_rx = False           # sent by Cynitor
-                msg.timestamp = time.time()  # pycyphal leaves it unset
+                msg.is_rx = False        # sent by Cynitor
+                msg.timestamp = sent_at  # pycyphal leaves it unset
                 self._tell(msg)
 
 
