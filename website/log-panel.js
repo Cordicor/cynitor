@@ -431,9 +431,24 @@ const _indexToDrop = () => {
 // is a warning or worse.
 const _countUnread = (entry) => {
   if (!state.logPanelCollapsed || !(entry.severity >= SEVERITY_WARNING)) return;
+  const worstBefore = state.logUnreadWorst;
   state.logUnreadCount++;
   state.logUnreadWorst = Math.max(state.logUnreadWorst, entry.severity);
   renderLogToggle();
+  announceLogUnread(worstBefore);
+};
+
+const _unreadKind = (severity) =>
+  (severity >= SEVERITY_ERROR ? 'an error' : severity >= SEVERITY_WARNING ? 'a warning' : '');
+
+// A screen reader is told when the first warning comes while the panel is
+// shut, and again if an error follows: not of every message, which the
+// toggle's label counts.
+const announceLogUnread = (worstBefore) => {
+  const region = el('logAnnounce');
+  const kind = _unreadKind(state.logUnreadWorst);
+  if (!region || kind === _unreadKind(worstBefore)) return;
+  region.textContent = kind ? `Log panel: ${kind} arrived` : '';
 };
 
 // The list follows a message to its end if it was there; otherwise a message
@@ -765,9 +780,11 @@ const initLogPanel = () => {
   collapseBtn.addEventListener('click', () => {
     state.logPanelCollapsed = !state.logPanelCollapsed;
     panel.classList.toggle('collapsed', state.logPanelCollapsed);
+    const worstBefore = state.logUnreadWorst;
     state.logUnreadCount = 0;  // opened, they are read; shut, the count starts again
     state.logUnreadWorst = 0;
     renderLogToggle();
+    announceLogUnread(worstBefore);
     if (!state.logPanelCollapsed) {
       applyLogPanelWidth(panel);
       rebuildLogList();

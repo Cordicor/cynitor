@@ -6706,6 +6706,35 @@ async def _(page):
         f"The list should hold its 1000 newest in step with what is kept: {seen}"
 
 
+@test("Log panel: shut, a screen reader is told of the first warning, and of the first error, not of every message")
+async def _(page):
+    was_open = await set_log_panel(page, True)
+    await page.locator("#logClearBtn").click()
+    told = "el('logAnnounce')?.textContent"
+    try:
+        await set_log_panel(page, False)
+        region = await page.evaluate("""() => { const region = el('logAnnounce'); if (!region) return null;
+            window.e2eLogAnnounced = 0;
+            new MutationObserver(() => { window.e2eLogAnnounced += 1; }).observe(region, {childList: true, characterData: true, subtree: true});
+            const box = region.getBoundingClientRect();
+            return {role: region.getAttribute('role'), drawn: box.width > 2 || box.height > 2, text: region.textContent}; }""")
+        said = []
+        for severity, text in ((2, "an info"), (4, "a warning"), (4, "another warning"), (5, "an error"), (6, "a critical")):
+            await page.evaluate(INGEST_DIAGNOSTIC, [0, severity, text])
+            said.append(await page.evaluate(told))
+        times = await page.evaluate("window.e2eLogAnnounced")
+        await set_log_panel(page, True)
+        opened = await page.evaluate(told)
+    finally:
+        await set_log_panel(page, True)
+        await page.locator("#logClearBtn").click()
+        await set_log_panel(page, was_open)
+    assert region == {"role": "status", "drawn": False, "text": ""}, f"The region a screen reader hears: {region}"
+    assert said[0] == "" and "warning" in said[1] and said[2] == said[1] and "error" in said[3] and said[4] == said[3], \
+        f"What it held after an info, two warnings, an error and a critical: {said}"
+    assert times == 2 and opened == "", f"It was told {times} times; with the panel open it holds {opened!r}"
+
+
 # Keep last: it reloads the page with every other host unreachable.
 @test("Dashboard works with no internet access")
 async def _(page):

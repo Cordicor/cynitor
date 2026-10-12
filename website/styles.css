@@ -722,6 +722,16 @@ body {
   color: var(--error);
 }
 
+/* For screen readers only: in the page and read out, but not drawn. */
+.visually-hidden {
+  position: absolute;
+  width: 0.0625rem;
+  height: 0.0625rem;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
 .log-panel.collapsed ~ .log-panel-collapse-btn.has-unread {
   opacity: 1;
 }
