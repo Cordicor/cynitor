@@ -318,6 +318,24 @@ class TestLogs:
             assert log["level"] == "ERROR"
 
     @pytest.mark.asyncio
+    async def test_get_logs_since(self, client, log_store):
+        """A poller asks for what came since the last record it has."""
+        for i, message in enumerate(["older", "newer"]):
+            record = logging.LogRecord("test", logging.INFO, "t.py", 1, message, (), None)
+            record.created = time.time() + 10 + i
+            log_store.add_record(record)
+        seen = log_store.get_logs()[-2]["timestamp"]
+        resp = await client.get("/api/logs", params={"since": seen})
+        assert resp.status == 200
+        assert [log["message"] for log in (await resp.json())["logs"]] == ["older", "newer"]
+
+    @pytest.mark.asyncio
+    async def test_get_logs_invalid_since(self, client):
+        resp = await client.get("/api/logs", params={"since": "yesterday"})
+        assert resp.status == 400
+        assert "since" in (await resp.json())["error"]
+
+    @pytest.mark.asyncio
     async def test_requests_do_not_fill_the_log_store(self, session):
         """With logging set up as main.py sets it up, a dashboard's own requests
         leave nothing in the store that /api/logs serves."""

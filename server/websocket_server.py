@@ -1574,6 +1574,7 @@ class WebSocketServer:
         limit_raw = request.query.get("limit", "200")
         level = request.query.get("level")
         min_level = request.query.get("min_level")
+        since = request.query.get("since")
 
         try:
             limit = int(limit_raw)
@@ -1584,7 +1585,7 @@ class WebSocketServer:
             )
 
         try:
-            logs = self.log_store.get_logs(limit=limit, level=level, min_level=min_level)
+            logs = self.log_store.get_logs(limit=limit, level=level, min_level=min_level, since=since)
         except ValueError as ex:
             return web.json_response({"error": str(ex)}, status=400)
         except Exception as ex:

@@ -775,6 +775,13 @@ curl "http://localhost:8080/api/logs?level=ERROR&limit=100"
 curl "http://localhost:8080/api/logs?min_level=WARNING&limit=100"
 ```
 
+**Only the records since one already seen** (what a poller asks; `since` is a record's `timestamp`, and that record comes back first):
+```bash
+curl -G "http://localhost:8080/api/logs" --data-urlencode "since=2026-03-14T15:52:01.123456+00:00"
+```
+
+`limit` (default 200, at most 5000) keeps the newest records of those that match. A `since`, `level` or `min_level` that cannot be read answers `400`.
+
 Response:
 ```json
 {

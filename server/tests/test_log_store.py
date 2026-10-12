@@ -91,6 +91,28 @@ class TestInMemoryLogStore:
     def test_empty_store(self, store):
         assert store.get_logs() == []
 
+    def test_since_gives_the_records_from_that_moment_on(self, store):
+        for i, message in enumerate(["first", "second", "third"]):
+            record = _make_record(message)
+            record.created = 1_700_000_000.25 + i
+            store.add_record(record)
+        second = store.get_logs()[1]["timestamp"]
+        assert [log["message"] for log in store.get_logs(since=second)] == ["second", "third"]
+        assert [log["message"] for log in store.get_logs(since=second, limit=1)] == ["third"]
+
+    def test_since_compares_moments_not_their_text(self, store):
+        """A record on a whole second, and a moment given in another UTC offset."""
+        for message, created in (("on the second", 1_700_000_000.0), ("half past it", 1_700_000_000.5)):
+            record = _make_record(message)
+            record.created = created
+            store.add_record(record)
+        assert [log["message"] for log in store.get_logs(since="2023-11-14T23:13:20.250000+01:00")] == ["half past it"]
+        assert len(store.get_logs(since="2023-11-14T22:13:20+00:00")) == 2
+
+    def test_invalid_since_raises(self, store):
+        with pytest.raises(ValueError, match="Invalid since"):
+            store.get_logs(since="yesterday")
+
 
 class TestAPILogHandler:
 
