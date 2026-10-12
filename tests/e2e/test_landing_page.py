@@ -6137,6 +6137,43 @@ async def _(page):
     assert not turned_off["cyphal"]["marked"], f"A source turned off is not marked: {turned_off}"
 
 
+@test("Log panel: empty, it says why: no backend, no bus, or what hides the messages it has")
+async def _(page):
+    was_open = await set_log_panel(page, True)
+    await page.locator("#logClearBtn").click()
+    hint = "el('logEmpty').classList.contains('hidden') ? null : el('logEmpty').textContent"
+    said = {}
+    try:
+        for state, now in (("no backend", {}), ("no bus", {"dashboardConnected": True}),
+                           ("no bus, server on", {"dashboardConnected": True, "logShowServer": True}),
+                           ("connected", {"dashboardConnected": True, "canConnected": True})):
+            await page.evaluate(LOG_CONNECTION, now)
+            said[state] = await page.evaluate(hint)
+        await page.evaluate(INGEST_DIAGNOSTIC, [1, 2, "an info"])
+        await page.evaluate(INGEST_DIAGNOSTIC, [0, 4, "a warning"])
+        said["with messages"] = await page.evaluate(hint)
+        await page.locator("#logSeveritySelect").select_option("5")
+        said["under Min"] = await page.evaluate(hint)
+        await page.locator("#logFilterInput").fill("Zzz")
+        said["under Min and a filter"] = await page.evaluate(hint)
+    finally:
+        await page.locator("#logSeveritySelect").select_option("0")
+        await page.locator("#logFilterInput").fill("")
+        await page.locator("#logClearBtn").click()
+        await page.evaluate(LOG_CONNECTION, {})
+        await set_log_panel(page, was_open)
+    assert "Not connected to backend" in said["no backend"], f"With no backend: {said['no backend']!r}"
+    assert said["no bus"].startswith("CAN bus not connected"), f"With a backend and no bus: {said['no bus']!r}"
+    assert said["no bus, server on"].startswith("Waiting for log messages") \
+        and "CAN bus not connected" in said["no bus, server on"], \
+        f"With no bus, the server's log turned on: {said['no bus, server on']!r}"
+    assert said["connected"] == "Waiting for log messages…", f"Connected: {said['connected']!r}"
+    assert said["with messages"] is None, f"With messages shown it should say nothing: {said['with messages']!r}"
+    assert said["under Min"] == "None of the 2 messages kept match Min ERROR.", f"Under Min ERROR: {said['under Min']!r}"
+    assert said["under Min and a filter"] == "None of the 2 messages kept match Min ERROR and the filter “Zzz”.", \
+        f"Under Min ERROR and a filter: {said['under Min and a filter']!r}"
+
+
 # Keep last: it reloads the page with every other host unreachable.
 @test("Dashboard works with no internet access")
 async def _(page):

@@ -266,23 +266,43 @@ const reapplyFiltersToAllRows = () => {
   updateEmptyHint();
 };
 
+// "a", "a and b", "a, b and c".
+const _listInWords = (items) =>
+  (items.length > 1 ? `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}` : items[0] || '');
+
+// Every message kept is hidden: which settings hide some of them.
+const _hiddenMessagesText = () => {
+  const by = [];
+  const floor = state.logSeverityFloor;
+  if (state.logBuffer.some((e) => e.severity != null && e.severity < floor)) by.push(`Min ${SEVERITY_LABELS[floor]}`);
+  if (state.logTextFilter) by.push(`the filter “${el('logFilterInput').value.trim()}”`);
+  if (['cyphal', 'server'].some((src) => !_isSourceOn(src) && _srcCounts[src] > 0)) by.push('the sources turned on');
+  const n = state.logBuffer.length;
+  return n === 1 ? `The one message kept does not match ${_listInWords(by)}.`
+    : `None of the ${n} messages kept match ${_listInWords(by)}.`;
+};
+
+// What the list says while it shows no message: why, and what would change
+// it. '' when it shows some.
+const _emptyHintText = () => {
+  const on = ['cyphal', 'server'].filter(_isSourceOn);
+  if (!on.length) return 'All log sources are off — enable one above.';
+  if (state.logBuffer.length > 0) {
+    return el('logList')?.querySelector('.log-row:not(.hidden)') ? '' : _hiddenMessagesText();
+  }
+  // No backend is one problem, though it stops both sources.
+  const problems = on.map(logSourceProblem).filter(Boolean).map(_problemText);
+  const stopped = [...new Set(problems)].join(' ');
+  // With a source that can still send, it waits, and says what the other lacks.
+  return problems.length === on.length ? stopped : `Waiting for log messages… ${stopped}`.trim();
+};
+
 const updateEmptyHint = () => {
   const empty = el('logEmpty');
   if (!empty) return;
-  const allOff = !state.logShowCyphal && !state.logShowServer;
-  const noEntries = state.logBuffer.length === 0;
-  if (allOff) {
-    empty.textContent = 'All log sources are off — enable one above.';
-    empty.classList.remove('hidden');
-  } else if (noEntries) {
-    empty.textContent = 'Waiting for log messages…';
-    empty.classList.remove('hidden');
-  } else if (!el('logList')?.querySelector('.log-row:not(.hidden)')) {
-    empty.textContent = 'No messages match the filters.';
-    empty.classList.remove('hidden');
-  } else {
-    empty.classList.add('hidden');
-  }
+  const text = _emptyHintText();
+  if (text && empty.textContent !== text) empty.textContent = text;
+  empty.classList.toggle('hidden', !text);
 };
 
 // ── Ingest (push entry into buffer + DOM) ───────────────────────────
