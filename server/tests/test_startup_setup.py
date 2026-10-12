@@ -96,7 +96,7 @@ class TestPrepareRuntimeCanEnv:
     def test_can_fd_on_an_adapter_without_it_is_refused_before_touching_env(self, runtime_env):
         os.environ["UAVCAN__CAN__IFACE"] = "untouched"
         with pytest.raises(ValueError, match="cannot run CAN FD"):
-            prepare_runtime("gs_usb:0", bitrate=500_000, data_bitrate=2_000_000)
+            prepare_runtime("canalystii:0", bitrate=500_000, data_bitrate=2_000_000)
         assert os.environ["UAVCAN__CAN__IFACE"] == "untouched"
 
     def test_socketcan_without_bitrate_clears_a_stale_one(self, runtime_env):

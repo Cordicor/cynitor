@@ -1267,7 +1267,7 @@ async def main(can_iface: Optional[str] = None, force_compile: bool = False, bin
     logger.info("Startup options:")
     logger.info("  --can <iface>    attach to a CAN interface at startup (e.g. vcan0, can0, gs_usb:0, pcan:PCAN_USBBUS1)")
     logger.info("  --bitrate <n>    bus speed in bit/s; required with --can for any adapter except SocketCAN")
-    logger.info("  --data-bitrate <n>  CAN FD data-phase speed; opens PCAN/Kvaser/Vector/IXXAT as CAN FD")
+    logger.info("  --data-bitrate <n>  CAN FD data-phase speed; opens PCAN/Kvaser/Vector/IXXAT/gs_usb/slcan as CAN FD")
     logger.info("  --bind <host>    bind HTTP server to <host>  (default 127.0.0.1; 0.0.0.0 to expose on the network)")
     logger.info("  --port <n>       listen on <n> instead of 8080")
     logger.info("  --data-dir <dir> keep history, recordings and node-IDs in <dir>")
@@ -1423,8 +1423,9 @@ if __name__ == "__main__":
         type=_data_bitrate_arg,
         default=None,
         help="CAN FD data-phase bitrate in bit/s; opens the adapter as CAN FD (PCAN, "
-             "Kvaser, Vector, IXXAT). Leave out for Classic CAN. Ignored for SocketCAN, "
-             "which runs CAN FD when the interface is set up for it.",
+             "Kvaser, Vector, IXXAT, gs_usb with CAN FD firmware, slcan at 2000000 or "
+             "5000000). Leave out for Classic CAN. Ignored for SocketCAN, which runs "
+             "CAN FD when the interface is set up for it.",
     )
     parser.add_argument(
         "--recompile",

@@ -69,13 +69,14 @@ EventLogger.start()        SQLite persistence
 | `websocket_server.py` | aiohttp HTTP+WS server, REST endpoints, per-client WebSocket filtering, periodic metrics broadcast, node history and service call history endpoints; also serves `website/` so one binary hosts both the API and the dashboard; refuses API and event-stream requests from browser pages of other sites (`_browser_request_allowed`) |
 | `event_logger.py` | SQLite persistence with batch writes, `asyncio.to_thread` for non-blocking I/O, configurable retention, node lifecycle history (30-day), service call history with response bodies |
 | `allocator.py` | Node-ID allocator detection / fallback (CentralizedAllocator), 10s re-check |
-| `can_config.py` | Interface-spec and bitrate rules: bare names mean SocketCAN, `--bitrate` is required for anything else, `UAVCAN__CAN__BITRATE` is published as `"<n> <n>"` (`"<n> <data>"` for CAN FD); which adapters can run CAN FD, and whether a SocketCAN interface is set up for it |
-| `can_discovery.py` | Lists the adapters the dashboard offers besides SocketCAN: python-can vendor detection (PEAK, Kvaser, Vector, IXXAT), and off Linux a gs_usb USB scan and slcan serial ports by USB ID; cached for 10 s in `AdapterCatalog` |
-| `can_hub.py` | Opens a non-SocketCAN adapter once and bridges it to an in-process python-can `virtual` channel that the allocator probe, allocator and scanner all open instead; also picks Cynitor's node-ID from heartbeats on that channel; for those adapters it also opens CAN FD adapters with pycyphal's parameters, measures bus load (`HubBusLoad`, from forwarded frames' time on the wire, counted as canbusload counts: worst-case stuffing, CAN FD data phase at the data rate), counts error frames, and, for gs_usb, whose reads hide USB errors, checks every few seconds that the device is still enumerated |
+| `can_config.py` | Interface-spec and bitrate rules: bare names mean SocketCAN, `--bitrate` is required for anything else, `UAVCAN__CAN__BITRATE` is published as `"<n> <n>"` (`"<n> <data>"` for CAN FD); which adapters can run CAN FD, at which data bitrates where they have presets (slcan's 2 and 5 Mbit/s), and whether a SocketCAN interface is set up for it |
+| `can_discovery.py` | Lists the adapters the dashboard offers besides SocketCAN: python-can vendor detection (PEAK, Kvaser, Vector, IXXAT), and off Linux a gs_usb USB scan, each device asked whether its firmware does CAN FD, and slcan serial ports by USB ID; cached for 10 s in `AdapterCatalog` |
+| `can_hub.py` | Opens a non-SocketCAN adapter once and bridges it to an in-process python-can `virtual` channel that the allocator probe, allocator and scanner all open instead; also picks Cynitor's node-ID from heartbeats on that channel; for those adapters it also opens CAN FD adapters with pycyphal's parameters, where pycyphal has them (slcan takes its two rates as a `BitTimingFd`, gs_usb goes through `gs_usb_fd`), measures bus load (`HubBusLoad`, from forwarded frames' time on the wire, counted as canbusload counts: worst-case stuffing, CAN FD data phase at the data rate), counts error frames, and, for python-can's gs_usb, whose reads hide USB errors, checks every few seconds that the device is still enumerated |
+| `gs_usb_fd.py` | CAN FD for candleLight (gs_usb) adapters, which python-can's gs_usb runs as Classic CAN only: `GsUsbFdBus` is a python-can bus speaking the protocol's CAN FD extensions as the Linux driver does (data-phase timing limits and request, the FD mode flag, 64-byte frames, echoes dropped, a receive overflow reported as SocketCAN's error frame). `fd_bit_timing` takes python-can's timings for Cynitor's sample points that the device's limits admit; `read_capability` also tells discovery whether a device's firmware does CAN FD. pyusb is optional at import, as only Windows installs it |
 | `startup_setup.py` | DSDL compilation via `nnvg`, sets `UAVCAN__CAN__IFACE` / `UAVCAN__CAN__MTU` (64 for CAN FD, else 8), calls `yakut accommodate` for the node-ID only as a fallback: the session picks one itself first (`CANSession._pick_node_id`, from heartbeats, as the hub path does) |
 | `node_identity_map.py` | Bidirectional `unique_id ↔ node_id` mapping with displacement detection, snapshot storage, and SQLite-backed persistence |
 | `data_dir.py` | The data folder: per-user default per OS (`STATE_DIRECTORY` under systemd), `--data-dir` / `CYNITOR_DATA_DIR` override, and the one-time move of databases an earlier version left in the working directory, each with its `-wal`/`-shm` files |
-| `log_store.py` | In-memory deque (max 5000) fed by a `logging.Handler`; exposed via `/api/logs` |
+| `log_store.py` | In-memory deque (max 5000) fed by a `logging.Handler`, HTTP access lines left out; exposed via `/api/logs` |
 | `dsdl_manager.py` | DSDL discovery, namespace tree, source/compiled state, custom-type CRUD in the data folder (`dsdl/custom`, compiled to `dsdl/compiled`), compilation in-process via `pycyphal.dsdl.compile` (no `nnvg`, so it works frozen) |
 | `raw_log.py` | Raw CAN logs: `RawLog` writes frames to a candump `.log` file (python-can's `CanutilsLogWriter`, behind a lock), `SocketcanTap` is the listen-only second socket that feeds it on SocketCAN; behind the hub, `CANHub.on_frame` feeds it. Started and stopped by `CANSession.start_raw_log` / `stop_raw_log`, which also writes the `.types.json` sidecar (subject types, servers, names, bitrates). `LogPlayer` is a python-can bus that plays a log at its pace ÷ speed; `CANSession.play_raw_log` opens it through the hub, with the scanner in `offline` mode taking ports from the sidecar instead of asking nodes |
 | `cyphal_v11.py` | Noticing Cyphal v1.1 traffic, which this v1.0 stack drops: `is_v11_transfer_start` recognises the first frame of a v1.1 message transfer, `V11Traffic` counts transfers, nodes and subject-IDs for `/api/status`. Fed by `CANHub` behind the hub, and on SocketCAN by a `SocketcanTap` with a kernel filter (`SOCKETCAN_FILTER`) |
@@ -91,7 +92,8 @@ EventLogger.start()        SQLite persistence
                   (gs_usb:0, pcan:PCAN_USBBUS1, slcan:COM5@115200, ...). Required for direct mode.
 --bitrate <n>     Bus speed in bit/s. Required with --can for non-SocketCAN adapters; no default. Every component that
                   opens the bus reads it from UAVCAN__CAN__BITRATE, which prepare_runtime sets.
---data-bitrate <n>  CAN FD data-phase bitrate; opens a non-SocketCAN adapter as CAN FD (can_config.FD_INTERFACES).
+--data-bitrate <n>  CAN FD data-phase bitrate; opens a non-SocketCAN adapter as CAN FD (can_config.FD_INTERFACES;
+                  slcan at its presets only, can_config.FD_DATA_BITRATES).
                   prepare_runtime then publishes UAVCAN__CAN__MTU=64 and "<bitrate> <data-bitrate>". SocketCAN
                   ignores it: its MTU follows the interface (72 in sysfs means CAN FD).
 --recompile       Force `nnvg` to regenerate Python from DSDL even if outputs exist.
@@ -357,6 +359,36 @@ windowed builds is clean. The `.AppImage` is a convenience wrapper; the
 PyInstaller binary is already self-contained and needs only libc, so the
 AppImage adds packaging rather than portability.
 
+### Building
+
+Tagged releases attach prebuilt artifacts, so building is only needed for
+unreleased changes or another architecture.
+
+```bash
+pip install -r server/requirements.txt pyinstaller
+python3 server/startup_setup.py --recompile   # generate compiled DSDL first
+cd packaging && ./build.sh                    # binary + .deb + .AppImage
+```
+
+`./build.sh binary` stops after the executable, which is all a plain
+copy-and-run deployment needs. The full run also needs `fakeroot` for the
+package and downloads `appimagetool` on first use. Everything lands in
+`packaging/out/`, with the bare executable at `packaging/dist/cynitor-server`.
+
+On Windows there is no `.deb` or AppImage, only the executable. From the
+repository root, in PowerShell:
+
+```powershell
+pip install -r server/requirements.txt pyinstaller
+python server/startup_setup.py --recompile
+cd packaging; python -m PyInstaller cynitor-server.spec --noconfirm
+.\smoke-test.ps1          # optional: what CI checks on every build
+```
+
+The result is `packaging\dist\cynitor-server.exe`.
+
+### The spec
+
 `cynitor-server.spec` drives PyInstaller. Key concerns:
 
 - **Hidden imports** — pycyphal and python-can use dynamic imports extensively. The spec enumerates every submodule our code touches.
@@ -412,7 +444,7 @@ Backend unit tests live in `server/tests/`:
 cd server && PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest tests/ -v -p pytest_asyncio.plugin
 ```
 
-`PYTEST_DISABLE_PLUGIN_AUTOLOAD=1` prevents ROS2 plugin conflicts in some environments. Required: `pip install pytest pytest-asyncio aiohttp`.
+`PYTEST_DISABLE_PLUGIN_AUTOLOAD=1` prevents ROS2 plugin conflicts in some environments. Required: `pip install pytest pytest-asyncio aiohttp`, or `pip install -r server/requirements-dev.txt`, which adds the test runner to the runtime requirements.
 
 Frontend e2e tests live in `tests/e2e/` and serve `website/` themselves (or reuse a server already on port 5500):
 

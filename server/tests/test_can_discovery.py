@@ -5,6 +5,7 @@ drivers.
 """
 
 import logging
+import sys
 import types
 
 import pytest
@@ -58,6 +59,7 @@ class TestDiscoverAdapters:
     def test_as_dict(self):
         assert Adapter("gs_usb:0", "CANable", True).as_dict() == {
             "interface": "gs_usb:0", "label": "CANable", "needs_bitrate": True, "supports_fd": False,
+            "data_bitrates": None,
         }
 
 
@@ -117,9 +119,57 @@ class TestSlcanProbe:
             port("COM5", 0x16D0, 0x117E),    # CANable with slcan firmware
             port("COM1", None, None),        # built-in serial port
         ])
+        # The CANable 2.0's firmware, which runs CAN FD at two data bitrates.
         assert can_discovery._slcan_adapters() == [
-            Adapter("slcan:COM5", "CANable (slcan) COM5", True),
+            Adapter("slcan:COM5", "CANable (slcan) COM5", True, True, (2_000_000, 5_000_000)),
         ]
+
+
+class TestGsUsbProbe:
+    """Each candleLight adapter is asked whether its firmware does CAN FD."""
+
+    @pytest.fixture
+    def released(self, monkeypatch):
+        # pyusb, which only Windows installs, as far as discovery uses it.
+        released = []
+        util = types.SimpleNamespace(dispose_resources=released.append)
+        monkeypatch.setitem(sys.modules, "usb", types.SimpleNamespace(util=util))
+        monkeypatch.setitem(sys.modules, "usb.util", util)
+        return released
+
+    @pytest.fixture
+    def firmware(self, monkeypatch):
+        monkeypatch.setattr(can_discovery, "read_capability",
+                            lambda device: types.SimpleNamespace(can_fd=device.fd))
+
+    def test_lists_each_adapter_as_its_firmware_runs(self, monkeypatch, released, firmware):
+        devices = [
+            types.SimpleNamespace(gs_usb=types.SimpleNamespace(serial_number="00000001", fd=False)),
+            types.SimpleNamespace(gs_usb=types.SimpleNamespace(serial_number="00000002", fd=True)),
+        ]
+        scanned = types.SimpleNamespace(GsUsb=types.SimpleNamespace(scan=lambda: devices))
+        monkeypatch.setitem(sys.modules, "gs_usb", types.SimpleNamespace(gs_usb=scanned))
+        monkeypatch.setitem(sys.modules, "gs_usb.gs_usb", scanned)
+        assert can_discovery._gs_usb_adapters() == [
+            Adapter("gs_usb:0", "CANable 0 …0001", True, False),  # Classic CAN firmware
+            Adapter("gs_usb:1", "CANable 1 …0002", True, True),
+        ]
+        # Let go at once: WinUSB lets one handle at a time open an adapter.
+        assert released == [device.gs_usb for device in devices]
+
+    def test_an_adapter_another_program_holds_is_still_listed(self, monkeypatch, released):
+        class Held:
+            @property
+            def serial_number(self):
+                raise OSError("[Errno 13] Access denied (insufficient permissions)")
+
+        def refuse(device):
+            raise OSError("[Errno 13] Access denied (insufficient permissions)")
+
+        monkeypatch.setattr(can_discovery, "read_capability", refuse)
+        held = Held()
+        assert can_discovery._probe_gs_usb(held) == (None, False)
+        assert released == [held]
 
 
 class FakeClock:

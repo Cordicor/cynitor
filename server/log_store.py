@@ -30,7 +30,8 @@ class InMemoryLogStore:
             message = f"{message}\n{''.join(traceback.format_exception(*record.exc_info)).strip()}"
 
         entry = {
-            "timestamp": datetime.fromtimestamp(record.created, tz=timezone.utc).isoformat(),
+            # Always with microseconds, so that timestamps compare as text.
+            "timestamp": datetime.fromtimestamp(record.created, tz=timezone.utc).isoformat(timespec="microseconds"),
             "logger": record.name,
             "level": record.levelname,
             "message": message,
@@ -45,12 +46,16 @@ class InMemoryLogStore:
         limit: int = 200,
         level: Optional[str] = None,
         min_level: Optional[str] = None,
+        since: Optional[str] = None,
     ) -> list[dict[str, Any]]:
+        """The newest ``limit`` records, oldest first; ``since`` (a timestamp
+        as the records carry) leaves out those from before that moment."""
         with self._lock:
             entries = list(self._entries)
 
         normalized_level = level.upper() if level else None
         normalized_min_level = min_level.upper() if min_level else None
+        normalized_since = self._as_stored_timestamp(since) if since else None
 
         if normalized_level and normalized_level not in _LEVEL_ORDER:
             raise ValueError(f"Invalid level: {level}")
@@ -63,20 +68,43 @@ class InMemoryLogStore:
                 continue
             if normalized_min_level and _LEVEL_ORDER[entry["level"]] < _LEVEL_ORDER[normalized_min_level]:
                 continue
+            if normalized_since and entry["timestamp"] < normalized_since:
+                continue
             filtered.append(entry)
 
         safe_limit = max(1, min(limit, 5000))
         return filtered[-safe_limit:]
 
+    @staticmethod
+    def _as_stored_timestamp(moment: str) -> str:
+        """An ISO 8601 moment, written as the store writes its timestamps."""
+        try:
+            parsed = datetime.fromisoformat(moment)
+        except ValueError:
+            raise ValueError(f"Invalid since: {moment}") from None
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc).isoformat(timespec="microseconds")
+
+
+# aiohttp logs every HTTP request under this name. A dashboard asks several
+# times a second, so within minutes these lines would be all the store holds.
+_HTTP_ACCESS_LOGGER = "aiohttp.access"
+
 
 class APILogHandler(logging.Handler):
-    """Logging handler that writes log records into InMemoryLogStore."""
+    """Logging handler that writes log records into InMemoryLogStore.
+
+    HTTP access lines are left out: they still go to the console.
+    """
 
     def __init__(self, store: InMemoryLogStore) -> None:
         super().__init__()
         self.store = store
 
     def emit(self, record: logging.LogRecord) -> None:
+        if record.name == _HTTP_ACCESS_LOGGER:
+            return
         try:
             self.store.add_record(record)
         except Exception:

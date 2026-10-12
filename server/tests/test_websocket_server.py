@@ -13,7 +13,7 @@ from dsdl_manager import DsdlManager
 import can
 
 from frame_capture import FrameCaptureManager
-from log_store import InMemoryLogStore
+from log_store import APILogHandler, InMemoryLogStore
 import logging
 
 
@@ -232,10 +232,20 @@ class TestCANConnectSpecsAndBitrate:
     @pytest.mark.asyncio
     async def test_data_bitrate_refused_for_adapter_without_can_fd(self, client, session):
         resp = await client.post("/api/can/connect", json={
-            "interface": "gs_usb:0", "bitrate": 500000, "data_bitrate": 2000000,
+            "interface": "canalystii:0", "bitrate": 500000, "data_bitrate": 2000000,
         })
         assert resp.status == 400
         assert "cannot run CAN FD" in (await resp.json())["error"]
+        session.connect.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_data_bitrate_refused_outside_the_adapters_presets(self, client, session):
+        # The CANable 2.0's slcan firmware has two data bitrates.
+        resp = await client.post("/api/can/connect", json={
+            "interface": "slcan:COM5", "bitrate": 500000, "data_bitrate": 4000000,
+        })
+        assert resp.status == 400
+        assert "2000000 or 5000000 bit/s only" in (await resp.json())["error"]
         session.connect.assert_not_awaited()
 
     @pytest.mark.asyncio
@@ -306,6 +316,45 @@ class TestLogs:
         data = await resp.json()
         for log in data["logs"]:
             assert log["level"] == "ERROR"
+
+    @pytest.mark.asyncio
+    async def test_get_logs_since(self, client, log_store):
+        """A poller asks for what came since the last record it has."""
+        for i, message in enumerate(["older", "newer"]):
+            record = logging.LogRecord("test", logging.INFO, "t.py", 1, message, (), None)
+            record.created = time.time() + 10 + i
+            log_store.add_record(record)
+        seen = log_store.get_logs()[-2]["timestamp"]
+        resp = await client.get("/api/logs", params={"since": seen})
+        assert resp.status == 200
+        assert [log["message"] for log in (await resp.json())["logs"]] == ["older", "newer"]
+
+    @pytest.mark.asyncio
+    async def test_get_logs_invalid_since(self, client):
+        resp = await client.get("/api/logs", params={"since": "yesterday"})
+        assert resp.status == 400
+        assert "since" in (await resp.json())["error"]
+
+    @pytest.mark.asyncio
+    async def test_requests_do_not_fill_the_log_store(self, session):
+        """With logging set up as main.py sets it up, a dashboard's own requests
+        leave nothing in the store that /api/logs serves."""
+        store = InMemoryLogStore()
+        handler = APILogHandler(store)
+        access = logging.getLogger("aiohttp.access")
+        level = access.level
+        access.setLevel(logging.INFO)
+        access.addHandler(handler)
+        try:
+            server = WebSocketServer(session=session, host="127.0.0.1", port=0, log_store=store)
+            async with TestClient(TestServer(server.app)) as c:
+                for _ in range(3):
+                    await c.get("/api/logs")
+                data = await (await c.get("/api/logs")).json()
+        finally:
+            access.removeHandler(handler)
+            access.setLevel(level)
+        assert data["logs"] == []
 
     @pytest.mark.asyncio
     async def test_get_logs_no_store(self, session):
@@ -1000,6 +1049,7 @@ class TestAdapterListing:
         c.get = MagicMock(return_value=[
             Adapter("vcan0", "vcan0 (SocketCAN)", False),
             Adapter("gs_usb:0", "CANable 0", True),
+            Adapter("slcan:COM5", "CANable (slcan) COM5", True, True, (2_000_000, 5_000_000)),
         ])
         return c
 
@@ -1019,7 +1069,9 @@ class TestAdapterListing:
         assert data["available_interfaces"] == ["vcan0"]  # unchanged for old clients
         assert data["available_adapters"][1] == {
             "interface": "gs_usb:0", "label": "CANable 0", "needs_bitrate": True, "supports_fd": False,
+            "data_bitrates": None,
         }
+        assert data["available_adapters"][2]["data_bitrates"] == [2_000_000, 5_000_000]
         assert data["can_bitrate"] is None
         assert data["can_data_bitrate"] is None and data["can_fd"] is False
 
@@ -1045,7 +1097,7 @@ class TestAdapterListing:
     async def test_refresh_query_forces_a_rescan(self, listing_client, catalog):
         resp = await listing_client.get("/api/can/adapters?refresh=1")
         assert resp.status == 200
-        assert len((await resp.json())["adapters"]) == 2
+        assert len((await resp.json())["adapters"]) == 3
         catalog.get.assert_called_once_with(True, True)
 
     @pytest.mark.asyncio

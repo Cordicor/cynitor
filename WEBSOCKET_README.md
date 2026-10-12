@@ -156,7 +156,7 @@ Mode:        selection  (waiting for the UI or POST /api/can/connect)
 Startup options:
   --can <iface>    attach to a CAN interface at startup (e.g. vcan0, can0, gs_usb:0, pcan:PCAN_USBBUS1)
   --bitrate <n>    bus speed in bit/s; required with --can for any adapter except SocketCAN
-  --data-bitrate <n>  CAN FD data-phase speed; opens PCAN/Kvaser/Vector/IXXAT as CAN FD
+  --data-bitrate <n>  CAN FD data-phase speed; opens PCAN/Kvaser/Vector/IXXAT/gs_usb/slcan as CAN FD
   --bind <host>    bind HTTP server to <host>  (default 127.0.0.1; 0.0.0.0 to expose on the network)
   --port <n>       listen on <n> instead of 8080
   --data-dir <dir> keep history, recordings and node-IDs in <dir>
@@ -348,8 +348,12 @@ Response:
     "can_fd": false,
     "available_interfaces": ["vcan0", "can0"],
     "available_adapters": [
-        {"interface": "vcan0", "label": "vcan0 (SocketCAN)", "needs_bitrate": false, "supports_fd": false},
-        {"interface": "pcan:PCAN_USBBUS1", "label": "PEAK PCAN_USBBUS1", "needs_bitrate": true, "supports_fd": true}
+        {"interface": "vcan0", "label": "vcan0 (SocketCAN)", "needs_bitrate": false, "supports_fd": false,
+         "data_bitrates": null},
+        {"interface": "pcan:PCAN_USBBUS1", "label": "PEAK PCAN_USBBUS1", "needs_bitrate": true, "supports_fd": true,
+         "data_bitrates": null},
+        {"interface": "slcan:COM5", "label": "CANable (slcan) COM5", "needs_bitrate": true, "supports_fd": true,
+         "data_bitrates": [2000000, 5000000]}
     ],
     "bus_utilization": 3.0,
     "dropped": {"scanner": 0, "logger": 0, "clients": 12},
@@ -369,7 +373,7 @@ Response:
 
 `status` is `"running"` when connected to CAN, `"idle"` otherwise. `last_error` contains the error message if CAN was auto-disconnected due to a bus fault. `can_bitrate` is the bitrate Cynitor opened the adapter at, or `null` for SocketCAN, whose bitrate the kernel sets. `can_data_bitrate` is the CAN FD data-phase bitrate it opened the adapter with, or `null` (Classic CAN, or SocketCAN). `can_fd` says whether the session runs Cyphal/CAN FD; for SocketCAN that follows the interface's own setup when it connects. A SocketCAN interface switched between CAN FD and Classic CAN while connected ends the session within a few seconds, `last_error` saying so ("Interface can0 was switched to Classic CAN; connect again to use it"); connecting again takes the new setup.
 
-`available_interfaces` lists SocketCAN names only, as before. `available_adapters` lists everything the dashboard can offer: SocketCAN interfaces, adapters of vendor drivers python-can can enumerate (PEAK, Kvaser, Vector, IXXAT) and, off Linux, candleLight (`gs_usb`) and known slcan adapters. Pass an entry's `interface` to `POST /api/can/connect`, with a `bitrate` when `needs_bitrate` is true. `supports_fd` says whether a session on it can run CAN FD: for an adapter Cynitor opens itself (`needs_bitrate` true), that it can be opened as CAN FD when given a `data_bitrate`; for SocketCAN, that the interface is set up for CAN FD, which Cynitor then uses without being asked. The list is rescanned at most every 10 seconds, and not at all while connected.
+`available_interfaces` lists SocketCAN names only, as before. `available_adapters` lists everything the dashboard can offer: SocketCAN interfaces, adapters of vendor drivers python-can can enumerate (PEAK, Kvaser, Vector, IXXAT) and, off Linux, candleLight (`gs_usb`) and known slcan adapters. Pass an entry's `interface` to `POST /api/can/connect`, with a `bitrate` when `needs_bitrate` is true. `supports_fd` says whether a session on it can run CAN FD: for an adapter Cynitor opens itself (`needs_bitrate` true), that it can be opened as CAN FD when given a `data_bitrate` (for a candleLight adapter, that its firmware does CAN FD, as the adapter tells); for SocketCAN, that the interface is set up for CAN FD, which Cynitor then uses without being asked. `data_bitrates` lists the only data bitrates an adapter with presets for them can run (the CANable 2.0's slcan firmware: 2 and 5 Mbit/s), and is `null` for any other. The list is rescanned at most every 10 seconds, and not at all while connected.
 
 **List CAN adapters:**
 ```bash
@@ -392,7 +396,7 @@ Response (success):
 
 `interface` is either a SocketCAN name, which must be one of `available_interfaces`, or a python-can spec such as `gs_usb:0` or `pcan:PCAN_USBBUS1`, which is opened without that check. `bitrate` (integer, 1–1000000 bit/s) is the bus speed, required for every adapter except SocketCAN, which ignores it. It may be left out only if the server was started with `--bitrate`, which then applies.
 
-`data_bitrate` (integer, 1–12000000 bit/s, optional) opens the adapter as CAN FD with that data-phase bitrate; left out, the session is Classic CAN unless the server was started with `--data-bitrate`. Only adapters whose `supports_fd` is true take it (PEAK, Kvaser, Vector, IXXAT); SocketCAN ignores it and runs CAN FD when the interface is set up for it. `can_fd` in the response says which it became.
+`data_bitrate` (integer, 1–12000000 bit/s, optional) opens the adapter as CAN FD with that data-phase bitrate; left out, the session is Classic CAN unless the server was started with `--data-bitrate`. Only adapters whose `supports_fd` is true take it (PEAK, Kvaser, Vector, IXXAT, candleLight with CAN FD firmware, slcan), at one of their `data_bitrates` where those are given (slcan: 2000000 or 5000000); SocketCAN ignores it and runs CAN FD when the interface is set up for it. `can_fd` in the response says which it became.
 
 ```bash
 curl -X POST http://localhost:8080/api/can/connect \
@@ -406,7 +410,13 @@ curl -X POST http://localhost:8080/api/can/connect \
   -d '{"interface":"gs_usb:0","bitrate":250000}'
 ```
 
-Returns `409` if already connected, `400` if a SocketCAN name is unknown, `bitrate` is missing or invalid, or `data_bitrate` is invalid or given for an adapter that cannot run CAN FD.
+```bash
+curl -X POST http://localhost:8080/api/can/connect \
+  -H 'Content-Type: application/json' \
+  -d '{"interface":"gs_usb:0","bitrate":1000000,"data_bitrate":4000000}'
+```
+
+Returns `409` if already connected, `400` if a SocketCAN name is unknown, `bitrate` is missing or invalid, or `data_bitrate` is invalid, given for an adapter that cannot run CAN FD, or not one of its presets. A candleLight adapter whose firmware runs Classic CAN only, or whose CAN clock cannot make the two bitrates, fails to open (`500`), saying so.
 
 **Disconnect from CAN:**
 ```bash
@@ -765,6 +775,13 @@ curl "http://localhost:8080/api/logs?level=ERROR&limit=100"
 curl "http://localhost:8080/api/logs?min_level=WARNING&limit=100"
 ```
 
+**Only the records since one already seen** (what a poller asks; `since` is a record's `timestamp`, and that record comes back first):
+```bash
+curl -G "http://localhost:8080/api/logs" --data-urlencode "since=2026-03-14T15:52:01.123456+00:00"
+```
+
+`limit` (default 200, at most 5000) keeps the newest records of those that match. A `since`, `level` or `min_level` that cannot be read answers `400`.
+
 Response:
 ```json
 {
@@ -779,6 +796,8 @@ Response:
     ]
 }
 ```
+
+The server keeps its newest 5000 log records, oldest first in the response. Its HTTP access lines (one per request) are not among them: a dashboard polls several times a second, and they would push every other record out. They still go to the console.
 
 **Get service schema for a node (types, request fields):**
 ```bash

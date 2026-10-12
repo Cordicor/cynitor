@@ -443,10 +443,18 @@ const canSpecNeedsBitrate = (spec) => {
 
 // python-can interfaces the backend can open as CAN FD; keep in step with
 // FD_INTERFACES in server/can_config.py. Listed adapters carry supports_fd.
-const FD_CAN_INTERFACES = ['pcan', 'kvaser', 'vector', 'ixxat', 'virtual'];
+const FD_CAN_INTERFACES = ['pcan', 'kvaser', 'vector', 'ixxat', 'gs_usb', 'slcan', 'virtual'];
 
-const canSpecSupportsFd = (spec) => FD_CAN_INTERFACES.includes(
-  spec.trim().replace(/^pythoncan:/i, '').split(':')[0].toLowerCase());
+// Those that run the CAN FD data phase at some bitrates only: the CANable
+// 2.0's slcan presets. FD_DATA_BITRATES in server/can_config.py; listed
+// adapters carry data_bitrates.
+const FD_CAN_DATA_BITRATES = { slcan: [2000000, 5000000] };
+
+const canSpecInterface = (spec) => spec.trim().replace(/^pythoncan:/i, '').split(':')[0].toLowerCase();
+
+const canSpecSupportsFd = (spec) => FD_CAN_INTERFACES.includes(canSpecInterface(spec));
+
+const canSpecDataBitrates = (spec) => FD_CAN_DATA_BITRATES[canSpecInterface(spec)] || null;
 
 const formatBitrate = (bitrate) => (bitrate >= 1000000
   ? `${bitrate / 1000000} Mbit/s`
@@ -462,18 +470,25 @@ const formatCanRates = (bitrate, dataBitrate, fd) => {
 };
 
 // What Connect would open: the interface spec, whether it needs a bitrate,
-// and whether it can be opened as CAN FD with a data bitrate.
+// whether it can be opened as CAN FD with a data bitrate, and which data
+// bitrates it takes if it has presets for them (null: any).
 const selectedCanTarget = () => {
   const selected = el('interfacesSelect').value;
   if (selected === OTHER_CAN_INTERFACE) {
     const spec = el('canSpecInput').value.trim();
-    return { interface: spec, needsBitrate: canSpecNeedsBitrate(spec), supportsFd: canSpecSupportsFd(spec) };
+    return {
+      interface: spec,
+      needsBitrate: canSpecNeedsBitrate(spec),
+      supportsFd: canSpecSupportsFd(spec),
+      dataBitrates: canSpecDataBitrates(spec),
+    };
   }
   const adapter = state.canAdapters.find((a) => a.interface === selected);
   return {
     interface: selected,
     needsBitrate: adapter ? adapter.needs_bitrate : canSpecNeedsBitrate(selected),
     supportsFd: adapter ? !!adapter.supports_fd : canSpecSupportsFd(selected),
+    dataBitrates: adapter ? adapter.data_bitrates || null : canSpecDataBitrates(selected),
   };
 };
 
@@ -501,15 +516,25 @@ const updateCanForm = ({ restoreBitrate = false } = {}) => {
   el('canSpecInput').classList.toggle('hidden', !(idle && isOther));
   el('canBitrateRow').classList.toggle('hidden', !(idle && target.needsBitrate));
   el('canDataBitrateRow').classList.toggle('hidden', !(idle && target.needsBitrate && target.supportsFd));
+  const dataSelect = el('canDataBitrateSelect');
+  for (const option of dataSelect.options) {
+    const offered = !option.value || !target.dataBitrates || target.dataBitrates.includes(Number(option.value));
+    option.hidden = !offered;
+    option.disabled = !offered;  // Safari shows hidden options
+  }
   if (restoreBitrate) {
     const select = el('canBitrateSelect');
     const remembered = state.canBitrates[target.interface];
     const listed = !!remembered && [...select.options].some((o) => o.value === String(remembered));
     select.value = remembered ? (listed ? String(remembered) : 'custom') : '';
     el('canBitrateCustom').value = remembered && !listed ? String(remembered) : '';
-    const dataSelect = el('canDataBitrateSelect');
     const rememberedData = String(state.canDataBitrates[target.interface] || '');
-    dataSelect.value = [...dataSelect.options].some((o) => o.value === rememberedData) ? rememberedData : '';
+    dataSelect.value = [...dataSelect.options].some((o) => o.value === rememberedData && !o.disabled)
+      ? rememberedData : '';
+  }
+  // A data bitrate picked for another adapter, which this one cannot run.
+  if (dataSelect.selectedOptions[0]?.disabled) {
+    dataSelect.value = '';
   }
   el('canBitrateCustom').classList.toggle('hidden', el('canBitrateSelect').value !== 'custom');
   updateCanConnectButton();

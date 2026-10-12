@@ -91,7 +91,17 @@ try {
     Write-Host "ok: gs_usb and libusb load inside the bundle"
 } finally { Stop-Server $server }
 
-# 3. The whole CAN stack -- hub, DSDL, pycyphal, allocator, scanner -- works
+# 3. So does Cynitor's CAN FD driver for gs_usb (gs_usb_fd), which opens the
+#    adapter instead of python-can when there is a data bitrate.
+$server = Start-Server @('--can', 'gs_usb:9', '--bitrate', '500000', '--data-bitrate', '2000000')
+try {
+    if (-not (Wait-Log $server 'Could not attach|No module named|No backend available')) { Fail "attach never failed or succeeded" $server.Log }
+    Assert-NoMissingModules $server
+    if (-not (Select-String -Path $server.Log -Pattern 'Cannot find device' -Quiet)) { Fail "the CAN FD driver for gs_usb did not get as far as looking for devices" $server.Log }
+    Write-Host "ok: the CAN FD driver for gs_usb loads inside the bundle"
+} finally { Stop-Server $server }
+
+# 4. The whole CAN stack -- hub, DSDL, pycyphal, allocator, scanner -- works
 #    frozen, on a virtual bus standing in for an adapter.
 $server = Start-Server @('--can', 'virtual:smoke', '--bitrate', '500000')
 try {
@@ -107,7 +117,7 @@ try {
     Write-Host "ok: data kept in the data folder"
 } finally { Stop-Server $server }
 
-# 4. The dashboard is served from the bundle, and a token protects the API.
+# 5. The dashboard is served from the bundle, and a token protects the API.
 $server = Start-Server @() @{ CYNITOR_AUTH_TOKEN = 'smoke-test-token' }
 try {
     $page = Invoke-WebRequest "$base/" -UseBasicParsing
@@ -121,7 +131,7 @@ try {
     Write-Host "ok: dashboard served, API requires the token"
 } finally { Stop-Server $server }
 
-# 5. Killing the bootloader ends the server too, instead of leaving it holding
+# 6. Killing the bootloader ends the server too, instead of leaving it holding
 #    the port (main._exit_when_windows_parent_dies).
 $server = Start-Server @()
 try {

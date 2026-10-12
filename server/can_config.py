@@ -25,9 +25,21 @@ CLASSIC_MTU = 8   # Cyphal/CAN payload per frame: Classic CAN
 FD_MTU = 64       # ... and CAN FD
 
 # python-can interfaces the hub can open as CAN FD, given a data bitrate.
-# Others (gs_usb, slcan, ...) have no CAN FD mode in python-can, or only a
-# partial one; on Linux such adapters do CAN FD as SocketCAN instead.
-FD_INTERFACES = frozenset({"pcan", "kvaser", "vector", "ixxat", "virtual", "rawlog"})
+# gs_usb is opened by Cynitor's own driver then (gs_usb_fd), as python-can's
+# has no CAN FD mode; whether a candleLight adapter can run CAN FD is up to
+# its firmware, which says so when it is opened. Others (canalystii, usb2can,
+# ...) cannot; on Linux, adapters with a kernel driver do CAN FD as SocketCAN.
+FD_INTERFACES = frozenset({"pcan", "kvaser", "vector", "ixxat", "gs_usb", "slcan", "virtual", "rawlog"})
+
+# Interfaces that run the CAN FD data phase at some bitrates only. slcan's are
+# the presets of the CANable 2.0 firmware (commands Y2 and Y5), the slcan
+# firmware that does CAN FD, and all that python-can's slcan can set.
+FD_DATA_BITRATES: dict[str, tuple[int, ...]] = {"slcan": (2_000_000, 5_000_000)}
+
+# Sample points of the CAN FD bit timings Cynitor works out itself, for PCAN
+# and candleLight adapters, in percent: what pycyphal uses for PCAN.
+FD_NOMINAL_SAMPLE_POINT = 80.0
+FD_DATA_SAMPLE_POINT = 80.0
 
 # A SocketCAN interface carries CAN FD frames once its MTU is that of
 # struct canfd_frame (`ip link set can0 ... fd on`, or `mtu 72` for vcan).
@@ -81,6 +93,11 @@ def socketcan_device(iface: str) -> str:
     return spec[len("socketcan:"):]
 
 
+def _interface_name(iface: str) -> str:
+    """The python-can interface that opens ``iface`` (``pcan:PCAN_USBBUS1`` -> ``pcan``)."""
+    return normalize_can_iface(iface).split(":", 1)[0]
+
+
 def validate_bitrate(bitrate: object) -> int:
     """Return ``bitrate`` as an int, or raise ValueError if it is not a usable classic-CAN bitrate."""
     # bool is an int subclass; True would otherwise pass as 1 bit/s.
@@ -109,17 +126,30 @@ def resolve_data_bitrate(iface: str, data_bitrate: Optional[object]) -> Optional
 
     SocketCAN always gets None: the kernel owns its rates, and whether it runs
     CAN FD follows the interface's own setting (see socketcan_supports_fd).
-    Raises ValueError for an adapter that cannot run CAN FD.
+    Raises ValueError for an adapter that cannot run CAN FD, or not at that
+    data bitrate.
     """
     if data_bitrate is None or is_socketcan(iface):
         return None
-    interface = normalize_can_iface(iface).split(":", 1)[0]
+    interface = _interface_name(iface)
     if interface not in FD_INTERFACES:
         raise ValueError(
             f"{interface} adapters cannot run CAN FD through Cynitor; leave the data bitrate "
             f"out for Classic CAN (on Linux, use the adapter as SocketCAN for CAN FD)"
         )
-    return validate_data_bitrate(data_bitrate)
+    data_bitrate = validate_data_bitrate(data_bitrate)
+    offered = fd_data_bitrates(iface)
+    if offered is not None and data_bitrate not in offered:
+        raise ValueError(
+            f"{interface} adapters run the CAN FD data phase at "
+            f"{' or '.join(str(rate) for rate in offered)} bit/s only, not {data_bitrate}"
+        )
+    return data_bitrate
+
+
+def fd_data_bitrates(iface: str) -> Optional[tuple[int, ...]]:
+    """The only CAN FD data bitrates ``iface`` can run, or None if it is not so limited."""
+    return FD_DATA_BITRATES.get(_interface_name(iface))
 
 
 def socketcan_supports_fd(device: str, sysfs: Path = _SYSFS_NET) -> bool:
@@ -135,10 +165,12 @@ def supports_fd(iface: str) -> bool:
 
     For SocketCAN, whether the interface is set up for it; for anything else,
     whether Cynitor can open the adapter as CAN FD when given a data bitrate.
+    A candleLight adapter also needs firmware that does CAN FD, which only the
+    device can tell (can_discovery asks it).
     """
     if is_socketcan(iface):
         return socketcan_supports_fd(socketcan_device(iface))
-    return normalize_can_iface(iface).split(":", 1)[0] in FD_INTERFACES
+    return _interface_name(iface) in FD_INTERFACES
 
 
 def resolve_bitrate(iface: str, bitrate: Optional[object]) -> Optional[int]:

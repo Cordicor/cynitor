@@ -172,10 +172,25 @@ class TestConnectCanFd:
             await CANSession(default_bitrate=500_000, default_data_bitrate=4_000_000).connect("kvaser:0")
         assert hubs[0].data_bitrate == 4_000_000
 
+    async def test_candlelight_and_slcan_adapters_run_can_fd(self, captured, hubs):
+        from main import CANSession
+        for spec in ("gs_usb:0", "slcan:COM5@115200"):
+            with pytest.raises(RuntimeError, match="stop"):
+                await CANSession().connect(spec, bitrate=500_000, data_bitrate=2_000_000)
+        assert [(hub.spec, hub.data_bitrate) for hub in hubs] == [
+            ("gs_usb:0", 2_000_000), ("slcan:COM5@115200", 2_000_000),
+        ]
+
     async def test_adapter_without_can_fd_is_refused_before_opening(self, captured, hubs):
         from main import CANSession
         with pytest.raises(ValueError, match="cannot run CAN FD"):
-            await CANSession().connect("gs_usb:0", bitrate=500_000, data_bitrate=2_000_000)
+            await CANSession().connect("canalystii:0", bitrate=500_000, data_bitrate=2_000_000)
+        assert captured == [] and hubs == []
+
+    async def test_data_bitrate_outside_the_adapters_presets_is_refused_before_opening(self, captured, hubs):
+        from main import CANSession
+        with pytest.raises(ValueError, match="2000000 or 5000000 bit/s only"):
+            await CANSession().connect("slcan:COM5", bitrate=500_000, data_bitrate=4_000_000)
         assert captured == [] and hubs == []
 
     async def test_socketcan_ignores_a_data_bitrate(self, captured, hubs):
