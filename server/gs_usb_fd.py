@@ -359,13 +359,16 @@ def _bulk_endpoints(device) -> tuple[int, int, int]:
     """The device's bulk IN and OUT endpoint addresses, and the number of their interface.
 
     From its descriptors, as the Linux driver finds them: candleLight's are
-    0x81 and 0x02, other firmware's need not be.
+    0x81 and 0x02, other firmware's need not be. Of several bulk OUT
+    endpoints the last takes the frames: CANnectivity puts a dummy 0x01
+    before its 0x02, which older Linux drivers expect there, and a frame
+    written to the dummy is never taken.
     """
     interface = device.get_active_configuration()[(0, 0)]
     bulk = [endpoint.bEndpointAddress for endpoint in interface
             if endpoint.bmAttributes & _TRANSFER_TYPE_MASK == _TRANSFER_TYPE_BULK]
     ep_in = next((address for address in bulk if address & _ENDPOINT_IN), None)
-    ep_out = next((address for address in bulk if not address & _ENDPOINT_IN), None)
+    ep_out = next((address for address in reversed(bulk) if not address & _ENDPOINT_IN), None)
     if ep_in is None or ep_out is None:
         raise can.CanInitializationError("The gs_usb device has no bulk endpoints for CAN frames")
     return ep_in, ep_out, interface.bInterfaceNumber

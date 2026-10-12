@@ -190,6 +190,17 @@ class TestOpen:
         finally:
             b.shutdown()
 
+    def test_frames_go_to_the_last_bulk_out_endpoint(self, monkeypatch):
+        # CANnectivity: a dummy 0x01 before the 0x02 that takes the frames.
+        d = FakeCandleLight(endpoints=[endpoint(0x81), endpoint(0x01), endpoint(0x02)])
+        monkeypatch.setattr(gs_usb_fd, "_scan", lambda: [d])
+        b = GsUsbFdBus(0, 500_000, 2_000_000)
+        try:
+            b.send(can.Message(arbitration_id=1, is_fd=True))
+            assert d.written[0][0] == 0x02
+        finally:
+            b.shutdown()
+
     def test_index_picks_among_the_adapters(self, monkeypatch):
         first, second = FakeCandleLight(), FakeCandleLight()
         monkeypatch.setattr(gs_usb_fd, "_scan", lambda: [first, second])
