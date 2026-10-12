@@ -5993,6 +5993,24 @@ async def _(page):
         f"Rows: {seen['rows']}"
 
 
+@test("Log panel: a text subject whose first string is empty is logged by the next one that says something")
+async def _(page):
+    was_open = await set_log_panel(page, True)
+    await page.locator("#logClearBtn").click()
+    try:
+        rows = await page.evaluate("""() => {
+            state.logSubjectIds.add(1900);
+            ingestLogEvent({subject_id: 1900, message_type: 'Status_1_0', publisher_node_id: 51,
+                timestamp_unix: Date.now() / 1000,
+                attributes: [{attribute: 'label', value: ''}, {attribute: 'detail', value: 'valve stuck'}]});
+            state.logSubjectIds.delete(1900);
+            return [...el('logList').children].map((row) => row.innerText.replace(/\\s+/g, ' ').trim()); }""")
+    finally:
+        await page.locator("#logClearBtn").click()
+        await set_log_panel(page, was_open)
+    assert len(rows) == 1 and rows[0].endswith("s1900 valve stuck"), f"Rows: {rows}"
+
+
 # Keep last: it reloads the page with every other host unreachable.
 @test("Dashboard works with no internet access")
 async def _(page):

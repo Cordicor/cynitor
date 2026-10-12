@@ -83,19 +83,16 @@ const isUserLoggedSubject = (event) => {
   return Number.isInteger(event?.subject_id) && state.logSubjectIds.has(event.subject_id);
 };
 
-const hasStringAttribute = (event) => {
-  for (const a of event?.attributes || []) {
-    if (typeof a.value === 'string' && a.value.length > 0) return true;
-  }
-  return false;
-};
-
+// The text of a message that is no diagnostic record: its first string that
+// says something, or ''.
 const firstStringValue = (event) => {
   for (const a of event?.attributes || []) {
-    if (typeof a.value === 'string') return a.value;
+    if (typeof a.value === 'string' && a.value.length > 0) return a.value;
   }
   return '';
 };
+
+const hasStringAttribute = (event) => firstStringValue(event) !== '';
 
 const extractRecordEntry = (event) => {
   let severity = null;
