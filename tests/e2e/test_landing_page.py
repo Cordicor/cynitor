@@ -28,8 +28,9 @@ import sys
 import time
 import traceback
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from pathlib import Path
-from urllib.parse import unquote, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 RESULT_FILE = Path(__file__).parent / "result.md"
 WEBSITE_DIR = Path(__file__).resolve().parents[2] / "website"
@@ -5751,6 +5752,111 @@ async def _(page):
     assert seen["over"] == [0, 0] and "invert" in seen["darkHammer"] and seen["version"] >= 9, \
         f"Sidebar overflow (px, down and across): {seen['over']}; the hammer's filter in dark: " \
         f"{seen['darkHammer']!r}; the version's font size: {seen['version']} px"
+
+
+# ── Log panel ──
+
+class _LogServer(_SidebarServer):
+    """A backend with a log of its own, which GET /api/logs serves as server/log_store.py does."""
+
+    def __init__(self):
+        super().__init__()
+        self.records = []       # {timestamp, logger, level, message}, oldest first
+        self.asked = []         # the query of every GET /api/logs
+        self.logs_error = None  # what GET /api/logs fails with, if it does
+        self._clock = time.time()
+
+    def log(self, message, level="INFO"):
+        self._clock += 0.001
+        stamp = datetime.fromtimestamp(self._clock, tz=timezone.utc).isoformat(timespec="microseconds")
+        self.records.append({"timestamp": stamp, "logger": "main", "level": level, "message": message})
+
+    async def handle(self, route):
+        url = urlparse(route.request.url)
+        if url.path != "/api/logs" or self.down:
+            await super().handle(route)
+            return
+        query = {key: values[0] for key, values in parse_qs(url.query).items()}
+        self.asked.append(query)
+        headers = {"Access-Control-Allow-Origin": "*"}
+        if self.logs_error:
+            await route.fulfill(json={"error": self.logs_error}, status=503, headers=headers)
+            return
+        logs = [r for r in self.records if r["timestamp"] >= query.get("since", "")][-int(query.get("limit", 200)):]
+        await route.fulfill(json={"count": len(logs), "logs": logs}, headers=headers)
+
+
+async def log_open(page, server):
+    """A freshly loaded page connected to `server`, its log panel open and empty with the
+    Server source on. The panel's own polling is off: a test asks with LOG_FETCH."""
+    await page.evaluate("state.logShowServer = true; state.logPanelCollapsed = false")
+    await sidebar_open(page, server)
+    await page.evaluate("stopServerLogPoll()")
+    await page.locator("#connectDashboardBtn").click()
+    await page.wait_for_function("state.dashboardConnected", timeout=5000)
+
+
+async def log_close(page, server):
+    await page.evaluate("state.logShowServer = false; state.logPanelCollapsed = true")
+    await sidebar_close(page, server)
+
+
+LOG_FETCH = "_fetchServerLogsOnce()"
+LOG_ROWS = "[...el('logList').children].map((row) => row.innerText.replace(/\\s+/g, ' ').trim())"
+
+
+@test("Log panel: the server's log is asked only for what came since the last record shown")
+async def _(page):
+    server = _LogServer()
+    server.log("boot")
+    await log_open(page, server)
+    try:
+        await page.evaluate(LOG_FETCH)
+        server.log("one more")
+        await page.evaluate(LOG_FETCH)
+        rows = await page.evaluate(LOG_ROWS)
+    finally:
+        await log_close(page, server)
+    first, second = server.asked[0], server.asked[1]
+    assert "since" not in first and second.get("since") == server.records[0]["timestamp"], \
+        f"The two requests asked for: {first}, then {second}; the first record's time: {server.records[0]['timestamp']}"
+    assert [row.split(" main ")[-1] for row in rows] == ["boot", "one more"], f"Rows: {rows}"
+
+
+@test("Log panel: server records it could not get are marked as missing, where they are missing")
+async def _(page):
+    server = _LogServer()
+    server.log("boot")
+    await log_open(page, server)
+    try:
+        await page.evaluate(LOG_FETCH)
+        for i in range(250):  # more than one request takes; the first 50 are the warnings
+            server.log(f"burst {i}", "WARNING" if i < 50 else "INFO")
+        await page.evaluate(LOG_FETCH)
+        rows = await page.evaluate(LOG_ROWS)
+    finally:
+        await log_close(page, server)
+    assert len(rows) == 202 and "boot" in rows[0] and rows[2].endswith("burst 50"), \
+        f"{len(rows)} rows, starting: {rows[:3]}"
+    assert "missing" in rows[1] and "WARN" in rows[1], f"Between 'boot' and 'burst 50': {rows[1]}"
+
+
+@test("Log panel: a server log that cannot be read marks its pill, saying why, until it can")
+async def _(page):
+    server = _LogServer()
+    server.logs_error = "Log store is not configured"
+    await log_open(page, server)
+    pill = "({marked: el('logSrcServer').classList.contains('disconnected'), title: el('logSrcServer').title})"
+    try:
+        await page.evaluate(LOG_FETCH)
+        failing = await page.evaluate(pill)
+        server.logs_error = None
+        await page.evaluate(LOG_FETCH)
+        answering = await page.evaluate(pill)
+    finally:
+        await log_close(page, server)
+    assert failing["marked"] and "Log store is not configured" in failing["title"], f"While it fails: {failing}"
+    assert answering == {"marked": False, "title": ""}, f"Once it answers: {answering}"
 
 
 # Keep last: it reloads the page with every other host unreachable.

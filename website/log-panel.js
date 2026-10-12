@@ -49,8 +49,12 @@ const _refreshSourcePillBadges = () => {
       countEl.classList.toggle('hidden', n === 0);
     }
     if (src === 'server') {
-      const disconnected = state.logShowServer && !state.dashboardConnected;
-      pill.classList.toggle('disconnected', disconnected);
+      // Nothing comes from it: no backend, or its log could not be read.
+      const why = !state.logShowServer ? ''
+        : !state.dashboardConnected ? 'Not connected to the server'
+        : _serverLogError ? `The server's log could not be read: ${_serverLogError}` : '';
+      pill.classList.toggle('disconnected', Boolean(why));
+      pill.title = why;
     }
   }
 };
@@ -411,14 +415,31 @@ let _serverPollTimer = null;
 let _serverLastSeenTs = '';
 let _serverKeysAtLastTs = new Set();  // entries already taken at that timestamp
 
+let _serverLogError = '';              // why the last request for the log failed, or ''
+
 const _serverEntryKey = (e) => `${e.timestamp}|${e.logger}|${e.message}`;
+
+// Stands where server records are missing: more came between two requests
+// than one request takes, and the oldest of them were left out.
+const _serverGapEntry = (next) => buildServerEntry({
+  timestamp: next.timestamp,
+  level: 'WARNING',
+  logger: 'log panel',
+  message: `Server records are missing here: more than ${SERVER_LOG_FETCH_LIMIT} came between two requests.`,
+});
 
 const _fetchServerLogsOnce = async () => {
   _refreshSourcePillBadges();
   if (!state.dashboardConnected) return;
   try {
-    const data = await requestJson(`/api/logs?limit=${SERVER_LOG_FETCH_LIMIT}`);
+    // Only what came since the newest record taken, which comes back first.
+    const since = _serverLastSeenTs ? `&since=${encodeURIComponent(_serverLastSeenTs)}` : '';
+    const data = await requestJson(`/api/logs?limit=${SERVER_LOG_FETCH_LIMIT}${since}`);
     const logs = Array.isArray(data.logs) ? data.logs : [];
+    _serverLogError = '';
+    if (_serverLastSeenTs && logs.length >= SERVER_LOG_FETCH_LIMIT && logs[0].timestamp > _serverLastSeenTs) {
+      _pushEntry(_serverGapEntry(logs[0]));
+    }
     // Oldest first. Several entries can share a timestamp, so one equal to the
     // newest seen is new unless that very entry was taken.
     for (const e of logs) {
@@ -433,9 +454,11 @@ const _fetchServerLogsOnce = async () => {
       }
       _serverKeysAtLastTs.add(key);
     }
-  } catch {
-    // Backend may be unreachable mid-session — silent, retry on next tick.
+  } catch (error) {
+    // Tried again on the next tick; the pill says why meanwhile.
+    _serverLogError = error.message;
   }
+  _refreshSourcePillBadges();
 };
 
 const startServerLogPoll = () => {

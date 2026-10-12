@@ -97,7 +97,8 @@ Open in browser:
   - `Min: TRACE…ALERT` severity floor applies across all sources via mapped levels; user-added subjects always show
   - `+` button opens a subject picker listing every subject whose payload carries a string field
   - Cyphal row layout: `time · n<id> · s<id> · MessageType · text`; Server: `time · LEVEL · logger · message`
-  - SERVER pill turns amber with a corner dot when polling without backend connection
+  - SERVER pill turns amber with a corner dot, its tooltip saying why, while nothing can come from it: no backend connection, or a log that cannot be read
+  - The server's log is asked only for what came since the last record shown; where more came than one request takes, a line says records are missing there
   - Buffer cap: 2000 entries in memory, never persisted
 - Server down overlay:
   - Detects when the frontend web server (port 5500) becomes unreachable
@@ -120,7 +121,7 @@ Open in browser:
   - `GET /api/nodes`
   - `GET /api/latest/subject/{subject_id}`
   - `GET /api/latest/node/{node_id}`
-  - `GET /api/logs?limit=100&level=ERROR&min_level=WARNING`
+  - `GET /api/logs?limit=200&since=<timestamp of the last record shown>`
   - `GET /api/services/{node_id}` — service schema with request fields
   - `POST /api/services/{node_id}/{service_id}/call` — invoke a service
   - `GET /api/clients/{node_id}` — client ports with server cross-references
