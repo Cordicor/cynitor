@@ -252,16 +252,28 @@ async def run() -> None:
               f"node {DEVICE_NODE_ID} read the whole firmware file from Cynitor ({len(image)} bytes)")
         check(update["state"] == "transferred" and update["read"] == len(image),
               f"the update's progress followed the reads: {update['state']}, {update['read']} bytes")
-        await asyncio.sleep(0.5)  # the recorder hands calls over every 50 ms
-        calls = [e for e in await session.event_logger.get_recording_events(calls_recording)
-                 if e["kind"] == "service_call"]
+        # The recorder hands calls over every 50 ms, and writing them can wait
+        # for a slow disk: read the recording once it holds the command and
+        # every read, however long that takes.
+        expected_calls = 1 + len(range(0, len(image), 256))
+
+        async def recorded_calls() -> list:
+            return [e for e in await session.event_logger.get_recording_events(calls_recording)
+                    if e["kind"] == "service_call"]
+
+        deadline = time.monotonic() + TIMEOUT
+        calls = await recorded_calls()
+        while len(calls) < expected_calls and time.monotonic() < deadline:
+            await asyncio.sleep(0.2)
+            calls = await recorded_calls()
         commands = [c for c in calls if c["service_id"] == 435]
         check(len(commands) == 1 and commands[0]["publisher_node_id"] == DEVICE_NODE_ID
               and commands[0]["attributes"]["client_node_id"] == int(own_id)
               and commands[0]["attributes"]["status"] == "ok"
               and json.loads(commands[0]["attributes"]["request"])["command"]
               == Command.Request.COMMAND_BEGIN_SOFTWARE_UPDATE,
-              f"the recording holds Cynitor's update command to node {DEVICE_NODE_ID}, decoded")
+              f"the recording holds Cynitor's update command to node {DEVICE_NODE_ID}, decoded"
+              f" ({len(calls)} calls recorded)")
         reads = [c for c in calls if c["service_id"] == 408]
         recorded = bytes(b for c in reads for b in json.loads(c["attributes"]["response"])["data"]["value"])
         check(all(c["publisher_node_id"] == int(own_id) and c["attributes"]["client_node_id"] == DEVICE_NODE_ID
