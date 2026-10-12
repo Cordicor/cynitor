@@ -5971,6 +5971,28 @@ async def _(page):
     assert len(rows) == 1 and "NOTICE" in rows[0] and "a real diagnostic" in rows[0], f"Rows: {rows}"
 
 
+@test("Log panel: markup in a message's node-ID or text is shown as text, never run")
+async def _(page):
+    was_open = await set_log_panel(page, True)
+    await page.locator("#logClearBtn").click()
+    try:
+        seen = await page.evaluate("""() => {
+            const markup = '<img src="x" class="e2e-log-markup">';
+            for (const [nodeId, text] of [[markup, 'its node-ID is markup'], [50, markup]]) {
+                ingestLogEvent({subject_id: 8184, message_type: 'Record_1_1', publisher_node_id: nodeId,
+                    timestamp_unix: Date.now() / 1000,
+                    attributes: [{attribute: 'severity', value: 5}, {attribute: 'text', value: text}]});
+            }
+            return {elements: el('logList').querySelectorAll('.e2e-log-markup').length,
+                    rows: [...el('logList').children].map((row) => row.innerText.replace(/\\s+/g, ' ').trim())}; }""")
+    finally:
+        await page.locator("#logClearBtn").click()
+        await set_log_panel(page, was_open)
+    assert seen["elements"] == 0, f"Markup from a message became {seen['elements']} element(s) in the log"
+    assert len(seen["rows"]) == 2 and "its node-ID is markup" in seen["rows"][0] and "<img" in seen["rows"][1], \
+        f"Rows: {seen['rows']}"
+
+
 # Keep last: it reloads the page with every other host unreachable.
 @test("Dashboard works with no internet access")
 async def _(page):

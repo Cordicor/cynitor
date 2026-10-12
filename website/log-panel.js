@@ -135,7 +135,7 @@ const buildCyphalEntry = (event, kind) => {
     source: 'cyphal',
     kind,
     severity,
-    nodeId: event.publisher_node_id ?? null,
+    nodeId: Number.isInteger(event.publisher_node_id) ? event.publisher_node_id : null,
     subjectId: event.subject_id ?? null,
     subjectName: typeof event.message_type === 'string' ? event.message_type : '',
     text,
@@ -188,7 +188,7 @@ const logRowSource = (entry) => {
   }
   if (entry.nodeId == null) return ['', '', ''];
   const name = entryNodeName(entry);
-  const html = `<span class="log-row-nid">${entry.nodeId}</span>${name ? ` ${escapeHtml(name)}` : ''}`;
+  const html = `<span class="log-row-nid">${escapeHtml(entry.nodeId)}</span>${name ? ` ${escapeHtml(name)}` : ''}`;
   return [html, `${entry.nodeId} ${name}`, `node ${entry.nodeId}${name ? ` (${name})` : ''}`];
 };
 
