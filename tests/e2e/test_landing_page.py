@@ -5841,6 +5841,33 @@ async def _(page):
     assert "missing" in rows[1] and "WARN" in rows[1], f"Between 'boot' and 'burst 50': {rows[1]}"
 
 
+@test("Log panel: missing server records are marked also when it had none to show before, but a first backlog is not")
+async def _(page):
+    quiet = _LogServer()  # a log with nothing in it when first asked
+    await log_open(page, quiet)
+    try:
+        await page.evaluate(LOG_FETCH)
+        for i in range(250):
+            quiet.log(f"burst {i}")
+        await page.evaluate(LOG_FETCH)
+        after_quiet = await page.evaluate(LOG_ROWS)
+    finally:
+        await log_close(page, quiet)
+    busy = _LogServer()  # a log longer than one request takes, when first asked
+    for i in range(250):
+        busy.log(f"earlier {i}")
+    await log_open(page, busy)
+    try:
+        await page.evaluate(LOG_FETCH)
+        backlog = await page.evaluate(LOG_ROWS)
+    finally:
+        await log_close(page, busy)
+    assert len(after_quiet) == 201 and "missing" in after_quiet[0] and after_quiet[1].endswith("burst 50"), \
+        f"{len(after_quiet)} rows after a quiet start, starting: {after_quiet[:2]}"
+    assert len(backlog) == 200 and not any("missing" in row for row in backlog), \
+        f"{len(backlog)} rows of a first backlog, starting: {backlog[:2]}"
+
+
 @test("Log panel: a server log that cannot be read marks its pill, saying why, until it can")
 async def _(page):
     server = _LogServer()

@@ -436,6 +436,7 @@ let _serverLastSeenTs = '';
 let _serverKeysAtLastTs = new Set();  // entries already taken at that timestamp
 
 let _serverLogError = '';              // why the last request for the log failed, or ''
+let _serverLogRead = false;            // whether a request for the log has been answered yet
 
 const _serverEntryKey = (e) => `${e.timestamp}|${e.logger}|${e.message}`;
 
@@ -457,9 +458,14 @@ const _fetchServerLogsOnce = async () => {
     const data = await requestJson(`/api/logs?limit=${SERVER_LOG_FETCH_LIMIT}${since}`);
     const logs = Array.isArray(data.logs) ? data.logs : [];
     _serverLogError = '';
-    if (_serverLastSeenTs && logs.length >= SERVER_LOG_FETCH_LIMIT && logs[0].timestamp > _serverLastSeenTs) {
+    // As many as one request takes, the first of them newer than the newest
+    // taken: some in between were left out. Not so for the first answer,
+    // which is the backlog.
+    const full = logs.length >= SERVER_LOG_FETCH_LIMIT;
+    if (_serverLogRead && full && (!_serverLastSeenTs || logs[0].timestamp > _serverLastSeenTs)) {
       _pushEntry(_serverGapEntry(logs[0]));
     }
+    _serverLogRead = true;
     // Oldest first. Several entries can share a timestamp, so one equal to the
     // newest seen is new unless that very entry was taken.
     for (const e of logs) {
