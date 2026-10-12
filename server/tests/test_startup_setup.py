@@ -133,3 +133,15 @@ class TestLibusbOnPath:
         monkeypatch.setenv("PATH", "existing")
         startup_setup.ensure_libusb_on_path()
         assert os.environ["PATH"] == "existing"
+
+
+def test_nnvg_is_found_beside_the_interpreter_when_not_on_path(monkeypatch, tmp_path):
+    # A virtual environment's python run by its path, without activating it.
+    name = "nnvg.exe" if os.name == "nt" else "nnvg"
+    nnvg = tmp_path / name
+    nnvg.write_text("")
+    nnvg.chmod(0o755)
+    monkeypatch.setenv("PATH", "")
+    monkeypatch.setattr(startup_setup.sys, "executable", str(tmp_path / "python"))
+
+    assert Path(startup_setup._find_nnvg()) == nnvg

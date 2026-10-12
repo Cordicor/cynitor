@@ -39,14 +39,21 @@ def _ensure_sys_path(path: Path) -> None:
         sys.path.insert(0, resolved)
 
 
+def _find_nnvg() -> str | None:
+    """nnvg on PATH, or beside the interpreter: a virtual environment's
+    python run by its path, without activating it, has no Scripts/bin on PATH."""
+    return shutil.which("nnvg") or shutil.which("nnvg", path=str(Path(sys.executable).parent))
+
+
 def _run_nnvg(args: list[str], description: str) -> None:
-    if shutil.which("nnvg") is None:
+    nnvg = _find_nnvg()
+    if nnvg is None:
         logger.warning("nnvg is not available; skipping DSDL compilation step: %s", description)
         return
 
     try:
         result = subprocess.run(
-            ["nnvg", *args],
+            [nnvg, *args],
             check=False,
             capture_output=True,
             text=True,
