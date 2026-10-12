@@ -5954,6 +5954,23 @@ async def _(page):
     assert redrawn == named, f"Drawn again after the disconnect: {redrawn!r}, was {named!r}"
 
 
+@test("Log panel: a type of your own called Record is not taken for a diagnostic record")
+async def _(page):
+    was_open = await set_log_panel(page, True)
+    await page.locator("#logClearBtn").click()
+    try:
+        # myproject.Record.1.0 on subject 1234: its class is named as uavcan.diagnostic.Record's is.
+        await page.evaluate("""() => ingestLogEvent({subject_id: 1234, message_type: 'Record_1_0', publisher_node_id: 51,
+            timestamp_unix: Date.now() / 1000,
+            attributes: [{attribute: 'index', value: 7}, {attribute: 'celsius', value: 21.5}]})""")
+        await page.evaluate(INGEST_DIAGNOSTIC, [0, 3, "a real diagnostic"])
+        rows = await page.evaluate(LOG_ROWS)
+    finally:
+        await page.locator("#logClearBtn").click()
+        await set_log_panel(page, was_open)
+    assert len(rows) == 1 and "NOTICE" in rows[0] and "a real diagnostic" in rows[0], f"Rows: {rows}"
+
+
 # Keep last: it reloads the page with every other host unreachable.
 @test("Dashboard works with no internet access")
 async def _(page):

@@ -75,10 +75,9 @@ const applyLogPanelWidth = (panel) => {
 
 // ── Cyphal source helpers ───────────────────────────────────────────
 
-const isDiagnosticRecord = (event) => {
-  const mt = event?.message_type;
-  return typeof mt === 'string' && mt.startsWith('Record_');
-};
+// By its fixed subject-ID, not its class name: a type of another namespace
+// may be called Record too.
+const isDiagnosticRecord = (event) => event?.subject_id === DIAGNOSTIC_SUBJECT_ID;
 
 const isUserLoggedSubject = (event) => {
   return Number.isInteger(event?.subject_id) && state.logSubjectIds.has(event.subject_id);
