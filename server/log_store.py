@@ -69,14 +69,24 @@ class InMemoryLogStore:
         return filtered[-safe_limit:]
 
 
+# aiohttp logs every HTTP request under this name. A dashboard asks several
+# times a second, so within minutes these lines would be all the store holds.
+_HTTP_ACCESS_LOGGER = "aiohttp.access"
+
+
 class APILogHandler(logging.Handler):
-    """Logging handler that writes log records into InMemoryLogStore."""
+    """Logging handler that writes log records into InMemoryLogStore.
+
+    HTTP access lines are left out: they still go to the console.
+    """
 
     def __init__(self, store: InMemoryLogStore) -> None:
         super().__init__()
         self.store = store
 
     def emit(self, record: logging.LogRecord) -> None:
+        if record.name == _HTTP_ACCESS_LOGGER:
+            return
         try:
             self.store.add_record(record)
         except Exception:

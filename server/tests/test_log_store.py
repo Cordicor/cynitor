@@ -101,3 +101,11 @@ class TestAPILogHandler:
         logs = store.get_logs()
         assert len(logs) == 1
         assert logs[0]["message"] == "from handler"
+
+    def test_handler_keeps_http_access_lines_out(self, store):
+        """aiohttp logs every request, and a dashboard asks several times a
+        second: those lines would push every other record out of the store."""
+        handler = APILogHandler(store)
+        handler.handle(_make_record('127.0.0.1 "GET /api/nodes HTTP/1.1" 200 189', name="aiohttp.access"))
+        handler.handle(_make_record("CAN connect failed", logging.ERROR, name="main"))
+        assert [log["message"] for log in store.get_logs()] == ["CAN connect failed"]

@@ -13,7 +13,7 @@ from dsdl_manager import DsdlManager
 import can
 
 from frame_capture import FrameCaptureManager
-from log_store import InMemoryLogStore
+from log_store import APILogHandler, InMemoryLogStore
 import logging
 
 
@@ -316,6 +316,27 @@ class TestLogs:
         data = await resp.json()
         for log in data["logs"]:
             assert log["level"] == "ERROR"
+
+    @pytest.mark.asyncio
+    async def test_requests_do_not_fill_the_log_store(self, session):
+        """With logging set up as main.py sets it up, a dashboard's own requests
+        leave nothing in the store that /api/logs serves."""
+        store = InMemoryLogStore()
+        handler = APILogHandler(store)
+        access = logging.getLogger("aiohttp.access")
+        level = access.level
+        access.setLevel(logging.INFO)
+        access.addHandler(handler)
+        try:
+            server = WebSocketServer(session=session, host="127.0.0.1", port=0, log_store=store)
+            async with TestClient(TestServer(server.app)) as c:
+                for _ in range(3):
+                    await c.get("/api/logs")
+                data = await (await c.get("/api/logs")).json()
+        finally:
+            access.removeHandler(handler)
+            access.setLevel(level)
+        assert data["logs"] == []
 
     @pytest.mark.asyncio
     async def test_get_logs_no_store(self, session):

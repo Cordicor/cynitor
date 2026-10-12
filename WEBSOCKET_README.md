@@ -790,6 +790,8 @@ Response:
 }
 ```
 
+The server keeps its newest 5000 log records, oldest first in the response. Its HTTP access lines (one per request) are not among them: a dashboard polls several times a second, and they would push every other record out. They still go to the console.
+
 **Get service schema for a node (types, request fields):**
 ```bash
 curl http://localhost:8080/api/services/37
