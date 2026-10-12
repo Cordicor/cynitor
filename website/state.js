@@ -64,7 +64,7 @@ const state = {
   tableSort: { key: 'id', dir: 'asc' },
   sidebarCollapsed: false,
   logPanelCollapsed: true,
-  logPanelWidth: null,
+  logPanelWidth: null,      // in rem, as dragged; null for the stylesheet's own width
   logBuffer: [],
   logSeverityFloor: 0,
   logAutoscroll: true,
@@ -559,6 +559,9 @@ const showToast = (message, type = 'info', durationMs = 5000) => {
   }, durationMs);
 };
 
+// How many px one rem is here: sizes dragged with the mouse are kept in rem.
+const remPx = () => parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+
 // Hands the browser a file made in the page, to save under `name`.
 const downloadBlob = (blob, name) => {
   const link = document.createElement('a');
@@ -787,7 +790,7 @@ const _writeSettingsNow = () => {
     tableSort: state.tableSort,
     sidebarCollapsed: state.sidebarCollapsed,
     logPanelCollapsed: state.logPanelCollapsed,
-    logPanelWidth: state.logPanelWidth,
+    logPanelWidthRem: state.logPanelWidth,
     logSeverityFloor: state.logSeverityFloor,
     logAutoscroll: state.logAutoscroll,
     logSubjectIds: [...state.logSubjectIds],
@@ -873,8 +876,11 @@ const loadSettings = () => {
     state.logPanelCollapsed = false;
     document.querySelector('.log-panel')?.classList.remove('collapsed');
   }
-  if (typeof settings.logPanelWidth === 'number' && settings.logPanelWidth >= 0) {
-    state.logPanelWidth = settings.logPanelWidth;
+  // In rem; earlier versions saved it in px, as logPanelWidth.
+  if (settings.logPanelWidthRem > 0) {
+    state.logPanelWidth = settings.logPanelWidthRem;
+  } else if (settings.logPanelWidth > 0) {
+    state.logPanelWidth = settings.logPanelWidth / remPx();
   }
   if (Number.isInteger(settings.logSeverityFloor)
       && settings.logSeverityFloor >= 0 && settings.logSeverityFloor <= 7) {

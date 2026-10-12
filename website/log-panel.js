@@ -9,8 +9,10 @@
 //               state.logSeverityFloor, state.logAutoscroll,
 //               state.logSubjectIds, state.logShowCyphal, state.logShowServer.
 
-const LOG_PANEL_MIN_WIDTH_PX = 320;   // 20rem, as --log-w-fit in styles.css: what the controls and a readable message need
-const LOG_PANEL_MAX_WIDTH_PX = 800;   // ~50rem
+// How far the panel's edge drags, in rem. The least is --log-w-fit's in
+// styles.css: what the controls and a readable message need.
+const LOG_PANEL_MIN_WIDTH_REM = 20;
+const LOG_PANEL_MAX_WIDTH_REM = 50;
 // Entries kept, every one of them drawn: the counts, the filters and the list
 // then speak of the same rows. Drawing a new one costs about 1 ms at 1000 rows
 // and twice that at 2000.
@@ -131,7 +133,7 @@ const applyLogPanelWidth = (panel) => {
   const shell = panel.closest('.app-shell');
   if (!shell) return;
   if (state.logPanelWidth != null) {
-    shell.style.setProperty('--log-w', state.logPanelWidth + 'px');
+    shell.style.setProperty('--log-w', `${state.logPanelWidth}rem`);
   } else {
     shell.style.removeProperty('--log-w');
   }
@@ -764,8 +766,8 @@ const initLogPanel = () => {
 
   const onMove = (e) => {
     const dx = startX - e.clientX;
-    const newW = Math.max(LOG_PANEL_MIN_WIDTH_PX, Math.min(LOG_PANEL_MAX_WIDTH_PX, startW + dx));
-    if (shell) shell.style.setProperty('--log-w', newW + 'px');
+    const rem = Math.max(LOG_PANEL_MIN_WIDTH_REM, Math.min(LOG_PANEL_MAX_WIDTH_REM, (startW + dx) / remPx()));
+    if (shell) shell.style.setProperty('--log-w', `${rem}rem`);
   };
 
   const onUp = () => {
@@ -773,7 +775,7 @@ const initLogPanel = () => {
     document.removeEventListener('mouseup', onUp);
     panel.classList.remove('no-transition');
     resizeHandle.classList.remove('dragging');
-    state.logPanelWidth = panel.getBoundingClientRect().width;
+    state.logPanelWidth = panel.getBoundingClientRect().width / remPx();
     saveSettings();
   };
 

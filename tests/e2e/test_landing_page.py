@@ -6052,16 +6052,16 @@ async def _(page):
                 toggleOff: Math.abs(toggle.left + toggle.width / 2 - box(el('logPanel')).left)}; }"""
     try:
         await page.set_viewport_size({"width": 1100, "height": 700})
-        wide = await page.evaluate(measure, 800)  # dragged to its widest on a large screen
-        narrow = await page.evaluate(measure, 120)
+        wide = await page.evaluate(measure, 50)  # in rem: dragged to its widest on a large screen
+        narrow = await page.evaluate(measure, 7.5)
     finally:
         await page.evaluate("(width) => { state.logPanelWidth = width; applyLogPanelWidth(el('logPanel')); }", saved)
         await page.set_viewport_size(size)
         await set_log_panel(page, was_open)
     assert wide["main"] >= 380 and wide["panel"] >= 380, \
-        f"A panel saved 800 px wide, in a 1100 px window: panel {wide['panel']}, main area {wide['main']} px"
+        f"A panel saved 50rem wide, in a 1100 px window: panel {wide['panel']}, main area {wide['main']} px"
     assert narrow["panel"] >= 300 and not narrow["cut"], \
-        f"A panel saved 120 px wide is {narrow['panel']} px wide; controls cut off at its edge: {narrow['cut']}"
+        f"A panel saved 7.5rem wide is {narrow['panel']} px wide; controls cut off at its edge: {narrow['cut']}"
     assert wide["toggleOff"] <= 8 and narrow["toggleOff"] <= 8, \
         f"The toggle is {wide['toggleOff']} and {narrow['toggleOff']} px from the panel's edge"
 
@@ -6414,6 +6414,39 @@ async def _(page):
         f"The file's lines: {lines[1:]}"
     assert rows[1][1:] == ["ERROR", "node 50 ×2", "I2C timeout on bus 1"] and rows[1][0].endswith("Z"), \
         f"The folded error's line: {rows[1]}"
+
+
+@test("Log panel: its width is kept across reloads, saved in rem, a px one from earlier versions too")
+async def _(page):
+    was_open = await set_log_panel(page, True)
+    width = "Math.round(el('logPanel').getBoundingClientRect().width)"
+    stored = "JSON.parse(localStorage.getItem(STORAGE_KEY))"
+    try:
+        start = await page.evaluate(width)
+        handle = await page.locator("#logPanelResizeHandle").bounding_box()
+        await page.mouse.move(handle["x"] + 2, 300)
+        await page.mouse.down()
+        await page.mouse.move(handle["x"] + 2 - 96, 300, steps=4)  # 6rem wider
+        await page.mouse.up()
+        await page.wait_for_timeout(300)
+        dragged = await page.evaluate(width)
+        await page.evaluate("_writeSettingsNow()")
+        saved = await page.evaluate(f"({stored}).logPanelWidthRem")
+        await page.reload(wait_until="load")
+        await page.wait_for_timeout(500)  # it opens over 0.2 s
+        reloaded = await page.evaluate(width)
+        # As an earlier version saved it: in px, under the old name.
+        await page.evaluate(f"""() => {{ const settings = {stored}; delete settings.logPanelWidthRem;
+            settings.logPanelWidth = 480; localStorage.setItem(STORAGE_KEY, JSON.stringify(settings)); }}""")
+        await page.reload(wait_until="load")
+        await page.wait_for_timeout(500)
+        from_px = [await page.evaluate(width), await page.evaluate("state.logPanelWidth")]
+    finally:
+        await page.evaluate("state.logPanelWidth = null; applyLogPanelWidth(el('logPanel')); _writeSettingsNow()")
+        await set_log_panel(page, was_open)
+    assert dragged == start + 96 and saved == dragged / 16, f"Dragged from {start} to {dragged} px; saved as {saved} rem"
+    assert reloaded == dragged, f"After a reload it is {reloaded} px wide, was {dragged}"
+    assert from_px == [480, 30], f"A width saved as 480 px by an earlier version gives: {from_px} (px shown, rem kept)"
 
 
 # Keep last: it reloads the page with every other host unreachable.
