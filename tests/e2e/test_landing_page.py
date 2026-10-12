@@ -6344,6 +6344,41 @@ async def _(page):
         assert not contrasts["debug is coloured"], f"In the {theme} theme DEBUG's label has a colour of its own"
 
 
+@test("Log panel: a message said again within seconds adds to its row's count, not a row")
+async def _(page):
+    was_open = await set_log_panel(page, True)
+    await page.locator("#logClearBtn").click()
+    try:
+        seen = await page.evaluate("""() => {
+            const now = Date.now() / 1000;
+            const say = (after, text, node = 50, severity = 4) => ingestLogEvent({subject_id: 8184,
+                message_type: 'Record_1_1', publisher_node_id: node, timestamp_unix: now + after,
+                attributes: [{attribute: 'severity', value: severity}, {attribute: 'text', value: text}]});
+            for (let i = 0; i < 5; i++) say(i * 0.02, 'supply voltage low');  // at 50 Hz
+            say(0.2, 'supply voltage low', 51);  // another node saying it: a row of its own
+            say(0.3, 'supply voltage low');      // no longer in a row with the first five
+            say(60, 'supply voltage low');       // a minute later: not a repeat
+            const rows = [...el('logList').children];
+            return {rows: rows.map((row) => row.innerText.replace(/\\s+/g, ' ').trim().replace(/^\\S+ /, '')),
+                    tag: rows[0].querySelector('.log-row-tag')?.title, kept: state.logBuffer.length,
+                    counted: el('logSrcCyphal').querySelector('.log-source-count').textContent}; }""")
+        await set_log_panel(page, False)
+        unread = await page.evaluate("""() => { const later = Date.now() / 1000 + 120;
+            for (let i = 0; i < 3; i++) ingestLogEvent({subject_id: 8184, message_type: 'Record_1_1', publisher_node_id: 50,
+                timestamp_unix: later + i * 0.1,
+                attributes: [{attribute: 'severity', value: 5}, {attribute: 'text', value: 'I2C timeout'}]});
+            return {unread: state.logUnreadCount, kept: state.logBuffer.length}; }""")
+    finally:
+        await set_log_panel(page, True)
+        await page.locator("#logClearBtn").click()
+        await set_log_panel(page, was_open)
+    assert seen["rows"] == ["WARN 50 ×5 supply voltage low", "WARN 51 supply voltage low",
+                            "WARN 50 supply voltage low", "WARN 50 supply voltage low"], f"Rows: {seen['rows']}"
+    assert "5 times" in (seen["tag"] or "") and seen["kept"] == 4 and seen["counted"] == "4", \
+        f"The count's tooltip: {seen['tag']!r}; kept {seen['kept']}, counted {seen['counted']}"
+    assert unread == {"unread": 3, "kept": 5}, f"Shut, an error said three times in a row: {unread}"
+
+
 # Keep last: it reloads the page with every other host unreachable.
 @test("Dashboard works with no internet access")
 async def _(page):

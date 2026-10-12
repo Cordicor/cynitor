@@ -269,10 +269,12 @@ const renderLogRow = (entry) => {
   row.className = `log-row log-row-sev-${sev != null ? SEVERITY_CSS[sev] : 'none'} log-row-src-${entry.source}`;
   row.dataset.severity = String(sev ?? -1);
   row.dataset.source = entry.source;
+  row.dataset.id = String(entry.id);
   row.dataset.t = String(entry.t);
   const [srcHtml, srcText, srcTitle] = logRowSource(entry);
   const subject = entry.kind === 'subject' ? `s${entry.subjectId}` : '';
   const replay = entry.recordedT != null ? 'replay' : '';
+  const times = entry.count > 1 ? `×${entry.count}` : '';
   row.dataset.search = `${srcText} ${replay} ${subject} ${entry.text}`.toLowerCase();
   row.innerHTML = `
     <span class="log-row-time" title="${escapeHtml(new Date(entry.t * 1000).toLocaleString())}">${
@@ -282,6 +284,7 @@ const renderLogRow = (entry) => {
     <span class="log-row-text">${srcHtml ? `<span class="log-row-src" title="${escapeHtml(srcTitle)}">${srcHtml}</span> ` : ''}${
       replay ? logRowTag(replay, `Replayed from a recording: recorded ${new Date(entry.recordedT * 1000).toLocaleString()}`) : ''}${
       subject ? logRowTag(subject, entry.subjectName) : ''}${
+      times ? logRowTag(times, `Said ${entry.count} times in a row, first at ${formatLogTime(entry.firstT)}`) : ''}${
       escapeHtml(entry.text)}</span>`;
   return row;
 };
@@ -369,7 +372,65 @@ const _rowAfter = (list, t) => {
   return after;
 };
 
+// A message just listed, while the panel is shut: its toggle counts it if it
+// is a warning or worse.
+const _countUnread = (entry) => {
+  if (!state.logPanelCollapsed || !(entry.severity >= SEVERITY_WARNING)) return;
+  state.logUnreadCount++;
+  state.logUnreadWorst = Math.max(state.logUnreadWorst, entry.severity);
+  renderLogToggle();
+};
+
+// The list follows a message to its end if it was there; otherwise a message
+// listed under what is in view, which keeps its place, is counted as new below.
+const _followOrCountBelow = (entry, list, listedAtEnd, wasAtBottom) => {
+  const body = list.parentElement;
+  if (state.logAutoscroll && wasAtBottom) {
+    body.scrollTop = body.scrollHeight;
+  } else if (listedAtEnd && !state.logPanelCollapsed && !isAtBottom(body)) {
+    state.logNewBelow++;
+    state.logNewBelowWorst = Math.max(state.logNewBelowWorst, entry.severity ?? 0);
+    renderLogNewBelow();
+  }
+};
+
+// How soon after a message the same message counts as said again.
+const REPEAT_WITHIN_S = 5;
+
+// Whether `entry` says again what `last`, the newest entry, said: the same
+// message from the same sender, soon after. An error that comes back a minute
+// later is news, and gets its row.
+const _isRepeat = (entry, last) => Boolean(last)
+  && entry.t >= last.t && entry.t - last.t <= REPEAT_WITHIN_S
+  && entry.source === last.source && entry.kind === last.kind && entry.severity === last.severity
+  && entry.nodeId === last.nodeId && entry.subjectId === last.subjectId
+  && entry.loggerName === last.loggerName && entry.text === last.text
+  && (entry.recordedT == null) === (last.recordedT == null);
+
+// A repeat adds no row: the newest entry counts it and takes its time, so a
+// subject sending one text 50 times a second does not push all else out.
+const _foldRepeat = (last, entry) => {
+  last.firstT = last.firstT ?? last.t;
+  last.count = (last.count || 1) + 1;
+  last.t = entry.t;
+  const list = el('logList');
+  const row = list?.lastElementChild;
+  if (!row || row.dataset.id !== String(last.id)) return;
+  const wasAtBottom = isAtBottom(list.parentElement);
+  const fresh = renderLogRow(last);
+  applyAllFiltersToRow(fresh);
+  row.replaceWith(fresh);
+  const listed = !fresh.classList.contains('hidden');
+  if (listed) _countUnread(last);
+  _followOrCountBelow(last, list, listed, wasAtBottom);
+};
+
 const _pushEntry = (entry) => {
+  const last = state.logBuffer[state.logBuffer.length - 1];
+  if (_isRepeat(entry, last)) {
+    _foldRepeat(last, entry);
+    return;
+  }
   state.logBuffer.splice(_bufferIndexFor(entry.t), 0, entry);
   if (entry.source in _srcCounts) _srcCounts[entry.source]++;
   if (state.logBuffer.length > LOG_CAP) {
@@ -392,23 +453,12 @@ const _pushEntry = (entry) => {
     list.insertBefore(row, after);
     listed = !row.classList.contains('hidden');
   }
-  if (listed && state.logPanelCollapsed && entry.severity >= SEVERITY_WARNING) {
-    state.logUnreadCount++;
-    state.logUnreadWorst = Math.max(state.logUnreadWorst, entry.severity);
-    renderLogToggle();
-  }
+  if (listed) _countUnread(entry);
   while (list.childElementCount > LOG_CAP) {
     list.removeChild(list.firstElementChild);
   }
   updateEmptyHint();
-  if (state.logAutoscroll && wasAtBottom) {
-    list.parentElement.scrollTop = list.parentElement.scrollHeight;
-  } else if (listed && after === null && !state.logPanelCollapsed && !isAtBottom(list.parentElement)) {
-    // Added under what is in view, which keeps its place: the cue counts it.
-    state.logNewBelow++;
-    state.logNewBelowWorst = Math.max(state.logNewBelowWorst, entry.severity ?? 0);
-    renderLogNewBelow();
-  }
+  _followOrCountBelow(entry, list, listed && after === null, wasAtBottom);
 };
 
 // Cyphal WS hook (called unconditionally from connection.js).
