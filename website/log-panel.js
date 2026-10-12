@@ -3,7 +3,8 @@
 //   - cyphal: uavcan.diagnostic.Record + user-added text subjects (WS push)
 //   - server: GET /api/logs poller (Python `logging` records)
 //
-// Source of truth: state.logBuffer (in-memory ring buffer, NOT persisted).
+// Source of truth: state.logBuffer (the newest LOG_CAP entries, in time order,
+// NOT persisted). The list draws every entry, one row each, in the same order.
 // Persisted UI: state.logPanelCollapsed, state.logPanelWidth,
 //               state.logSeverityFloor, state.logAutoscroll,
 //               state.logSubjectIds, state.logShowCyphal, state.logShowServer.
@@ -33,17 +34,9 @@ const DIAGNOSTIC_SUBJECT_ID = 8184;
 const SEVERITY_WARNING = 4;
 const SEVERITY_ERROR = 5;
 
-// Per-source entry counters mirror state.logBuffer composition.
-// Kept in sync via _pushEntry, _onClearLog, _recomputeSrcCounts.
+// How many of state.logBuffer's entries each source has: _pushEntry and Clear
+// keep them in step with it.
 const _srcCounts = { cyphal: 0, server: 0 };
-
-const _recomputeSrcCounts = () => {
-  _srcCounts.cyphal = 0;
-  _srcCounts.server = 0;
-  for (const e of state.logBuffer) {
-    if (e.source in _srcCounts) _srcCounts[e.source]++;
-  }
-};
 
 // What each source is, for its pill's tooltip.
 const LOG_SOURCE_ABOUT = {
@@ -291,17 +284,11 @@ const renderLogRow = (entry) => {
 
 // ── Filters ─────────────────────────────────────────────────────────
 
-const _sourceIsShown = (src) => {
-  if (src === 'cyphal') return state.logShowCyphal;
-  if (src === 'server') return state.logShowServer;
-  return true;
-};
-
 const applyAllFiltersToRow = (row) => {
   const sev = Number(row.dataset.severity);
   const floor = state.logSeverityFloor;
   const sevPasses = sev < 0 ? true : sev >= floor;
-  const srcPasses = _sourceIsShown(row.dataset.source);
+  const srcPasses = _isSourceOn(row.dataset.source);
   const textPasses = !state.logTextFilter || row.dataset.search.includes(state.logTextFilter);
   row.classList.toggle('hidden', !(sevPasses && srcPasses && textPasses));
 };
@@ -738,7 +725,6 @@ const _onSourceToggle = (pill) => {
   }
   reapplyFiltersToAllRows();
   _refreshSourcePillBadges();
-  updateEmptyHint();
   saveSettings();
 };
 
@@ -749,9 +735,6 @@ const initLogPanel = () => {
   const collapseBtn = el('logPanelCollapseBtn');
   const resizeHandle = el('logPanelResizeHandle');
   if (!panel || !collapseBtn || !resizeHandle) return;
-
-  panel.style.width = '';
-  panel.style.minWidth = '';
 
   if (state.logPanelCollapsed) {
     panel.classList.add('collapsed');
@@ -896,7 +879,6 @@ const initLogPanel = () => {
 
   if (state.logShowServer) startServerLogPoll();
 
-  _recomputeSrcCounts();
   _refreshSourcePillBadges();
   updateEmptyHint();
 };
