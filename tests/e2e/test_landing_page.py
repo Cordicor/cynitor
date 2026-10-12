@@ -6449,6 +6449,167 @@ async def _(page):
     assert from_px == [480, 30], f"A width saved as 480 px by an earlier version gives: {from_px} (px shown, rem kept)"
 
 
+LOG_VISIBLE = """[...el('logList').querySelectorAll('.log-row:not(.hidden)')].map((row) =>
+    row.innerText.replace(/\\s+/g, ' ').trim().replace(/^\\S+ /, ''))"""  # the rows shown, without their times
+
+
+@test("Log panel: the Server source lists the server's records with their level and logger, and asks only while it is on")
+async def _(page):
+    server = _LogServer()
+    server.log("WebSocket server started")
+    server.log("two types on subject 1620", "WARNING")
+    server.log("CAN connect failed", "ERROR")
+    await log_open(page, server)
+    pill = page.locator("#logSrcServer")
+    try:
+        await page.evaluate(LOG_FETCH)
+        listed = await page.evaluate(LOG_VISIBLE)
+        await page.locator("#logSeveritySelect").select_option("4")
+        from_warning = await page.evaluate(LOG_VISIBLE)
+        await page.locator("#logSeveritySelect").select_option("0")
+        await pill.click()  # off: its rows go
+        turned_off = await page.evaluate(LOG_VISIBLE)
+        await pill.click()  # on: it asks at once, then every 2 s
+        asked_before = len(server.asked)
+        await page.wait_for_timeout(2400)
+        asked_while_on = len(server.asked) - asked_before
+        await pill.click()  # off again: it stops asking
+        asked_before = len(server.asked)
+        await page.wait_for_timeout(2400)
+        asked_while_off = len(server.asked) - asked_before
+    finally:
+        await page.locator("#logSeveritySelect").select_option("0")
+        await page.evaluate("stopServerLogPoll()")
+        await log_close(page, server)
+    assert listed == ["INFO main WebSocket server started", "WARN main two types on subject 1620",
+                      "ERROR main CAN connect failed"], f"Rows: {listed}"
+    assert from_warning == listed[1:], f"Under Min WARNING: {from_warning}"
+    assert turned_off == [], f"With the source turned off these rows still show: {turned_off}"
+    assert asked_while_on >= 1 and asked_while_off == 0, \
+        f"Requests for the log in 2.4 s: {asked_while_on} while on, {asked_while_off} while off"
+
+
+@test("Log panel: the subject picker offers the subjects that carry text, and one is logged while it is ticked")
+async def _(page):
+    was_open = await set_log_panel(page, True)
+    await page.locator("#logClearBtn").click()
+    say = """(text) => ingestLogEvent({subject_id: 1800, message_type: 'String_1_0', publisher_node_id: 50,
+        timestamp_unix: Date.now() / 1000, attributes: [{attribute: 'value', value: text}]})"""
+    box = page.locator("#logSubjectPickerPopover .log-subject-checkbox")
+    try:
+        # A text subject, a subject of numbers, and a heartbeat, whose strings are enum names.
+        await page.evaluate("""() => { for (const [subject_id, message_type, attribute, value] of [
+                [1800, 'String_1_0', 'value', 'state: idle'], [1620, 'Scalar_1_0', 'kelvin', 294.5],
+                [7509, 'Heartbeat_1_0', 'health', 'NOMINAL']]) {
+            cacheEvent({subject_id, message_type, publisher_node_id: 50, attributes: [{attribute, value}]}); } }""")
+        await page.locator("#logAddSubjectBtn").click()
+        offered = await box.evaluate_all("(boxes) => boxes.map((box) => Number(box.dataset.subjectId))")
+        await page.evaluate(say, "said before it is ticked")
+        await box.first.check()
+        await page.evaluate(say, "state: heating")
+        picked = await page.evaluate("[...state.logSubjectIds]")
+        await box.first.uncheck()
+        await page.evaluate(say, "said after it is unticked")
+        rows = await page.evaluate(LOG_VISIBLE)
+    finally:
+        await page.evaluate("""() => { closeLogPicker(); state.logSubjectIds.delete(1800); state.latestByNode.delete(50);
+            for (const id of [1800, 1620, 7509]) state.latestBySubject.delete(id);
+            state.subjectHistory.delete('1620:kelvin'); _writeSettingsNow(); }""")
+        await page.locator("#logClearBtn").click()
+        await set_log_panel(page, was_open)
+    assert offered == [1800], f"Subjects offered: {offered}"
+    assert picked == [1800] and rows == ["— 50 s1800 state: heating"], f"Picked: {picked}; rows: {rows}"
+
+
+@test("Log panel: a source turned off hides its rows and keeps their count; Clear empties the list and the counts")
+async def _(page):
+    was_open = await set_log_panel(page, True)
+    await page.locator("#logClearBtn").click()
+    seen = """() => ({rows: """ + LOG_VISIBLE + """, kept: state.logBuffer.length,
+        counts: [...document.querySelectorAll('.log-source-pill')].map((pill) => pill.innerText.replace(/\\s+/g, ' ').trim()),
+        pressed: el('logSrcCyphal').getAttribute('aria-pressed')})"""
+    try:
+        await page.evaluate(INGEST_DIAGNOSTIC, [2, 2, "from a node"])
+        await page.evaluate(INGEST_DIAGNOSTIC, [1, 4, "from a node, later"])
+        await page.evaluate("ingestServerEntry({timestamp: new Date().toISOString(), level: 'INFO', logger: 'main', message: 'from the server'})")
+        await page.locator("#logSrcServer").click()
+        both = await page.evaluate(seen)
+        await page.locator("#logSrcCyphal").click()
+        cyphal_off = await page.evaluate(seen)
+        await page.locator("#logSrcCyphal").click()
+        back_on = await page.evaluate(seen)
+        await page.locator("#logClearBtn").click()
+        cleared = await page.evaluate(seen)
+    finally:
+        if await page.evaluate("state.logShowServer"):
+            await page.locator("#logSrcServer").click()
+        if not await page.evaluate("state.logShowCyphal"):
+            await page.locator("#logSrcCyphal").click()
+        await page.locator("#logClearBtn").click()
+        await set_log_panel(page, was_open)
+    assert len(both["rows"]) == 3 and both["counts"] == ["CYPHAL 2", "SERVER 1"], f"With both sources on: {both}"
+    assert cyphal_off["rows"] == ["INFO main from the server"] and cyphal_off["counts"] == ["CYPHAL 2", "SERVER 1"] \
+        and cyphal_off["pressed"] == "false", f"With Cyphal turned off: {cyphal_off}"
+    assert back_on["rows"] == both["rows"] and back_on["pressed"] == "true", f"Turned on again: {back_on}"
+    assert cleared["rows"] == [] and cleared["kept"] == 0 and cleared["counts"] == ["CYPHAL", "SERVER"], \
+        f"After Clear: {cleared}"
+
+
+@test("Log panel: Min, autoscroll, the sources, the subjects picked and whether it is open survive a reload; the filter does not")
+async def _(page):
+    was_open = await set_log_panel(page, True)
+    try:
+        await page.locator("#logSeveritySelect").select_option("5")
+        await page.locator("#logAutoscrollBtn").click()  # off
+        await page.locator("#logSrcServer").click()  # on
+        await page.locator("#logSrcCyphal").click()  # off
+        await page.locator("#logFilterInput").fill("i2c")
+        await page.evaluate("state.logSubjectIds.add(1800); _writeSettingsNow()")
+        await page.reload(wait_until="load")
+        await page.wait_for_timeout(500)
+        kept = await page.evaluate("""() => ({min: el('logSeveritySelect').value,
+            autoscroll: el('logAutoscrollBtn').getAttribute('aria-pressed'),
+            server: el('logSrcServer').getAttribute('aria-pressed'), cyphal: el('logSrcCyphal').getAttribute('aria-pressed'),
+            subjects: [...state.logSubjectIds], open: !el('logPanel').classList.contains('collapsed'),
+            filter: el('logFilterInput').value + state.logTextFilter})""")
+    finally:
+        await page.evaluate("""() => { stopServerLogPoll();
+            Object.assign(state, {logSeverityFloor: 0, logAutoscroll: true, logShowServer: false, logShowCyphal: true});
+            state.logSubjectIds.delete(1800); _writeSettingsNow(); }""")
+        await page.reload(wait_until="load")
+        await page.wait_for_timeout(500)
+        await set_log_panel(page, was_open)
+    assert kept == {"min": "5", "autoscroll": "false", "server": "true", "cyphal": "false", "subjects": [1800],
+                    "open": True, "filter": ""}, f"After a reload: {kept}"
+
+
+@test("Log panel: with autoscroll off a new message leaves the list where it is; turned on again, the list follows")
+async def _(page):
+    was_open = await set_log_panel(page, True)
+    await page.locator("#logClearBtn").click()
+    place = "({top: Math.round(el('logPanelBody').scrollTop), atEnd: isAtBottom(el('logPanelBody'))})"
+    try:
+        for i in range(80):
+            await page.evaluate(INGEST_DIAGNOSTIC, [0, 2, f"line {i}"])
+        following = await page.evaluate(place)
+        await page.locator("#logAutoscrollBtn").click()  # off
+        await page.evaluate(INGEST_DIAGNOSTIC, [0, 2, "came with autoscroll off"])
+        held = await page.evaluate(place)
+        await page.locator("#logAutoscrollBtn").click()  # on: it goes to the end
+        on_again = await page.evaluate(place)
+        await page.evaluate(INGEST_DIAGNOSTIC, [0, 2, "came with autoscroll on"])
+        followed = await page.evaluate(place)
+    finally:
+        if not await page.evaluate("state.logAutoscroll"):
+            await page.locator("#logAutoscrollBtn").click()
+        await page.locator("#logClearBtn").click()
+        await set_log_panel(page, was_open)
+    assert following["atEnd"] and following["top"] > 0, f"80 messages in, the list should be at its end: {following}"
+    assert held == {"top": following["top"], "atEnd": False}, f"With autoscroll off, after one more message: {held}"
+    assert on_again["atEnd"] and followed["atEnd"] and followed["top"] > on_again["top"], \
+        f"Turned on again: {on_again}; after one more message: {followed}"
+
+
 # Keep last: it reloads the page with every other host unreachable.
 @test("Dashboard works with no internet access")
 async def _(page):
