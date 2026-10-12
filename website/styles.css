@@ -473,7 +473,7 @@ body {
 /* time · severity · message; the left inset clears the collapse button. */
 .log-row {
   display: grid;
-  grid-template-columns: 3.75rem 3rem minmax(0, 1fr);
+  grid-template-columns: 5.5rem 3rem minmax(0, 1fr);
   gap: 0.5rem;
   align-items: baseline;
   padding: 0.1875rem 0.875rem 0.1875rem 1.375rem;

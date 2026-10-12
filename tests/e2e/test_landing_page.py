@@ -6273,6 +6273,27 @@ async def _(page):
     assert clicked_away["shut"] and clicked_away["expanded"] == "false", f"After a click elsewhere: {clicked_away}"
 
 
+@test("Log panel: a message's time is to the millisecond, as the Debug tab's frames, with its date in the tooltip")
+async def _(page):
+    was_open = await set_log_panel(page, True)
+    await page.locator("#logClearBtn").click()
+    try:
+        seen = await page.evaluate("""() => {
+            const second = new Date(2026, 9, 12, 11, 13, 40).getTime() / 1000;
+            for (const [after, text] of [[0.25, 'a quarter past the second'], [0.5, 'half past it']]) {
+                ingestLogEvent({subject_id: 8184, message_type: 'Record_1_1', publisher_node_id: 50,
+                    timestamp_unix: second + after,
+                    attributes: [{attribute: 'severity', value: 2}, {attribute: 'text', value: text}]});
+            }
+            return [...el('logList').querySelectorAll('.log-row-time')].map((cell) =>
+                ({time: cell.textContent, title: cell.title, cut: cell.scrollWidth > cell.clientWidth})); }""")
+    finally:
+        await page.locator("#logClearBtn").click()
+        await set_log_panel(page, was_open)
+    assert [cell["time"] for cell in seen] == ["11:13:40.250", "11:13:40.500"], f"Times shown: {seen}"
+    assert all("2026" in cell["title"] and not cell["cut"] for cell in seen), f"Tooltips, and whether a time is cut: {seen}"
+
+
 # Keep last: it reloads the page with every other host unreachable.
 @test("Dashboard works with no internet access")
 async def _(page):

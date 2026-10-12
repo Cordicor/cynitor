@@ -228,13 +228,10 @@ const buildServerEntry = (raw) => {
 
 // ── Render ──────────────────────────────────────────────────────────
 
-const formatLogTime = (unix) => {
-  const d = new Date(unix * 1000);
-  const hh = String(d.getHours()).padStart(2, '0');
-  const mm = String(d.getMinutes()).padStart(2, '0');
-  const ss = String(d.getSeconds()).padStart(2, '0');
-  return `${hh}:${mm}:${ss}`;
-};
+// "11:13:40.250": to the millisecond, as the Debug tab times its frames, so a
+// message can be set beside the frames around it.
+const formatLogTime = (unix) =>
+  `${formatPlotTime(unix)}.${String(new Date(unix * 1000).getMilliseconds()).padStart(3, '0')}`;
 
 const isAtBottom = (container) => {
   return container.scrollHeight - container.scrollTop - container.clientHeight <= AUTOSCROLL_STICKY_PX;
@@ -278,7 +275,8 @@ const renderLogRow = (entry) => {
   const replay = entry.recordedT != null ? 'replay' : '';
   row.dataset.search = `${srcText} ${replay} ${subject} ${entry.text}`.toLowerCase();
   row.innerHTML = `
-    <span class="log-row-time">${escapeHtml(formatLogTime(entry.t))}</span>
+    <span class="log-row-time" title="${escapeHtml(new Date(entry.t * 1000).toLocaleString())}">${
+      escapeHtml(formatLogTime(entry.t))}</span>
     <span class="log-row-sev" title="${escapeHtml(sev != null ? SEVERITY_LABELS[sev] : 'no severity')}">${
       sev != null ? SEVERITY_SHORT[sev] : '—'}</span>
     <span class="log-row-text">${srcHtml ? `<span class="log-row-src" title="${escapeHtml(srcTitle)}">${srcHtml}</span> ` : ''}${
