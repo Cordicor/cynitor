@@ -6249,6 +6249,30 @@ async def _(page):
     assert not scrolled_back["shown"], f"After scrolling to the end oneself: {scrolled_back}"
 
 
+@test("Log panel: Escape shuts the subject picker, and its button says whether it is open")
+async def _(page):
+    was_open = await set_log_panel(page, True)
+    add = page.locator("#logAddSubjectBtn")
+    seen = """() => ({shut: el('logSubjectPickerPopover').classList.contains('hidden'),
+        expanded: el('logAddSubjectBtn').getAttribute('aria-expanded'), focus: document.activeElement.id})"""
+    try:
+        before = await page.evaluate(seen)
+        await add.click()
+        opened = await page.evaluate(seen)
+        await page.keyboard.press("Escape")
+        escaped = await page.evaluate(seen)
+        await add.click()
+        await page.mouse.click(5, 5)  # a click elsewhere shuts it too
+        clicked_away = await page.evaluate(seen)
+    finally:
+        await page.evaluate("el('logSubjectPickerPopover').classList.add('hidden'); document.activeElement.blur()")
+        await set_log_panel(page, was_open)
+    assert before["shut"] and before["expanded"] == "false", f"Before it is opened: {before}"
+    assert not opened["shut"] and opened["expanded"] == "true", f"Opened: {opened}"
+    assert escaped == {"shut": True, "expanded": "false", "focus": "logAddSubjectBtn"}, f"After Escape: {escaped}"
+    assert clicked_away["shut"] and clicked_away["expanded"] == "false", f"After a click elsewhere: {clicked_away}"
+
+
 # Keep last: it reloads the page with every other host unreachable.
 @test("Dashboard works with no internet access")
 async def _(page):

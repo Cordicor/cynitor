@@ -203,7 +203,7 @@ const bind = () => {
     const addBtn = el('logAddSubjectBtn');
     if (logPick && !logPick.classList.contains('hidden')
       && !logPick.contains(e.target) && !(addBtn && addBtn.contains(e.target))) {
-      logPick.classList.add('hidden');
+      closeLogPicker();
     }
   });
 

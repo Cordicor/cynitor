@@ -521,17 +521,24 @@ const renderLogPickerPopover = () => {
   }
 };
 
+// Shuts the picker; its button says so. Escape and a click elsewhere (app.js) do it too.
+const closeLogPicker = () => {
+  el('logSubjectPickerPopover')?.classList.add('hidden');
+  el('logAddSubjectBtn')?.setAttribute('aria-expanded', 'false');
+};
+
 const toggleLogPickerPopover = () => {
   const popover = ensureLogPickerPopover();
   const btn = el('logAddSubjectBtn');
   if (!btn) return;
-  if (popover.classList.contains('hidden')) {
-    renderLogPickerPopover();
-    positionPopover(popover, btn);
-    popover.classList.remove('hidden');
-  } else {
-    popover.classList.add('hidden');
+  if (!popover.classList.contains('hidden')) {
+    closeLogPicker();
+    return;
   }
+  renderLogPickerPopover();
+  positionPopover(popover, btn);
+  popover.classList.remove('hidden');
+  btn.setAttribute('aria-expanded', 'true');
 };
 
 // ── Server log poller ───────────────────────────────────────────────
@@ -780,6 +787,12 @@ const initLogPanel = () => {
     addBtn.addEventListener('click', (e) => {
       e.stopPropagation();
       toggleLogPickerPopover();
+    });
+    // Escape shuts the picker and gives the focus back to its button.
+    document.addEventListener('keydown', (e) => {
+      if (e.key !== 'Escape' || el('logSubjectPickerPopover').classList.contains('hidden')) return;
+      closeLogPicker();
+      addBtn.focus();
     });
   }
 
