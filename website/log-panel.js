@@ -10,8 +10,10 @@
 
 const LOG_PANEL_MIN_WIDTH_PX = 224;   // ~14rem
 const LOG_PANEL_MAX_WIDTH_PX = 800;   // ~50rem
-const LOG_BUFFER_CAP = 2000;
-const LOG_DOM_CAP = 1000;
+// Entries kept, every one of them drawn: the counts, the filters and the list
+// then speak of the same rows. Drawing a new one costs about 1 ms at 1000 rows
+// and twice that at 2000.
+const LOG_CAP = 1000;
 const AUTOSCROLL_STICKY_PX = 16;
 const SERVER_LOG_POLL_MS = 2000;
 const SERVER_LOG_FETCH_LIMIT = 200;
@@ -254,15 +256,15 @@ const _bufferIndexFor = (t) => {
 const _rowAfter = (list, t) => {
   let after = null;
   for (let r = list.lastElementChild; r && Number(r.dataset.t) > t; r = r.previousElementSibling) after = r;
-  if (after === list.firstElementChild && after && list.childElementCount >= LOG_DOM_CAP) return undefined;
+  if (after === list.firstElementChild && after && list.childElementCount >= LOG_CAP) return undefined;
   return after;
 };
 
 const _pushEntry = (entry) => {
   state.logBuffer.splice(_bufferIndexFor(entry.t), 0, entry);
   if (entry.source in _srcCounts) _srcCounts[entry.source]++;
-  if (state.logBuffer.length > LOG_BUFFER_CAP) {
-    const excess = state.logBuffer.length - LOG_BUFFER_CAP;
+  if (state.logBuffer.length > LOG_CAP) {
+    const excess = state.logBuffer.length - LOG_CAP;
     for (let i = 0; i < excess; i++) {
       const s = state.logBuffer[i].source;
       if (s in _srcCounts) _srcCounts[s]--;
@@ -279,7 +281,7 @@ const _pushEntry = (entry) => {
     applyAllFiltersToRow(row);
     list.insertBefore(row, after);
   }
-  while (list.childElementCount > LOG_DOM_CAP) {
+  while (list.childElementCount > LOG_CAP) {
     list.removeChild(list.firstElementChild);
   }
   updateEmptyHint();
@@ -309,8 +311,7 @@ const rebuildLogList = () => {
   const list = el('logList');
   if (!list) return;
   list.replaceChildren();
-  const slice = state.logBuffer.slice(-LOG_DOM_CAP);
-  for (const entry of slice) {
+  for (const entry of state.logBuffer) {
     const row = renderLogRow(entry);
     applyAllFiltersToRow(row);
     list.appendChild(row);

@@ -99,7 +99,7 @@ Open in browser:
   - Cyphal row layout: `time · n<id> · s<id> · MessageType · text`; Server: `time · LEVEL · logger · message`
   - SERVER pill turns amber with a corner dot, its tooltip saying why, while nothing can come from it: no backend connection, or a log that cannot be read
   - The server's log is asked only for what came since the last record shown; where more came than one request takes, a line says records are missing there
-  - Buffer cap: 2000 entries in memory, never persisted
+  - The newest 1000 messages are kept, in memory only, and all of them are listed: the counts and the filters cover every one
 - Server down overlay:
   - Detects when the frontend web server (port 5500) becomes unreachable
   - Shows full-screen overlay with reconnection status and startup instructions

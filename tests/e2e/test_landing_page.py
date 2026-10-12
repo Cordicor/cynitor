@@ -5859,6 +5859,30 @@ async def _(page):
     assert answering == {"marked": False, "title": ""}, f"Once it answers: {answering}"
 
 
+@test("Log panel: every message it counts is in its list, so the filters find the oldest too")
+async def _(page):
+    was_open = await set_log_panel(page, True)
+    await page.locator("#logClearBtn").click()
+    try:
+        seen = await page.evaluate("""() => {
+            for (let i = 0; i < 1200; i++) ingestLogEvent({subject_id: 8184, message_type: 'Record_1_1',
+                publisher_node_id: 50, timestamp_unix: Date.now() / 1000 - 100 + i * 0.01,
+                attributes: [{attribute: 'severity', value: 2}, {attribute: 'text', value: `kept ${i}.`}]});
+            const filter = (text) => { el('logFilterInput').value = text; el('logFilterInput').dispatchEvent(new Event('input')); };
+            const oldest = state.logBuffer[0].text;
+            filter(oldest);
+            const found = el('logList').querySelectorAll('.log-row:not(.hidden)').length;
+            filter('');
+            return {kept: state.logBuffer.length, listed: el('logList').childElementCount, oldest, found,
+                    counted: Number(el('logSrcCyphal').querySelector('.log-source-count').textContent)}; }""")
+    finally:
+        await page.locator("#logClearBtn").click()
+        await set_log_panel(page, was_open)
+    assert seen["kept"] == seen["listed"] == seen["counted"], \
+        f"After 1200 messages it keeps {seen['kept']}, lists {seen['listed']} and counts {seen['counted']}"
+    assert seen["found"] == 1, f"The filter finds {seen['found']} rows for the oldest message kept, {seen['oldest']!r}"
+
+
 # Keep last: it reloads the page with every other host unreachable.
 @test("Dashboard works with no internet access")
 async def _(page):
