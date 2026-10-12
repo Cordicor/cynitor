@@ -393,7 +393,7 @@ async def _(page):
     nodes = await page.evaluate(GRAPH_NODES_DRAWN)
     ghosts = sorted((n["shownId"], n["name"]) for key, n in nodes.items() if key.startswith("dev:uid:"))
     expected = [("37", "org.example.old_sensor_a"), ("38", "org.example.old_sensor_b")]
-    assert ghosts == expected, f"Displaced devices drawn as {ghosts}, of {list(nodes)}"
+    assert ghosts == expected, f"Devices that lost their node-ID drawn as {ghosts}, of {list(nodes)}"
 
 
 @test("Graph: only what is unusual is coloured, and nothing pulses")
@@ -555,15 +555,17 @@ async def _(page):
 @test("Graph: the status strip counts what needs a look, and picks it out")
 async def _(page):
     chips = [" ".join(t.split()) for t in await page.locator("#graphStatus .graph-chip").all_inner_texts()]
-    for expected in ("1 offline", "2 displaced", "1 unusual health", "1 silent"):
+    # Offline is every device not on the bus: node 40, and the two remembered ones that hold no node-ID.
+    for expected in ("3 offline", "1 unusual health", "1 silent"):
         assert expected in chips, f"Missing {expected!r} in the strip: {chips}"
+    assert not any("displaced" in chip for chip in chips), f"The strip still counts devices as displaced: {chips}"
     offline = page.locator('#graphStatus [data-focus="offline"]')
     await offline.click()
     dimmed = await page.evaluate("""() => Object.fromEntries([...document.querySelectorAll('#graphContainer .graph-node')]
         .map(el => [d3.select(el).datum().id, el.classList.contains('graph-dim')]))""")
     await offline.click()
-    assert dimmed["dev:40"] is False and all(d for key, d in dimmed.items() if key != "dev:40"), \
-        f"Picking 'offline' left these lit: {[k for k, d in dimmed.items() if not d]}"
+    lit = sorted(key for key, dim in dimmed.items() if not dim)
+    assert lit == ["dev:40", "dev:uid:" + "aa" * 16, "dev:uid:" + "bb" * 16], f"Picking 'offline' left these lit: {lit}"
 
 
 @test("Graph: 'Open in Nodes' selects the device in the Nodes tab")
