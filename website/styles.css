@@ -4560,6 +4560,14 @@ details.svc-history-entry[open] > summary::before {
 }
 
 @media (max-width: 60rem) {
+  /* Stacked, the page is taller than the window, the log panel last: the
+     page scrolls, which side by side it never needs to. */
+  body {
+    height: auto;
+    overflow-x: hidden;
+    overflow-y: auto;
+  }
+
   .app-shell {
     flex-direction: column;
     height: auto;
@@ -4615,6 +4623,11 @@ details.svc-history-entry[open] > summary::before {
     max-height: 12rem;
   }
 
+  /* Shut, it gives up its height too: its rows would leave a blank to scroll past. */
+  .log-panel.collapsed {
+    height: 0;
+  }
+
   .log-panel-resize-handle {
     display: none;
   }
@@ -4628,6 +4641,11 @@ details.svc-history-entry[open] > summary::before {
     border-right: none;
     transform: none;
     opacity: 1;
+  }
+
+  /* Under the pointer it stays in its row: side by side, the same shift centres it. */
+  .log-panel-collapse-btn:hover {
+    transform: none;
   }
 
   .log-panel-collapse-btn svg {

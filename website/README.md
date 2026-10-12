@@ -93,6 +93,7 @@ Open in browser:
   - Vertical resize handle between nodes table and detail panel
 - Right log panel (hidden by default, toggled from the right edge):
   - Its left edge drags to resize it, and a double-click there resets it; the width is kept. It is never narrower than its controls need (20rem), and in a small window takes no more than leaves the main area room
+  - In a window under 60rem (960 px) wide it sits under everything else, a few rows high, and the page scrolls down to it
   - Unified timeline of Cyphal diagnostic messages, user-picked text subjects, and the backend's `/api/logs` stream
   - Per-source toggle pills (`CYPHAL`, `SERVER`) with live count badges
   - `Min: TRACE…ALERT` severity floor applies across all sources via mapped levels; user-added subjects always show

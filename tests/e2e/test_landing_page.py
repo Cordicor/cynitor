@@ -6039,6 +6039,41 @@ async def _(page):
         f"The toggle is {wide['toggleOff']} and {narrow['toggleOff']} px from the panel's edge"
 
 
+@test("Log panel: in a narrow window, where it sits under everything else, the page scrolls down to it")
+async def _(page):
+    size = page.viewport_size
+    was_open = await set_log_panel(page, True)
+    await page.locator("#logClearBtn").click()
+    box = """() => { const panel = el('logPanel').getBoundingClientRect();
+        return {top: Math.round(panel.top), bottom: Math.round(panel.bottom), height: Math.round(panel.height),
+                toggleTop: Math.round(el('logPanelCollapseBtn').getBoundingClientRect().top),
+                toggleBottom: Math.round(el('logPanelCollapseBtn').getBoundingClientRect().bottom), window: innerHeight}; }"""
+    try:
+        for i in range(40):
+            await page.evaluate(INGEST_DIAGNOSTIC, [0, 2, f"narrow window {i}"])
+        await page.set_viewport_size({"width": 900, "height": 700})
+        await page.wait_for_timeout(400)
+        await page.mouse.move(450, 300)
+        await page.mouse.wheel(0, 5000)
+        await page.wait_for_timeout(300)
+        opened = await page.evaluate(box)
+        await set_log_panel(page, False)
+        await page.wait_for_timeout(300)
+        await page.mouse.wheel(0, 5000)
+        await page.wait_for_timeout(300)
+        shut = await page.evaluate(box)
+    finally:
+        await page.evaluate("scrollTo(0, 0); el('logClearBtn').click()")  # shut, its button takes no real click
+        await page.set_viewport_size(size)
+        await set_log_panel(page, was_open)
+    assert 0 <= opened["top"] and opened["bottom"] <= opened["window"] and opened["height"] >= 100, \
+        f"Scrolled to the end of a 900x700 window, the open panel is at {opened}"
+    assert shut["height"] == 0 and shut["toggleBottom"] <= shut["window"], \
+        f"Shut, the panel should take no room and leave its toggle in reach: {shut}"
+    # The pointer is still on the toggle it clicked: it must not move from under it.
+    assert shut["toggleTop"] == shut["bottom"], f"Under the pointer the toggle left its row: {shut}"
+
+
 # Keep last: it reloads the page with every other host unreachable.
 @test("Dashboard works with no internet access")
 async def _(page):
