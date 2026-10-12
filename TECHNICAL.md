@@ -359,6 +359,36 @@ windowed builds is clean. The `.AppImage` is a convenience wrapper; the
 PyInstaller binary is already self-contained and needs only libc, so the
 AppImage adds packaging rather than portability.
 
+### Building
+
+Tagged releases attach prebuilt artifacts, so building is only needed for
+unreleased changes or another architecture.
+
+```bash
+pip install -r server/requirements.txt pyinstaller
+python3 server/startup_setup.py --recompile   # generate compiled DSDL first
+cd packaging && ./build.sh                    # binary + .deb + .AppImage
+```
+
+`./build.sh binary` stops after the executable, which is all a plain
+copy-and-run deployment needs. The full run also needs `fakeroot` for the
+package and downloads `appimagetool` on first use. Everything lands in
+`packaging/out/`, with the bare executable at `packaging/dist/cynitor-server`.
+
+On Windows there is no `.deb` or AppImage, only the executable. From the
+repository root, in PowerShell:
+
+```powershell
+pip install -r server/requirements.txt pyinstaller
+python server/startup_setup.py --recompile
+cd packaging; python -m PyInstaller cynitor-server.spec --noconfirm
+.\smoke-test.ps1          # optional: what CI checks on every build
+```
+
+The result is `packaging\dist\cynitor-server.exe`.
+
+### The spec
+
 `cynitor-server.spec` drives PyInstaller. Key concerns:
 
 - **Hidden imports** — pycyphal and python-can use dynamic imports extensively. The spec enumerates every submodule our code touches.
@@ -414,7 +444,7 @@ Backend unit tests live in `server/tests/`:
 cd server && PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest tests/ -v -p pytest_asyncio.plugin
 ```
 
-`PYTEST_DISABLE_PLUGIN_AUTOLOAD=1` prevents ROS2 plugin conflicts in some environments. Required: `pip install pytest pytest-asyncio aiohttp`.
+`PYTEST_DISABLE_PLUGIN_AUTOLOAD=1` prevents ROS2 plugin conflicts in some environments. Required: `pip install pytest pytest-asyncio aiohttp`, or `pip install -r server/requirements-dev.txt`, which adds the test runner to the runtime requirements.
 
 Frontend e2e tests live in `tests/e2e/` and serve `website/` themselves (or reuse a server already on port 5500):
 

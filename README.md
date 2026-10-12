@@ -1,205 +1,168 @@
 # Cynitor
 
 [![Tests](https://github.com/OpenCyphal-Garage/cynitor/actions/workflows/test.yml/badge.svg?branch=dev)](https://github.com/OpenCyphal-Garage/cynitor/actions/workflows/test.yml)
+[![Latest release](https://img.shields.io/github/v/release/OpenCyphal-Garage/cynitor)](https://github.com/OpenCyphal-Garage/cynitor/releases/latest)
 
-A standalone dashboard for monitoring [Cyphal](https://opencyphal.org/) (UAVCAN) networks over CAN bus.
+A dashboard for [Cyphal](https://opencyphal.org/) (UAVCAN) networks on CAN and
+CAN FD. Cynitor watches the bus in real time, lists every node it finds, and
+lets you inspect, plot and record what they publish, call their services and
+edit their registers. A GUI alternative to
+[yakut monitor](https://github.com/OpenCyphal/yakut).
 
-Cynitor watches the bus in real time, lists every node it discovers, and lets you drill into individual subjects to inspect message attributes and plot numeric values over time. GUI alternative to [yakut monitor](https://github.com/OpenCyphal/yakut).
+**[Download the latest release](https://github.com/OpenCyphal-Garage/cynitor/releases/latest)**
+· [all releases and their notes](https://github.com/OpenCyphal-Garage/cynitor/releases)
 
-![Cynitor dashboard](cynitor.png)
+![Cynitor with the demo nodes: node 50 selected and its temperature plotted](cynitor.png)
 
-## Quick Start
+*The [demo nodes](#try-it-without-hardware) in the Nodes view.*
 
-Cynitor is a single server: it talks to the CAN interface and serves the dashboard to any modern browser. Run it, open the address it prints, and you are done.
+## How it works
 
-### 0. Clone with submodules
+```mermaid
+flowchart LR
+    nodes["Cyphal nodes"] <-->|"CAN / CAN FD"| adapter["CAN adapter"]
+    adapter <--> server["Cynitor<br>one program, port 8080"]
+    server <-->|"HTTP + WebSocket"| browser["Dashboard<br>in any browser"]
+    server --- data[("Data folder<br>history, recordings, logs")]
+```
 
-The regulated UAVCAN DSDL types live in a git submodule. Without them the backend starts but cannot decode any traffic.
+Cynitor is one program: it talks to the CAN adapter and serves the dashboard.
+The machine on the bus needs nothing else, and whoever looks at it needs only
+a browser.
+
+## Install
+
+### From a release
+
+No Python needed. Take the file for your system from the
+[latest release](https://github.com/OpenCyphal-Garage/cynitor/releases/latest):
+
+| System | File | Then |
+|---|---|---|
+| Debian, Ubuntu | `cynitor-server_<version>_amd64.deb` | `sudo dpkg -i` it, then run `cynitor-server` |
+| Other Linux | `cynitor-server-<version>-x86_64.AppImage`, or the bare binary, `cynitor-server-<version>-linux-x86_64` | `chmod +x` it, then run it |
+| Windows 10, 11 | `cynitor-server-<version>-windows-x86_64.exe` | Run it from a terminal |
+
+- All of them are for x86-64, hold the same server and open no window: you
+  use it from a browser.
+- The Linux builds are made on Ubuntu 22.04 and run on it and anything newer.
+- The Windows build includes what CANable (candleLight) adapters need. PEAK,
+  Kvaser, Vector and IXXAT adapters need their vendor's driver. Windows may
+  warn about an unrecognised app the first time, as the executable is not
+  code-signed.
+
+### From source
 
 ```bash
 git clone --recurse-submodules https://github.com/OpenCyphal-Garage/cynitor.git
-# or, if you already cloned:
-git submodule update --init --recursive
-```
-
-### 1. Backend
-
-Requires **Python 3.10 or newer**.
-
-```bash
 cd cynitor/server
-pip install -r requirements.txt   # pycyphal + python-can + nunavut (nnvg) + aiohttp + numpy
-python3 main.py --can vcan0       # connect to a known interface
-# or
-python3 main.py                   # pick the interface from the UI later
+pip install -r requirements.txt
+python3 main.py
 ```
 
-The HTTP server starts on `http://localhost:8080`, and serves the dashboard
-there as well as the API. Opening that address in a browser is enough; the
-separate frontend server below is only needed if you are editing the frontend
-and want to reload without restarting the backend.
+Needs Python 3.10 or newer. The submodule holds the standard DSDL types:
+without it Cynitor starts but decodes nothing.
+`git submodule update --init --recursive` fetches it into a clone made without.
 
-#### Optional tools
+The examples below say `cynitor-server`; from source, that is `python3 main.py`
+in `server/`.
 
-These extend functionality but are not required to run the dashboard — the code degrades gracefully when each is absent.
+## Connect
 
-- **Linux:** `sudo apt install can-utils` — provides `canbusload` for the bus-utilization sparkline on SocketCAN interfaces. Without it utilization stays at 0%; everything else works. Other adapters (see [Platforms](#platforms)) need nothing: Cynitor measures their load itself.
-- **Windows / macOS:** install the `python-can` backend your CAN adapter needs (PCAN, Kvaser, Vector, SLCAN-over-USB, …) — see [Platforms](#platforms) for the transport-spec syntax.
-- `pip install -r server/requirements-dev.txt` — only if you want to run the backend test suite (adds `pytest` and `pytest-asyncio` on top of the runtime requirements).
+1. Start Cynitor. It prints its address, `http://127.0.0.1:8080/` by default.
+2. Open the address in a browser and click **Connect**.
+3. Pick the CAN interface and click the second **Connect**.
 
-### 2. Open the dashboard
+Every adapter but SocketCAN also needs the bus bitrate. The list starts
+unselected, because a wrong guess disrupts the bus, and remembers what you
+last used on each adapter. An adapter that is not listed goes under
+**Other…** (see [CAN adapters](#can-adapters)).
 
-Point a browser at `http://localhost:8080` and click **Connect** in the
-sidebar. That is the whole frontend: nothing to install, nothing to build.
+To connect at startup instead, name the interface:
+`cynitor-server --can can0`. Either way, the dashboard can disconnect and
+connect to another interface without restarting Cynitor.
 
-Then pick the CAN interface from the list and click the second **Connect**.
-For anything but SocketCAN, also choose the bus bitrate: the list starts
-unselected, because a wrong guess disrupts the bus, and remembers the
-bitrate you last used on each adapter. An adapter that is not listed can be
-typed in under **Other…** (see [Platforms](#platforms)).
+### Try it without hardware
 
-#### Editing the frontend
-
-Only if you are changing `website/` and want reloads without restarting the
-backend, serve it separately:
-
-```bash
-cd website && python3 -m http.server 5500
-```
-
-Then open `http://localhost:5500` instead. The address field defaults to
-`http://localhost:8080`, which is where the backend is listening.
-
-### 3. No hardware? Try the demo nodes
-
-On Linux, a virtual CAN interface and `tools/demo_nodes.py` give Cynitor
-something to watch:
+On Linux, with Cynitor installed from source, a virtual CAN interface and the
+demo nodes give it something to watch:
 
 ```bash
 sudo ip link add dev vcan0 type vcan && sudo ip link set vcan0 up
-python3 tools/demo_nodes.py --iface vcan0     # add --fd on a CAN FD vcan (mtu 72)
+python3 tools/demo_nodes.py --iface vcan0
 ```
 
-The demo must speak what Cynitor does: Cynitor runs CAN FD on a vcan whose
-MTU is 72 (`cat /sys/class/net/vcan0/mtu`), and there a demo without `--fd`
-receives none of its requests (no name, no services).
+Then connect Cynitor to `vcan0`.
 
-Then connect Cynitor to `vcan0`. Node 50 (`demo.sensor`) publishes a
-temperature named in its registers (decoded and plotted), a velocity no
-register names (click subject 1700 in Subjects to have its type guessed),
-its state as text on subject 1800 (add it to the log panel with its **+**),
-and diagnostics every 3 s at every severity from DEBUG to CRITICAL (the log
-panel). Its Services tab restarts it, and
-**Update firmware…** makes it act like a bootloader reading the file from
-Cynitor. `--conflict` adds a second node on the same node-ID after 10 s.
-`--node-id 51` runs a second demo beside the first: each subject then has
-two publishers, which the plots and Compare show apart.
+| Try | What it shows |
+|---|---|
+| Node 50 (`demo.sensor`), subject 1620 | A temperature named in the node's registers: decoded and plotted |
+| **Subjects**, subject 1700 | A velocity no register names: click it and Cynitor guesses its type |
+| The log panel, at the right edge | Diagnostics every 3 s, at every severity from DEBUG to CRITICAL. Its **+** adds subject 1800, the node's state as text |
+| The node's **Servers** tab | Restart restarts it. **Update firmware…** makes it read the file from Cynitor, as a bootloader does |
+| `--conflict` | A second node on the same node-ID after 10 s, which Cynitor flags |
+| `--node-id 51`, in a second terminal | A second demo: every subject then has two publishers, which the plots and Compare show apart |
+| `--fd` | Needed on a CAN FD vcan (`cat /sys/class/net/vcan0/mtu` says 72). Cynitor runs CAN FD there, and a demo without `--fd` gets none of its requests: no name, no services |
 
 ## Features
 
-- **Live node table** — sortable, filterable, with state, health, mode, software version, message rate, uptime, and per-row publisher/subscriber/server/client port lists (a node's own ports first, the standard ones muted). Colour marks only what needs a look: a node in CAUTION or WARNING. On a narrower window the least telling columns hide first. Pin favourites to the top with a star, hide offline nodes you don't care about.
-- **Subject browser** — a second view (toggle via sidebar tabs) that lists every subject and service on the network, with full type names (standard ports named even before anything is decoded), rates, and when each was last seen. Expand any service inline to send requests to specific nodes without leaving the subject-centric view. A subject no register names the type of says so; click it, and Cynitor listens to it and lists the types its messages fit, each with the latest message decoded as it, custom DSDL types first. Pick one (or type any compiled type) and it decodes, plots and records like any other, in later sessions too.
-- **Per-subject inspection** — click a node, then a subject card in the detail panel, to see live message attributes and a 60-second history.
-- **Service interaction** — invoke services on remote nodes with auto-discovered request schemas, expandable composite fields, and a persistent call history (stored in SQLite, survives restarts). Nodes that serve `uavcan.node.ExecuteCommand` get Restart and Factory reset buttons, and **Update firmware…**: pick a `.bin` and Cynitor serves it to the node's Cyphal bootloader (e.g. Zubax Kocherga), with a progress bar as the node reads it.
-- **Node history** — lifecycle tracking with health/mode changes, restarts, service calls, and per-subject telemetry summaries. Two nodes sharing a node-ID, or publishing one subject with different types, are flagged there. Retained for 30 days.
-- **Network topology** — D3 force-directed graph of device and subject nodes with directional pub/sub links and animated live-traffic. Three view modes (nodes only / node-centric / subject-centric), drag-to-pin with persistent positions, adjacency highlighting, hide-system / hide-offline / per-node-or-subject hide with a restore badge, inline device rename, gravity bias by total links / channels / rate / payload, and per-link rate/payload overlays.
-- **Multi-attribute plots** — each numeric attribute gets its own panel with its own y-axis, so a fast-growing uptime doesn't squash a small voltage reading. Interactive three-zone legend pills for color, line style, and visibility.
-- **Hover crosshair + tooltip** with timestamp and per-series values that update in real time as data scrolls under the cursor. In Compare, drag to pan, Ctrl+scroll to zoom, double-click to reset, and click to pause where a graph's Click pauses is on.
-- **Compare view** — independent graphs for side-by-side multi-series comparison with derived series (delta, ratio, moving average, min/max, rate of change), thresholds, timeline markers (Shift+click), freehand drawing (Alt+drag), crosshair sync across graphs, and workspace export/import.
-- **DSDL Inspector** — searchable tree of all loaded DSDL types with bus-activity indicators (which types are actually being seen on the wire), field-level search, and dependency navigation. Create, edit, compile and delete custom DSDL types, kept in the data folder (`dsdl/custom`, compiled into `dsdl/compiled`), with a compile-state lock. Compiling runs inside Cynitor, so it works in the packaged binaries too.
-- **Recordings** — capture filtered events into per-recording SQLite stores with `max_length` / `max_events` limits and `stop_on_limit`. Quick-save the last N seconds from the global buffer, duplicate a configuration with "New like this", edit limits on live recordings without stopping them, and export per recording as CSV or JSONL. Replay any recording through the live UI with play/pause/seek/speed controls.
-- **Raw CAN logs** — record every frame on the bus (Classic, CAN FD and error frames) to a candump `.log` file from the Record view, and download it: python-can, SavvyCAN and can-utils open it, and `log2asc` turns it into Vector ASC. Play a saved log back (1×, 10×, 100×, or as fast as possible) with CAN disconnected, and the dashboard shows it as if it were the live bus.
-- **Right log panel** — hidden by default, resizable; merges live `uavcan.diagnostic.Record` (subject 8184), any subject you add that carries text, and the backend's Python logs (polled from `/api/logs`) into one timeline in time order. Each row shows its time, severity and who said it (the node's ID and name, or the backend logger); warnings and errors are marked at the row's edge. Per-source toggle pills with live count badges, a minimum severity across all sources, a text filter, and an amber disconnect indicator when the backend is unreachable.
-- **Dark / light theme**, sidebar collapse, resizable detail panel.
-- **Auto-reconnect** on transient backend or frontend-server outages.
-- **Persisted layout** — connection state, table sort, column widths, filters, theme, panel sizes all restored on reload from `localStorage`.
+| Where | What you get |
+|---|---|
+| **Nodes** | Every node with its state, health, mode, software version, message rate, uptime and ports. Sort, filter, pin favourites, hide offline nodes. Only what needs a look is coloured |
+| **Node details** | Click a node: its subjects as live cards, a plot of any numeric field, its services, its registers (read and write), and 30 days of history: restarts, health and mode changes, node-ID conflicts |
+| **Subjects** | Every subject and service on the bus, with its type, rate and when it was last seen. A subject whose type no register names can have it guessed from its messages |
+| **Services** | Call any service from a form built from its type; the call history survives restarts. Nodes that serve `uavcan.node.ExecuteCommand` get Restart, Factory reset and **Update firmware…**, which serves a `.bin` to the node's Cyphal bootloader |
+| **Graph** | The network as a graph of nodes and subjects, with live traffic on its links |
+| **Compare** | Any series side by side, in independent graphs: derived series (delta, ratio, moving average, min/max, rate of change), thresholds, markers, drawings, synced crosshairs, export and import |
+| **DSDL** | Every loaded type in a searchable tree, marked when it is seen on the bus. Create, edit and compile your own types |
+| **Record** | Record chosen subjects, services and nodes, up to a time or a number of events; save the last N seconds; export CSV or JSONL; replay a recording through the dashboard. Raw CAN logs in candump format, which python-can, SavvyCAN and can-utils read, play back as if they were the live bus |
+| **Debug** | The bus's health, transport diagnostics, and a raw CAN frame monitor |
+| **Log panel** | One timeline of `uavcan.diagnostic.Record` messages, any text subject you add, and Cynitor's own log, filtered by severity and text |
 
-## Setup Modes
+Cynitor also gives plug-and-play nodes their node-IDs when no other allocator
+is on the bus, has a dark and a light theme, reconnects by itself, keeps your
+layout in the browser, and needs no internet access.
+[website/README.md](website/README.md) describes every view in full.
 
-| Mode | Command | When to use |
-|------|---------|-------------|
-| Direct | `python3 main.py --can vcan0` | You know the interface and want CAN running on launch |
-| Selection | `python3 main.py` | You want to pick the interface from the UI dropdown |
+## CAN adapters
 
-In selection mode the HTTP server starts immediately, but pycyphal is not initialized until the user posts to `/api/can/connect`. The same UI flow lets you disconnect and reconnect to a different interface without restarting the backend. Naming an interface that does not exist is not fatal: the server warns, lists what is available, and falls back to selection mode.
+| System | Status | Adapters the dashboard finds |
+|---|---|---|
+| **Linux** | The primary platform: release builds, tested in CI | SocketCAN interfaces: `can0`, `vcan0`, `slcan0`, … |
+| **Windows** | Release build, tested in CI | PEAK, Kvaser, Vector and IXXAT through their vendor drivers; CANable with candleLight firmware over USB, or with slcan firmware by its serial port |
+| **macOS** | From source only, and not tested: no build, no CI run | Takes the same path as Windows, but `requirements.txt` installs the USB packages for candleLight adapters on Windows only |
 
-Other options:
+An adapter that is not found can be named, with `--can` or under **Other…**:
 
-| Flag | Effect |
-|------|--------|
-| `--bitrate <n>` | Bus speed in bit/s. Required with `--can` for every adapter Cynitor opens itself (PCAN, gs_usb, slcan, …); there is no default, because a wrong guess disrupts the bus. Ignored for SocketCAN, whose bitrate is set with `ip link` |
-| `--data-bitrate <n>` | CAN FD data-phase speed in bit/s. Opens the adapter as CAN FD (PEAK, Kvaser, Vector, IXXAT, candleLight with CAN FD firmware, CANable 2.0 with slcan firmware); leave it out for Classic CAN. Ignored for SocketCAN, which runs CAN FD when the interface is set up for it (see [CAN FD](#can-fd)) |
-| `--bind <host>` | Listen on `<host>` (default `127.0.0.1`; `0.0.0.0` to expose on the network) |
-| `--port <n>` | Listen on `<n>` instead of 8080 |
-| `--data-dir <dir>` | Keep history, recordings and the allocator's node-ID table in `<dir>` instead of the default data folder (see [Where data is kept](#where-data-is-kept)) |
-| `--no-frontend` | Serve only the API and WebSocket, not the dashboard |
-| `--recompile` | Force `nnvg` to regenerate compiled DSDL from `dsdl_messages/` |
-| `--version` | Print the version and exit |
+| Adapter | Name | CAN FD |
+|---|---|---|
+| SocketCAN (Linux) | `can0`, `vcan0`, `slcan0`, … | When the interface is set up for it |
+| PEAK | `pcan:PCAN_USBBUS1` | Yes |
+| Kvaser, Vector, IXXAT | `kvaser:<channel>`, `vector:<channel>`, `ixxat:<channel>` | Yes |
+| CANable, candleLight firmware | `gs_usb:0`. On Linux it is a SocketCAN interface | If its firmware does CAN FD; a CANable 1.0's does not |
+| CANable, slcan firmware | `slcan:COM5@115200`. On Linux, `slcan:/dev/ttyACM0` with no `slcand` attached | CANable 2.0, at 2 or 5 Mbit/s only |
+| Anything else python-can drives | `<interface>:<channel>` | No |
 
-## Where data is kept
+A name with a `:` in it is passed on as it is, without being checked against
+what was found. The older `pythoncan:pcan:PCAN_USBBUS1` spelling still works.
 
-Bus history (24 h), node history (30 days), service-call history, recordings,
-remembered device names, and the allocator's table of which device got which
-node-ID are kept in SQLite files in one data folder, whatever folder Cynitor
-is started from, as are the types you set for subjects. Raw CAN logs go in its `raw/` subfolder, firmware files for updates in `firmware/`:
+SocketCAN and the adapters Cynitor opens itself differ in a few ways:
 
-| OS | Data folder |
-|----|-------------|
-| Windows | `%LOCALAPPDATA%\Cynitor` |
-| Linux | `~/.local/share/cynitor` (`$XDG_DATA_HOME/cynitor`); `/var/lib/cynitor` for the systemd service |
-| macOS | `~/Library/Application Support/Cynitor` |
+| | SocketCAN | Every other adapter |
+|---|---|---|
+| Bitrate | Set with `ip link`; `--bitrate` is ignored | You give it, and it has to match the bus |
+| CAN FD | Follows the interface | You give the data bitrate |
+| Bus load | From `canbusload` (`sudo apt install can-utils`) | Measured by Cynitor |
+| Error counters, error-passive and bus-off state | Shown | Not available |
+| Other programs on the adapter | Fine | No: stop other CAN tools first |
 
-`--data-dir <dir>` or the `CYNITOR_DATA_DIR` environment variable chooses
-another. The startup banner shows which one is in use.
-
-Custom DSDL types created in the DSDL Inspector live there too, in `dsdl/`.
-Custom types from the source tree's `dsdl_messages/custom/` are copied (not
-moved) into it on the first start.
-
-Earlier versions wrote these files to the folder Cynitor was started from
-(for the systemd service, `/`). If they are found there, they are moved into
-the data folder once, on the first start; data already in the data folder is
-never overwritten.
-
-## Platforms
-
-**Linux** is the primary platform — SocketCAN (`vcan0`, `can0`, `slcan0`, …) is auto-discovered and the bus-load monitor uses `canbusload` from `can-utils`.
-
-**Windows / macOS** are supported with reduced introspection. The dashboard lists the adapters it can find — PEAK, Kvaser, Vector and IXXAT through their vendor drivers, CANable/candleLight adapters over USB, and CANable adapters with slcan firmware by their serial port. Anything else can be named as `<python-can interface>:<channel>`, under **Other…** in the dashboard or with `--can`; any string that contains `:` is passed to pycyphal as is, without being checked against the list. Unlike SocketCAN, these adapters run at whatever bitrate Cynitor opens them with, so you have to give it, and it has to match the bus. There is no default: a node joining at the wrong speed floods the bus with error frames.
-
-```bash
-# PEAK PCAN-USB
-python3 main.py --can pcan:PCAN_USBBUS1 --bitrate 500000
-# CANable / candleLight firmware
-python3 main.py --can gs_usb:0 --bitrate 500000
-# CANable / slcan firmware
-python3 main.py --can slcan:COM5@115200 --bitrate 500000
-# PEAK PCAN-USB FD, CAN FD with a 2 Mbit/s data phase
-python3 main.py --can pcan:PCAN_USBBUS1 --bitrate 500000 --data-bitrate 2000000
-# candleLight firmware with CAN FD, a 4 Mbit/s data phase
-python3 main.py --can gs_usb:0 --bitrate 1000000 --data-bitrate 4000000
-# CANable 2.0 / slcan firmware, CAN FD with its 5 Mbit/s data phase
-python3 main.py --can slcan:COM5@115200 --bitrate 1000000 --data-bitrate 5000000
-
-# Or connect a running backend
-curl -X POST http://localhost:8080/api/can/connect \
-  -H 'Content-Type: application/json' \
-  -d '{"interface":"pcan:PCAN_USBBUS1","bitrate":500000}'
-```
-
-On Windows, `pip install -r requirements.txt` also installs what candleLight adapters (`gs_usb`) need, including the libusb DLL. The older `pythoncan:pcan:PCAN_USBBUS1` spelling is still accepted.
-
-Most such adapters can be opened by only one program at a time. Cynitor opens the adapter once and shares it between its own parts internally, so it works with them — but nothing else can use the adapter while Cynitor is connected. Stop other CAN tools first.
-
-On every platform, the node-ID Cynitor uses for itself is picked the way `yakut accommodate` does it (listen to heartbeats, choose a free one), without needing yakut. Set `UAVCAN__NODE__ID` to choose it yourself.
-
-For these adapters Cynitor measures bus load itself, from the frames passing through it, counted the way `canbusload` counts them by default (worst-case bit stuffing; for CAN FD, the data phase at the data rate). Error frames are counted too, when the adapter's driver reports them; they show in the Debugging view. It also notices a CANable being unplugged and disconnects, as it does when SocketCAN reports the interface gone; other adapters' drivers report that themselves. What it cannot see off SocketCAN are the controller's error counters and error-passive/bus-off state. The rest of the stack — REST/WebSocket server, DSDL Inspector, recordings, log panel, telemetry — works the same on all three OSes. Install whichever `python-can` backend your CAN adapter needs (PCAN, Kvaser, Vector, SLCAN-over-USB, …) and pass its transport string.
+There is no default bitrate: a node that joins at the wrong speed floods the
+bus with error frames.
 
 ### CAN FD
 
-Cyphal/CAN FD works on both paths:
-
-- **SocketCAN** (Linux): Cynitor follows the interface. Set it up for CAN FD before connecting and Cynitor uses it, with nothing to pass. The interface has to be down for the change:
+- **SocketCAN:** set the interface up for CAN FD before you connect, and
+  Cynitor follows it. The interface has to be down for the change:
 
   ```bash
   sudo ip link set can0 down
@@ -209,140 +172,121 @@ Cyphal/CAN FD works on both paths:
   sudo ip link set vcan0 down && sudo ip link set vcan0 mtu 72 && sudo ip link set vcan0 up
   ```
 
-  Bus load then needs a `canbusload` from mid-2021 or later; older ones, such as Ubuntu 22.04's (2020.11), count Classic CAN frames only, so CAN FD load reads low.
-- **Adapters Cynitor opens itself**, every adapter on Windows and macOS: give the data-phase bitrate with `--data-bitrate`, or pick it under the bitrate in the dashboard, which offers it where the adapter can run CAN FD:
-  - PEAK, Kvaser, Vector and IXXAT, through their vendor drivers.
-  - candleLight (`gs_usb`) adapters whose firmware does CAN FD, and other gs_usb devices that do. python-can's gs_usb runs Classic CAN only, so for CAN FD Cynitor drives the adapter itself, the way the Linux kernel's gs_usb driver does. Each adapter says whether its firmware does CAN FD: one that does not, such as a CANable 1.0, is offered Classic CAN only. Cynitor works out the bit timing from the adapter's CAN clock and limits, aiming at an 80 % sample point in both phases, as for PEAK.
-  - The CANable 2.0 with its slcan firmware, which has two data-phase presets: 2 and 5 Mbit/s.
+- **Every other adapter:** give the data-phase bitrate, with `--data-bitrate`
+  or under the bitrate in the dashboard, which offers it where the adapter
+  can run CAN FD:
 
-  On Linux a candleLight adapter is a SocketCAN interface, set up for CAN FD as above. An slcan adapter can be named by its tty instead, such as `slcan:/dev/ttyACM0`, with no `slcand` attached to it.
+  ```bash
+  cynitor-server --can gs_usb:0 --bitrate 1000000 --data-bitrate 4000000
+  ```
 
-Every node on a CAN FD bus must be set up for CAN FD: Cynitor sends its own frames as CAN FD frames there, which a Classic-only controller answers with error frames.
+  For PEAK and candleLight adapters the bit timing aims at an 80 % sample
+  point in both phases.
+
+Every node on a CAN FD bus has to run CAN FD: Cynitor sends CAN FD frames
+there, which a Classic-only controller answers with error frames.
 
 ### Cyphal v1.1
 
-Cynitor speaks Cyphal v1.0. Cyphal v1.1 (in draft; named topics, 16-bit subject-IDs on CAN) uses a frame format v1.0 does not have, so a v1.1 device would just look silent. Cynitor notices that traffic and says so under the CAN status: which nodes send it, and on hover how much, on which subject-IDs and when. To see a v1.1 device's data, pin its topics to v1.0 subject-IDs on the device (`name#1234`).
+Cynitor speaks Cyphal v1.0. Cyphal v1.1 (in draft) uses a frame format v1.0
+does not have, so a v1.1 device would just look silent. Cynitor notices that
+traffic and says so under the CAN status: which nodes send it, and on hover
+how much, and on which subject-IDs. To see such a device's data, pin its
+topics to v1.0 subject-IDs on the device (`name#1234`).
 
-## Deploying to a Server
+## Options
 
-The backend serves the dashboard as well as the API, so a deployment is one
-binary and clients need nothing but a browser.
+| Flag | Effect |
+|---|---|
+| `--can <name>` | Connect at startup. Without it, or if the name does not exist, you pick the interface in the dashboard |
+| `--bitrate <n>` | Bus speed in bit/s. Required with `--can` for every adapter but SocketCAN |
+| `--data-bitrate <n>` | CAN FD data-phase speed in bit/s; leave it out for Classic CAN. Ignored for SocketCAN |
+| `--bind <host>` | Listen on `<host>`. Default `127.0.0.1`; `0.0.0.0` for the whole network |
+| `--port <n>` | Listen on `<n>`. Default 8080 |
+| `--data-dir <dir>` | Keep the data in `<dir>` |
+| `--no-frontend` | Serve only the API and the WebSocket, not the dashboard |
+| `--recompile` | From source: compile the DSDL types again |
+| `--version` | Print the version and exit |
 
-Grab a build from the [latest release](https://github.com/OpenCyphal-Garage/cynitor/releases):
-a `.deb`, an `.AppImage`, or the bare binary for Linux, and a single `.exe`
-for Windows 10 and 11 (x64). All of them contain the same server and none of
-them open a window.
+And from the environment:
 
-```bash
-sudo dpkg -i cynitor-server_*_amd64.deb    # installs to /usr/bin, adds a systemd unit
-# or just run it
-chmod +x cynitor-server-*-x86_64.AppImage && ./cynitor-server-*-x86_64.AppImage
-```
+| Variable | Effect |
+|---|---|
+| `CYNITOR_AUTH_TOKEN` | The token the API and the event stream then ask for |
+| `CYNITOR_DATA_DIR` | The same as `--data-dir` |
+| `UAVCAN__NODE__ID` | Cynitor's own node-ID. Without it, Cynitor listens to heartbeats and takes a free one |
 
-On Windows, run the `.exe` from a terminal, e.g.
-`.\cynitor-server-1.1.0-windows-x86_64.exe`. It includes what candleLight
-adapters (CANable) need; other adapters need their vendor's driver
-installed (PEAK, Kvaser, Vector, IXXAT). Windows may warn about an
-unrecognised app the first time, as the executable is not code-signed.
+## Where data is kept
 
-Nothing else is needed on that machine: no Python, no pip, no web server.
+One folder, whatever folder Cynitor is started from. The startup banner shows
+which:
 
-```bash
-CYNITOR_AUTH_TOKEN=$(openssl rand -hex 24) ./cynitor-server --bind 0.0.0.0
-```
+| System | Data folder |
+|---|---|
+| Linux | `~/.local/share/cynitor` (`$XDG_DATA_HOME/cynitor`); `/var/lib/cynitor` for the systemd service |
+| Windows | `%LOCALAPPDATA%\Cynitor` |
+| macOS | `~/Library/Application Support/Cynitor` |
 
-The server prints the token at startup when run from a terminal, so you can
-copy it straight out. It is written directly to the terminal rather than
-logged, so supervised runs do not leak it into the system journal.
+It holds bus history (24 h), node history (30 days), service-call history,
+recordings, device names, the types you set for subjects, and the allocator's
+table of which device got which node-ID. Raw CAN logs are in `raw/`, firmware
+files in `firmware/`, your DSDL types in `dsdl/`.
 
-Point a browser at `http://<that-machine>:8080`. The dashboard loads, prompts
-once for the token, and remembers it. It works out its own API address from
-the page it was served from, so nothing needs configuring per client.
+Earlier versions wrote next to where Cynitor was started. Data found there is
+moved in once, on the first start, and never overwrites what the data folder
+already has. Custom DSDL types in a source tree's `dsdl_messages/custom/` are
+copied in on the first start.
 
-**Set a token whenever you bind beyond loopback.** Without one the API is open
-to anyone who can reach the port, and that API commands nodes on the bus. The
-server logs a warning if you bind to `0.0.0.0` with no token.
-
-Whatever the binding, web pages from other sites cannot use the API through a
-visitor's browser: requests they send are refused (see the browser origin
-policy in [WEBSOCKET_README.md](WEBSOCKET_README.md)). The dashboard needs no
-internet access either; its libraries are served by Cynitor itself.
-
-The dashboard's own files are served without a token, since a browser has to
-load the page before it can ask for one. Only the API and the event stream are
-protected.
-
-### API only
-
-If you are consuming the data with your own tooling rather than the dashboard,
-`--no-frontend` serves just the REST API and the WebSocket stream:
+## Use it from another machine
 
 ```bash
-CYNITOR_AUTH_TOKEN=... ./cynitor-server --bind 0.0.0.0 --no-frontend
+CYNITOR_AUTH_TOKEN=$(openssl rand -hex 24) cynitor-server --bind 0.0.0.0
 ```
 
-Requests for the dashboard then return 404 while the API is unchanged. The
-startup banner states which mode is running. See
-[WEBSOCKET_README.md](WEBSOCKET_README.md) for the full API reference.
+Open `http://<that-machine>:8080`: the dashboard asks for the token once and
+remembers it.
 
-## Building It Yourself
+- **Set a token whenever you bind beyond loopback.** Without one, anyone who
+  can reach the port can command the nodes on the bus.
+- Cynitor prints the token on the terminal at startup and keeps it out of its
+  log, so it does not end up in the system journal.
+- The token protects the API and the event stream. The dashboard's own files
+  are served without it, as a browser has to load the page before it can ask.
+- Pages of other websites cannot use the API through your browser (see the
+  browser origin policy in [WEBSOCKET_README.md](WEBSOCKET_README.md)).
+- With `--no-frontend` Cynitor serves only the API, for your own tooling.
 
-Tagged releases attach prebuilt artifacts, so this is only needed for
-unreleased changes or another architecture.
+### As a service
 
-```bash
-pip install -r server/requirements.txt pyinstaller
-python3 server/startup_setup.py --recompile   # generate compiled DSDL first
-cd packaging && ./build.sh                    # binary + .deb + .AppImage
-```
-
-`./build.sh binary` stops after the executable, which is all you need for a
-plain copy-and-run deployment. The full run also needs `fakeroot` for the
-package and downloads `appimagetool` on first use.
-
-Everything lands in `packaging/out/`, with the bare executable at
-`packaging/dist/cynitor-server`.
-
-On Windows there is no `.deb` or AppImage, only the executable. From the
-repository root, in PowerShell:
-
-```powershell
-pip install -r server/requirements.txt pyinstaller
-python server/startup_setup.py --recompile
-cd packaging; python -m PyInstaller cynitor-server.spec --noconfirm
-.\smoke-test.ps1          # optional: what CI checks on every build
-```
-
-The result is `packaging\dist\cynitor-server.exe`.
-
-### Running it as a service
-
-The `.deb` installs a systemd unit, disabled by default. Configure it in
-`/etc/default/cynitor-server`, then:
+The `.deb` installs a systemd unit, disabled by default. Set its options in
+`/etc/default/cynitor-server`, with `CYNITOR_AUTH_TOKEN` before it binds
+beyond loopback, then:
 
 ```bash
 sudo systemctl enable --now cynitor-server
 ```
 
-Set `CYNITOR_AUTH_TOKEN` there before binding beyond loopback. The unit runs
-as root because raw SocketCAN sockets need `CAP_NET_RAW`; the file comments
-show how to narrow that to a dedicated user.
+The unit runs as root, because raw SocketCAN sockets need `CAP_NET_RAW`; its
+comments show how to narrow that to a dedicated user.
 
 ## Troubleshooting
 
-**"Frontend Server Unavailable" overlay appears.** Only happens when the dashboard is served separately for frontend work: the static-file server on port 5500 stopped responding. Restart it with `cd website && python3 -m http.server 5500`. Cynitor reloads automatically once it's back. Served from the backend, this cannot occur.
-
-**Backend won't connect to CAN.** Check that the interface exists (`ip link show vcan0`) and that you have permission to open it. Check `/api/logs` or stderr for the full error.
-
-**A node shows up but never answers (no name, no registers).** Its heartbeats reach Cynitor, but Cynitor's requests do not reach it. The log says so, and on a CAN FD bus names the usual cause: a node running Classic CAN receives none of Cynitor's CAN FD frames. Run every node in CAN FD, or set the interface to Classic CAN (see [CAN FD](#can-fd)).
-
-**No nodes appearing.** Confirm there are publishers on the bus (`yakut sub uavcan.node.Heartbeat.1.0`). On a virtual interface (`vcan0`) you also need a publisher on the same `vcan` interface — the backend doesn't generate traffic on its own. `tools/demo_nodes.py` is one (see [No hardware?](#3-no-hardware-try-the-demo-nodes)).
-
-
-**Port already in use.** For the backend, pass `--port 9099` (or any free port). For the separate frontend server used during development, run `python3 -m http.server 8088` and open the matching URL.
+| What you see | What to do |
+|---|---|
+| No nodes, or only node 1, Cynitor's own allocator | Check that something publishes: `yakut sub uavcan.node.Heartbeat.1.0`. A `vcan` is empty until something publishes on it, such as the [demo nodes](#try-it-without-hardware) |
+| A node with no name and no registers | Its heartbeats reach Cynitor, but Cynitor's requests do not reach it. On a CAN FD bus the usual cause is a node running Classic CAN: run every node in CAN FD, or set the interface to Classic CAN |
+| CAN will not connect | Check that the interface exists (`ip link show can0`) and that you may open it. The log panel's Server source and stderr have the full error |
+| Bus load stays at 0 % on SocketCAN | Install `can-utils` |
+| CAN FD bus load reads low on SocketCAN | `canbusload` from before mid-2021, such as Ubuntu 22.04's, counts Classic CAN frames only |
+| **Server Unavailable** over the page | Cynitor stopped. Start it again and the page reloads by itself |
+| Port 8080 is taken | `--port 9099`, or any free port |
 
 ## Documentation
 
-- **[TECHNICAL.md](TECHNICAL.md)** — Architecture, component breakdown, data flow, project structure, extension points.
-- **[WEBSOCKET_README.md](WEBSOCKET_README.md)** — Full REST + WebSocket API contract.
-- **[Releases](https://github.com/OpenCyphal-Garage/cynitor/releases)** — Per-version notes and prebuilt downloads.
+- [website/README.md](website/README.md): the dashboard, view by view, and
+  how to serve it separately while you edit it.
+- [WEBSOCKET_README.md](WEBSOCKET_README.md): the REST and WebSocket API.
+- [TECHNICAL.md](TECHNICAL.md): architecture, tests, building the binaries
+  yourself, and how releases are made.
+- [Releases](https://github.com/OpenCyphal-Garage/cynitor/releases): downloads
+  and notes for every version.
