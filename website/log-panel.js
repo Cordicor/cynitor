@@ -547,9 +547,17 @@ const initLogPanel = () => {
     applyLogPanelWidth(panel);
   }
 
+  // The toggle is a bare arrow at the window's edge: it says what it opens.
+  const showPanelState = () => {
+    collapseBtn.setAttribute('aria-expanded', String(!state.logPanelCollapsed));
+    collapseBtn.title = state.logPanelCollapsed ? 'Show the log panel' : 'Hide the log panel';
+  };
+  showPanelState();
+
   collapseBtn.addEventListener('click', () => {
     state.logPanelCollapsed = !state.logPanelCollapsed;
     panel.classList.toggle('collapsed', state.logPanelCollapsed);
+    showPanelState();
     if (!state.logPanelCollapsed) {
       applyLogPanelWidth(panel);
       rebuildLogList();

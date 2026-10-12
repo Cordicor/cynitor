@@ -260,6 +260,9 @@ body {
   overflow: hidden;
   opacity: 0;
   border-left: none;
+  /* Hidden once the collapse has played, so its controls leave the Tab order. */
+  visibility: hidden;
+  transition: width 0.2s, min-width 0.2s, opacity 0.2s, visibility 0s 0.2s;
 }
 
 .log-panel-resize-handle {

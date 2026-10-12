@@ -5907,6 +5907,32 @@ async def _(page):
     assert filtered == 1, f"'replay' in the filter lists {filtered} rows"
 
 
+@test("Log panel: shut, none of its controls takes the focus, and its toggle says whether it is open")
+async def _(page):
+    toggle = page.locator("#logPanelCollapseBtn")
+    says = "[el('logPanelCollapseBtn').getAttribute('aria-expanded'), el('logPanelCollapseBtn').title]"
+    was_open = await set_log_panel(page, False)
+    try:
+        await page.wait_for_timeout(400)  # the collapse plays for 0.2 s
+        focusable = await page.evaluate("""() => [...document.querySelectorAll(
+            '#logPanel button, #logPanel input, #logPanel select')]
+            .filter((e) => { e.focus(); return document.activeElement === e; })
+            .map((e) => e.id)""")
+        shut = await page.evaluate(says)
+        await set_log_panel(page, True)
+        opened = await page.evaluate(says)
+        await page.locator("#logFilterInput").focus()
+        usable = await page.evaluate("document.activeElement.id")
+    finally:
+        await page.evaluate("document.activeElement.blur()")
+        await set_log_panel(page, was_open)
+    assert not focusable, f"Shut, these log panel controls still take the focus: {focusable}"
+    assert shut[0] == "false" and "show" in shut[1].lower(), f"Shut, the toggle says: {shut}"
+    assert opened[0] == "true" and "hide" in opened[1].lower(), f"Open, the toggle says: {opened}"
+    assert usable == "logFilterInput", f"Open again, the filter box takes the focus: {usable}"
+    assert await toggle.get_attribute("aria-controls") == "logPanel", "The toggle does not name the panel it controls"
+
+
 # Keep last: it reloads the page with every other host unreachable.
 @test("Dashboard works with no internet access")
 async def _(page):
