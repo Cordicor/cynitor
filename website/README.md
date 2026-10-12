@@ -107,9 +107,13 @@ Open in browser:
   - A source's pill turns amber with a corner dot, its tooltip saying why, while it is on with nothing to come from: no backend, no CAN bus (and no replay) for `CYPHAL`, a log that cannot be read for `SERVER`. Otherwise the tooltip says what the source is
   - An empty list says why it is empty: no backend, no CAN bus, or which of Min, the filter and the source toggles hide the messages it keeps
   - Scrolled up from its end, the list keeps its place, and a count of the messages that came below (`3 new ↓`, amber or red if a warning or an error is among them) goes to them on a click
-  - Escape, or a click elsewhere, shuts the subject picker
+  - The subject picker takes the focus when it opens; Escape, or a click elsewhere, shuts it
   - The server's log is asked only for what came since the last record shown; where more came than one request takes, a line says records are missing there
   - The newest 1000 messages are kept, in memory only, and all of them are listed: the counts and the filters cover every one
+  - Text subjects fill what room the list has, but once their rows are more than half of it a new message pushes out the oldest of them, not what the nodes and the server reported
+  - Scrolled up, what is in view stays put as old rows go and late ones come in above; the list sees to that itself, so it holds in Safari too
+  - Saved open, the panel is in place as the page loads; it slides only when its toggle is used
+  - For screen readers: every control is named, the shut panel is out of the Tab order, and a status line says once when the first warning comes while it is shut, and once more for the first error
 - Server down overlay:
   - Detects when the frontend web server (port 5500) becomes unreachable
   - Shows full-screen overlay with reconnection status and startup instructions
