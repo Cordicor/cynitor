@@ -26,7 +26,10 @@ Checks, in order:
   4c. Cyphal v1.1 transfers on the wire (16-bit subject-IDs) are noticed,
      though not decoded;
   5. an adapter that disappears ends the session with an error;
-  6. the databases are written to the session's data folder.
+  6. the databases are written to the session's data folder;
+  7. a raw log plays back as a bus;
+  8. the simulated bus (sim:classic, or sim:fd with --fd) runs its demo
+     sensor, which Cynitor sees, names and decodes.
 
 With --fd the device and Cynitor run Cyphal/CAN FD (500 kbit/s, 2 Mbit/s data
 phase), and Cynitor's own frames on the wire must be CAN FD frames.
@@ -335,6 +338,20 @@ async def run() -> None:
         ended = await wait_for(lambda: not session.is_running, timeout=15)
         check(ended and "end of the raw log" in (session.last_error or ""),
               f"playback ends with the log: {session.last_error!r}")
+
+        # The simulated bus: its demo devices, with nothing but Cynitor.
+        sim = "sim:fd" if FD else "sim:classic"
+        await session.connect(sim)
+        check(session.is_running and session.simulation is not None and session.can_fd == FD,
+              f"connected to the simulated bus {sim}")
+        named = await wait_for(lambda: session.telemetry.get_all_nodes_info()["nodes"]
+                               .get(DEVICE_NODE_ID, {}).get("name") == "demo.sensor")
+        check(named, f"its demo sensor appears, named, on node-ID {DEVICE_NODE_ID}")
+        decoded = await wait_for(lambda: TEMPERATURE_SUBJECT_ID in session.telemetry.latest_by_subject)
+        check(decoded, f"and its subject {TEMPERATURE_SUBJECT_ID} decodes")
+
+        await session.disconnect()
+        check(not session.is_running and session.simulation is None, "disconnecting stops the simulated bus")
     finally:
         temperature_task.cancel()
         velocity_task.cancel()

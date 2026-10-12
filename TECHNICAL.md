@@ -69,8 +69,8 @@ EventLogger.start()        SQLite persistence
 | `websocket_server.py` | aiohttp HTTP+WS server, REST endpoints, per-client WebSocket filtering, periodic metrics broadcast, node history and service call history endpoints; also serves `website/` so one binary hosts both the API and the dashboard; refuses API and event-stream requests from browser pages of other sites (`_browser_request_allowed`) |
 | `event_logger.py` | SQLite persistence with batch writes, `asyncio.to_thread` for non-blocking I/O, configurable retention, node lifecycle history (30-day), service call history with response bodies |
 | `allocator.py` | Node-ID allocator detection / fallback (CentralizedAllocator), 10s re-check |
-| `can_config.py` | Interface-spec and bitrate rules: bare names mean SocketCAN, `--bitrate` is required for anything else, `UAVCAN__CAN__BITRATE` is published as `"<n> <n>"` (`"<n> <data>"` for CAN FD); which adapters can run CAN FD, at which data bitrates where they have presets (slcan's 2 and 5 Mbit/s), and whether a SocketCAN interface is set up for it |
-| `can_discovery.py` | Lists the adapters the dashboard offers besides SocketCAN: python-can vendor detection (PEAK, Kvaser, Vector, IXXAT), and off Linux a gs_usb USB scan, each device asked whether its firmware does CAN FD, and slcan serial ports by USB ID; cached for 10 s in `AdapterCatalog` |
+| `can_config.py` | Interface-spec and bitrate rules: bare names mean SocketCAN, `sim:classic` and `sim:fd` the simulated buses (at rates of their own, `SIM_BUSES`), `--bitrate` is required for anything else, `UAVCAN__CAN__BITRATE` is published as `"<n> <n>"` (`"<n> <data>"` for CAN FD); which adapters can run CAN FD, at which data bitrates where they have presets (slcan's 2 and 5 Mbit/s), and whether a SocketCAN interface is set up for it |
+| `can_discovery.py` | Lists the adapters the dashboard offers besides SocketCAN: python-can vendor detection (PEAK, Kvaser, Vector, IXXAT), and off Linux a gs_usb USB scan, each device asked whether its firmware does CAN FD, and slcan serial ports by USB ID; cached for 10 s in `AdapterCatalog`. The simulated buses are listed on every OS (`simulated_adapters`) |
 | `can_hub.py` | Opens a non-SocketCAN adapter once and bridges it to an in-process python-can `virtual` channel that the allocator probe, allocator and scanner all open instead; also picks Cynitor's node-ID from heartbeats on that channel; for those adapters it also opens CAN FD adapters with pycyphal's parameters, where pycyphal has them (slcan takes its two rates as a `BitTimingFd`, gs_usb goes through `gs_usb_fd`), measures bus load (`HubBusLoad`, from forwarded frames' time on the wire, counted as canbusload counts: worst-case stuffing, CAN FD data phase at the data rate), counts error frames, and, for python-can's gs_usb, whose reads hide USB errors, checks every few seconds that the device is still enumerated |
 | `gs_usb_fd.py` | CAN FD for candleLight (gs_usb) adapters, which python-can's gs_usb runs as Classic CAN only: `GsUsbFdBus` is a python-can bus speaking the protocol's CAN FD extensions as the Linux driver does (data-phase timing limits and request, the FD mode flag, 64-byte frames, echoes dropped, a receive overflow reported as SocketCAN's error frame). `fd_bit_timing` takes python-can's timings for Cynitor's sample points that the device's limits admit; `read_capability` also tells discovery whether a device's firmware does CAN FD. pyusb is optional at import, as only Windows installs it |
 | `startup_setup.py` | DSDL compilation via `nnvg`, sets `UAVCAN__CAN__IFACE` / `UAVCAN__CAN__MTU` (64 for CAN FD, else 8), calls `yakut accommodate` for the node-ID only as a fallback: the session picks one itself first (`CANSession._pick_node_id`, from heartbeats, as the hub path does) |
@@ -84,12 +84,15 @@ EventLogger.start()        SQLite persistence
 | `firmware.py` | Firmware updates: `FirmwareServer` answers `uavcan.file.Read` (only that, from the data folder's `firmware/`) on the scanner's node and follows each update's progress; `send_update_command` sends ExecuteCommand BEGIN_SOFTWARE_UPDATE. `CANSession.begin_firmware_update` ties them together |
 | `type_guess.py` | Guessing a subject's type: `rank_types` keeps the compiled message types every sampled payload round-trips through exactly (CAN FD frame padding allowed) and ranks them by plausible values, custom first, fixed-port last. Payloads come from `ScannerNode.sample_subject` (a transport-level input session); `ScannerNode.set_subject_type` and `CANSession.set_subject_type` apply and save the chosen type (`subject_types.json`) |
 | `replay.py` | Recording-replay engine: streams `recording_events` rows back through subscriber queues at controlled speed; mirrors `TelemetryManager`'s broadcast shape so the WS handler picks one source per session (telemetry XOR replay) |
+| `simulation.py` | The simulated bus: `SimulatedBus` is a python-can `virtual` channel of its own, which the hub opens as it would an adapter (`open_wire`), and the demo devices run on, each with a pycyphal transport on it (`make_transport`). Started last in `connect`, so that they join a bus Cynitor already watches, and stopped first in `_teardown` |
+| `demo_devices.py` | The demo nodes, on whatever transports they are given: on the simulated bus, and through `tools/demo_nodes.py` on a bus of one's own. A sensor (node 50) whose subjects are named in registers or not, with text, diagnostics, a restart and a firmware update it reads as a bootloader does; and a twin on its node-ID for a conflict |
 
 ### CLI flags
 
 ```
---can <iface>     CAN interface: a SocketCAN name (vcan0, slcan0, can0, ...) or a python-can spec
-                  (gs_usb:0, pcan:PCAN_USBBUS1, slcan:COM5@115200, ...). Required for direct mode.
+--can <iface>     CAN interface: a SocketCAN name (vcan0, slcan0, can0, ...), a python-can spec
+                  (gs_usb:0, pcan:PCAN_USBBUS1, slcan:COM5@115200, ...), or the simulated bus (sim:classic,
+                  sim:fd), which needs no bitrate. Required for direct mode.
 --bitrate <n>     Bus speed in bit/s. Required with --can for non-SocketCAN adapters; no default. Every component that
                   opens the bus reads it from UAVCAN__CAN__BITRATE, which prepare_runtime sets.
 --data-bitrate <n>  CAN FD data-phase bitrate; opens a non-SocketCAN adapter as CAN FD (can_config.FD_INTERFACES;
@@ -111,7 +114,7 @@ By default the dashboard is served from the same port as the API, so a deploymen
 ### Tests
 
 - `server/tests/` — backend unit tests (pytest); they mock the Cyphal stack. CI runs them on Linux (Python 3.10–3.12) and on Windows Server 2022 and 2025.
-- `tests/integration/hub_session.py` — a whole CAN session through the CAN hub on a python-can `virtual` bus, with the real Cyphal stack and a simulated device and plug-and-play node; needs compiled DSDL. With `--fd` the device and Cynitor run Cyphal/CAN FD, and Cynitor's own frames on the wire must be CAN FD frames. CI runs both on Linux and both Windows images.
+- `tests/integration/hub_session.py` — a whole CAN session through the CAN hub on a python-can `virtual` bus, with the real Cyphal stack and a simulated device and plug-and-play node; needs compiled DSDL. Then the simulated bus, and its demo sensor, named and decoded. With `--fd` the device and Cynitor run Cyphal/CAN FD, and Cynitor's own frames on the wire must be CAN FD frames. CI runs both on Linux and both Windows images.
 - `tests/e2e/` — Playwright checks of the static dashboard.
 - `packaging/smoke-test.ps1` — checks the built Windows executable: bundled modules and libusb, a session through the hub, the dashboard and token, and that killing the PyInstaller bootloader stops the server.
 
@@ -273,6 +276,8 @@ cynitor/
     bus_errors.py           Errors on the bus, said once and shown while they last
     firmware.py             Firmware updates: file server for bootloaders
     type_guess.py           Guessing a subject's type from its payloads
+    simulation.py           The simulated bus (sim:classic, sim:fd) and its devices
+    demo_devices.py         The demo nodes, on the simulated bus or tools/demo_nodes.py
     requirements.txt        Python runtime deps
     requirements-dev.txt    Adds pytest + pytest-asyncio for the test suite
     tests/                  pytest unit tests
@@ -310,7 +315,7 @@ cynitor/
     appimage/               AppRun, desktop entry, icon
   python_compiled_messages/ nnvg output (gitignored)
   tools/
-    demo_nodes.py           Demo Cyphal nodes on a vcan, for trying Cynitor without hardware
+    demo_nodes.py           The demo nodes (server/demo_devices.py) on a vcan of one's own
   README.md                 User-facing intro
   TECHNICAL.md              This file
   WEBSOCKET_README.md       API contract reference

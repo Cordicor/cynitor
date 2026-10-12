@@ -27,6 +27,8 @@ server_modules = [
     "can_discovery",
     "can_hub",
     "gs_usb_fd",
+    "simulation",
+    "demo_devices",
     "data_dir",
     "startup_setup",
     "log_store",

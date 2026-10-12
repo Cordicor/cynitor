@@ -56,10 +56,11 @@ class TestRescanRegistrations:
 class FakeHub:
     """Stands in for CANHub so that no test opens a real adapter."""
 
-    def __init__(self, spec, bitrate, data_bitrate=None):
+    def __init__(self, spec, bitrate, data_bitrate=None, open_bus=None):
         self.spec = spec
         self.bitrate = bitrate
         self.data_bitrate = data_bitrate
+        self.open_bus = open_bus
         self.local_spec = "virtual:fake-hub"
         self.error = None
         self.started = False
@@ -80,8 +81,8 @@ def hubs(monkeypatch):
     import main
     created = []
 
-    def make_hub(spec, bitrate, data_bitrate=None):
-        created.append(FakeHub(spec, bitrate, data_bitrate))
+    def make_hub(spec, bitrate, data_bitrate=None, open_bus=None):
+        created.append(FakeHub(spec, bitrate, data_bitrate, open_bus))
         return created[-1]
 
     monkeypatch.setattr(main, "CANHub", make_hub)
@@ -154,6 +155,48 @@ class TestConnectBitrate:
         from main import CANSession
         with pytest.raises(ValueError):
             CANSession(default_bitrate=0)
+
+
+class TestConnectSimulatedBus:
+    """A simulated bus is opened through the hub, at its own rates, its wire as the adapter."""
+
+    @pytest.mark.parametrize("spec, rates", [("sim:classic", (1_000_000, None)),
+                                             ("sim:fd", (1_000_000, 4_000_000))])
+    async def test_through_the_hub_at_its_own_rates(self, captured, hubs, spec, rates):
+        from main import CANSession
+        from simulation import SimulatedBus
+        with pytest.raises(RuntimeError, match="stop"):
+            # Given rates are ignored, as the kernel's are SocketCAN's.
+            await CANSession().connect(spec, bitrate=250_000, data_bitrate=2_000_000)
+        assert (hubs[0].spec, hubs[0].bitrate, hubs[0].data_bitrate) == (spec, *rates)
+        wire = hubs[0].open_bus.__self__
+        assert isinstance(wire, SimulatedBus) and (wire.bitrate, wire.data_bitrate) == rates
+        assert captured == [("virtual:fake-hub", False, rates[0], False, rates[1])]
+
+    async def test_needs_no_bitrate(self, captured, hubs):
+        from main import CANSession
+        with pytest.raises(RuntimeError, match="stop"):
+            await CANSession().connect("sim:classic")
+        assert hubs[0].bitrate == 1_000_000
+
+    async def test_unknown_simulated_bus_is_refused_before_opening(self, captured, hubs):
+        from main import CANSession
+        with pytest.raises(ValueError, match="no simulated bus 'warp'"):
+            await CANSession().connect("sim:warp")
+        assert captured == [] and hubs == []
+
+    async def test_its_devices_stop_with_the_session(self):
+        from main import CANSession
+        stopped = []
+
+        class FakeSimulation:
+            async def stop(self):
+                stopped.append(True)
+
+        s = CANSession()
+        s.simulation = FakeSimulation()
+        await s._teardown()
+        assert stopped == [True] and s.simulation is None
 
 
 class TestConnectCanFd:

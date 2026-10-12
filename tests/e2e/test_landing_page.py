@@ -5631,6 +5631,35 @@ async def _(page):
     assert kept == "", f"4 Mbit/s, picked for a PEAK, is still picked for slcan: {kept!r}"
 
 
+SIDEBAR_SIM = {"interface": "sim:classic", "label": "Simulated bus (no hardware)", "needs_bitrate": False,
+               "supports_fd": False, "data_bitrates": None}
+
+
+@test("Sidebar: the simulated bus connects without a bitrate, picked from the list or typed under Other…")
+async def _(page):
+    server = _SidebarServer()
+    server.adapters = [SIDEBAR_VCAN, SIDEBAR_SIM]
+    await sidebar_open(page, server)
+    form = """() => ({bitrate: !el('canBitrateRow').classList.contains('hidden'),
+        connect: !el('connectCanBtn').disabled})"""
+    try:
+        await page.locator("#connectDashboardBtn").click()
+        await page.wait_for_function("!el('connectCanBtn').disabled", timeout=WAIT_MS)
+        await page.select_option("#interfacesSelect", "sim:classic")
+        listed = await page.evaluate(form)
+        await page.select_option("#interfacesSelect", "__other__")
+        await page.fill("#canSpecInput", "sim:fd")
+        typed = await page.evaluate(form)
+        await page.locator("#connectCanBtn").click()
+        await page.wait_for_function("state.canState === 'connected'", timeout=WAIT_MS)
+        connected = server.can
+    finally:
+        await sidebar_close(page, server)
+    assert listed == typed == {"bitrate": False, "connect": True}, \
+        f"The listed simulated bus: {listed}; one typed under Other…: {typed}"
+    assert connected == "sim:fd", f"Connected to {connected!r}"
+
+
 # What the CAN section says of its last failure, if anything (#canError shown).
 SIDEBAR_CAN_ERROR = "el('canError') && !el('canError').classList.contains('hidden') ? el('canError').textContent : null"
 

@@ -7,6 +7,7 @@ from can_config import (
     bitrate_from_env,
     fd_data_bitrates,
     is_explicit_spec,
+    is_simulated,
     is_socketcan,
     media_bitrate,
     media_mtu,
@@ -188,6 +189,30 @@ class TestCanFd:
         assert media_mtu() == 8
         monkeypatch.setenv("UAVCAN__CAN__MTU", "64")
         assert media_mtu() == 64
+
+
+class TestSimulatedBus:
+    def test_named_by_its_interface(self):
+        assert is_simulated("sim:classic") and is_simulated("sim:fd")
+        assert not is_simulated("vcan0") and not is_simulated("virtual:sim")
+
+    @pytest.mark.parametrize("iface, rates, fd", [("sim:classic", (1_000_000, None), False),
+                                                  ("sim:fd", (1_000_000, 4_000_000), True)])
+    def test_has_rates_of_its_own(self, iface, rates, fd):
+        assert (resolve_bitrate(iface, None), resolve_data_bitrate(iface, None)) == rates
+        # Given ones are checked, then ignored: only the bus-load estimate uses them.
+        assert (resolve_bitrate(iface, 250_000), resolve_data_bitrate(iface, 2_000_000)) == rates
+        assert supports_fd(iface) is fd
+
+    def test_given_rates_must_still_be_valid(self):
+        with pytest.raises(ValueError):
+            resolve_bitrate("sim:classic", 0)
+        with pytest.raises(ValueError):
+            resolve_data_bitrate("sim:fd", 50_000_000)
+
+    def test_unknown_bus(self):
+        with pytest.raises(ValueError, match="no simulated bus 'warp'; there are sim:classic or sim:fd"):
+            resolve_bitrate("sim:warp", None)
 
 
 class TestSocketcanSupportsFd:

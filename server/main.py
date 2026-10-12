@@ -18,6 +18,7 @@ from typing import Callable, Optional
 from can_config import (
     ALLOCATOR_NODE_ID,
     FD_MTU,
+    is_simulated,
     is_socketcan,
     media_mtu,
     normalize_can_iface,
@@ -29,7 +30,7 @@ from can_config import (
     validate_data_bitrate,
 )
 from bus_errors import BusErrors
-from can_discovery import AdapterCatalog, discover_adapters
+from can_discovery import AdapterCatalog, discover_adapters, simulated_adapters
 from can_hub import CANHub, HubBusLoad, pick_free_node_id
 from cyphal_v11 import SOCKETCAN_FILTER, V11Traffic
 from data_dir import ALLOCATOR_DB, EVENTS_DB, SCANNER_DB, SUBJECT_TYPES_FILE, prepare_data_dir, resolve_data_dir
@@ -37,6 +38,7 @@ from firmware import COMMAND_STATUS, FIRMWARE_DIR, FirmwareServer, firmware_path
 from log_store import InMemoryLogStore, APILogHandler
 from raw_log import (RAW_LOG_DIR, LogPlayer, RawLog, SocketcanTap, log_has_fd_frames, log_path,
                      new_log_name, read_sidecar, write_sidecar)
+from simulation import SimulatedBus
 from type_guess import load_candidates, rank_types
 from startup_setup import ensure_libusb_on_path, prepare_runtime, resolve_project_root
 from version import __version__
@@ -100,8 +102,9 @@ def discover_can_interfaces() -> list[str]:
     return sorted(interfaces)
 
 
-# SocketCAN interfaces plus every other adapter found, for the dashboard's list.
-adapter_catalog = AdapterCatalog(lambda: discover_adapters(discover_can_interfaces()))
+# SocketCAN interfaces plus every other adapter found, for the dashboard's
+# list, and after them the simulated buses.
+adapter_catalog = AdapterCatalog(lambda: discover_adapters(discover_can_interfaces()) + simulated_adapters())
 
 
 # ---------------------------------------------------------------------------
@@ -247,6 +250,8 @@ class CANSession:
         self._v11_tap: Optional[SocketcanTap] = None
         # Errors on the bus, as the health check samples them (see bus_errors).
         self.bus_errors: Optional[BusErrors] = None
+        # The simulated bus and its demo devices, when connected to one.
+        self.simulation: Optional[SimulatedBus] = None
         # Serves firmware files to nodes being updated; None when Cynitor has
         # no node-ID or plays a raw log, since nothing can be sent then.
         self.firmware: Optional[FirmwareServer] = None
@@ -306,6 +311,9 @@ class CANSession:
                 bitrate = None
             else:
                 logger.info("Connecting to %s (bitrate is set by SocketCAN, not by Cynitor)", spec)
+        elif is_simulated(spec):
+            logger.info("Connecting to the simulated bus %s: %d bit/s%s, its own", spec, bitrate,
+                        f", CAN FD data phase {data_bitrate} bit/s" if data_bitrate else "")
         elif data_bitrate is not None:
             logger.info("Connecting to %s at %d bit/s, CAN FD data phase %d bit/s", spec, bitrate, data_bitrate)
         else:
@@ -315,11 +323,16 @@ class CANSession:
         # Running it outside the lock keeps a concurrent disconnect() responsive
         # instead of blocking it behind a cold-start connect.
         hub: Optional[CANHub] = None
+        simulation: Optional[SimulatedBus] = None
         if is_socketcan(spec):
             device = socketcan_device(spec)
             await self._pick_node_id(spec, fd=socketcan_supports_fd(device))
             await asyncio.to_thread(prepare_runtime, can_iface, force_compile, bitrate)
         else:
+            if is_simulated(spec) and open_bus is None:
+                # The hub opens the simulated bus's wire as it would an adapter.
+                simulation = SimulatedBus(bitrate, data_bitrate)
+                open_bus = simulation.open_wire
             hub = await self._open_hub(spec, bitrate, force_compile, data_bitrate, open_bus)
 
         async with self._lock:
@@ -416,6 +429,10 @@ class CANSession:
                     self.service_calls.start()
                 except Exception as exc:  # CAN works on; only the recordings miss the calls
                     logger.warning("Service calls will not be recorded: %s", exc)
+                if simulation is not None:
+                    # Last, so that the devices join a bus Cynitor already watches.
+                    self.simulation = simulation
+                    simulation.start()
                 logger.info("CAN session started on %s", can_iface)
             except Exception:
                 try:
@@ -786,6 +803,10 @@ class CANSession:
         """Internal cleanup — caller must hold self._lock."""
         logger.info("Tearing down CAN session...")
 
+        # The simulated bus's devices first, as a bus's go quiet when it is let go.
+        if self.simulation is not None:
+            await self.simulation.stop()
+        self.simulation = None
         # Before the event logger it writes to, and the hub its tap listens to.
         if self.service_calls is not None:
             self.service_calls.stop()
@@ -1127,7 +1148,7 @@ async def attach_or_fall_back(session, can_iface: str, force_compile: bool = Fal
             logger.warning(
                 "No CAN interfaces found. Create a virtual one with: "
                 "sudo modprobe vcan && sudo ip link add dev vcan0 type vcan "
-                "&& sudo ip link set up vcan0"
+                "&& sudo ip link set up vcan0, or try the simulated bus: --can sim:classic"
             )
         else:
             # Only SocketCAN is discovered so far, so off Linux the list is
@@ -1136,7 +1157,8 @@ async def attach_or_fall_back(session, can_iface: str, force_compile: bool = Fal
                 "CAN adapters are not listed automatically on this OS. Name the "
                 "python-can interface and channel instead, e.g. gs_usb:0 "
                 "(CANable/candleLight), pcan:PCAN_USBBUS1, slcan:COM5@115200 "
-                "or kvaser:0, and set the bus speed with --bitrate."
+                "or kvaser:0, and set the bus speed with --bitrate. Without hardware, "
+                "try the simulated bus: --can sim:classic."
             )
         logger.warning("Continuing in selection mode — pick an interface in the dashboard.")
         return False
@@ -1265,7 +1287,8 @@ async def main(can_iface: Optional[str] = None, force_compile: bool = False, bin
         logger.info("Mode:        selection  (waiting for the UI or POST /api/can/connect)")
     logger.info("-" * 60)
     logger.info("Startup options:")
-    logger.info("  --can <iface>    attach to a CAN interface at startup (e.g. vcan0, can0, gs_usb:0, pcan:PCAN_USBBUS1)")
+    logger.info("  --can <iface>    attach to a CAN interface at startup (e.g. vcan0, can0, gs_usb:0, pcan:PCAN_USBBUS1,")
+    logger.info("                   or sim:classic / sim:fd, a simulated bus with demo devices)")
     logger.info("  --bitrate <n>    bus speed in bit/s; required with --can for any adapter except SocketCAN")
     logger.info("  --data-bitrate <n>  CAN FD data-phase speed; opens PCAN/Kvaser/Vector/IXXAT/gs_usb/slcan as CAN FD")
     logger.info("  --bind <host>    bind HTTP server to <host>  (default 127.0.0.1; 0.0.0.0 to expose on the network)")
@@ -1392,9 +1415,9 @@ if __name__ == "__main__":
     parser.add_argument(
         "--can",
         default=None,
-        help="CAN interface: a SocketCAN name (vcan0, can0) or a python-can spec "
-             "such as gs_usb:0, pcan:PCAN_USBBUS1, slcan:COM5@115200 "
-             "(if omitted, select from the UI)",
+        help="CAN interface: a SocketCAN name (vcan0, can0), a python-can spec "
+             "such as gs_usb:0, pcan:PCAN_USBBUS1, slcan:COM5@115200, or a simulated "
+             "bus with demo devices, sim:classic or sim:fd (if omitted, select from the UI)",
     )
 
     def _bitrate_arg(text: str) -> int:

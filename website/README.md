@@ -34,6 +34,8 @@ The current UI is network-centric: it emphasizes topology, live traffic, and sel
 cd server && python3 main.py --can vcan0
 ```
 
+Or, with no hardware, on the simulated bus: `python3 main.py --can sim:classic`.
+
 Or (selection mode — pick CAN interface from the UI):
 
 ```bash

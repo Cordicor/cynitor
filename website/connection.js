@@ -435,11 +435,12 @@ const disconnectWs = () => {
 const OTHER_CAN_INTERFACE = '__other__';
 
 // Mirrors the backend's rule (server/can_config.py): a bare name such as vcan0
-// is SocketCAN, whose bitrate the kernel owns; every other adapter runs at
-// whatever bitrate it is opened with, so one has to be chosen.
+// is SocketCAN, whose bitrate the kernel owns, and a simulated bus (sim:...)
+// has its own; every other adapter runs at whatever bitrate it is opened
+// with, so one has to be chosen.
 const canSpecNeedsBitrate = (spec) => {
   const value = spec.trim().replace(/^pythoncan:/i, '');
-  return value.includes(':') && !value.toLowerCase().startsWith('socketcan:');
+  return value.includes(':') && !value.toLowerCase().startsWith('socketcan:') && !value.startsWith('sim:');
 };
 
 // python-can interfaces the backend can open as CAN FD; keep in step with

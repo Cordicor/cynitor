@@ -8,6 +8,8 @@ Everything else is found here, per kind of adapter:
   whether its firmware does CAN FD;
 - slcan adapters, by the USB IDs of their serial ports.
 
+The simulated buses are not found but always there (simulated_adapters).
+
 On Linux the kernel drives candleLight and slcan adapters itself (as can0, or
 slcan0 via slcand), so they are only scanned for elsewhere; opening them over
 USB or the tty would fight the kernel for the device.
@@ -26,7 +28,7 @@ import time
 from dataclasses import asdict, dataclass
 from typing import Callable, Iterable, Iterator, Optional
 
-from can_config import fd_data_bitrates, supports_fd
+from can_config import SIM_BUSES, SIM_INTERFACE, fd_data_bitrates, supports_fd
 from gs_usb_fd import read_capability
 
 logger = logging.getLogger(__name__)
@@ -156,6 +158,18 @@ def _slcan_adapters() -> list[Adapter]:
             found.append(Adapter(spec, f"{name} {port.device}", True, fd,
                                  fd_data_bitrates(spec) if fd else None))
     return found
+
+
+_SIMULATED_LABELS = {
+    "classic": "Simulated bus (no hardware)",
+    "fd": "Simulated bus, CAN FD (no hardware)",
+}
+
+
+def simulated_adapters() -> list[Adapter]:
+    """The simulated buses (can_config.SIM_BUSES): there on every OS, and with rates of their own."""
+    return [Adapter(spec, _SIMULATED_LABELS[name], False, supports_fd(spec))
+            for name in SIM_BUSES for spec in [f"{SIM_INTERFACE}:{name}"]]
 
 
 def discover_adapters(socketcan_names: Iterable[str],
