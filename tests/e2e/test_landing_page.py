@@ -6174,6 +6174,43 @@ async def _(page):
         f"Under Min ERROR and a filter: {said['under Min and a filter']!r}"
 
 
+@test("Log panel: shut, its toggle counts the warnings and errors that came since, in the colour of the worst")
+async def _(page):
+    was_open = await set_log_panel(page, True)
+    await page.locator("#logClearBtn").click()
+    badge = """() => { const badge = el('logUnread'); const box = badge?.getBoundingClientRect();
+        return {shown: Boolean(badge) && !badge.classList.contains('hidden'), text: badge?.textContent,
+                error: Boolean(badge?.classList.contains('log-unread--error')), title: el('logPanelCollapseBtn').title,
+                inWindow: Boolean(box) && box.width > 0 && box.left >= 0 && box.right <= innerWidth}; }"""
+    try:
+        await page.evaluate(INGEST_DIAGNOSTIC, [0, 5, "an error seen while open"])
+        while_open = await page.evaluate(badge)
+        await set_log_panel(page, False)
+        await page.evaluate(INGEST_DIAGNOSTIC, [0, 2, "an info"])
+        after_info = await page.evaluate(badge)
+        await page.evaluate(INGEST_DIAGNOSTIC, [0, 4, "a warning"])
+        after_warning = await page.evaluate(badge)
+        await page.evaluate(INGEST_DIAGNOSTIC, [0, 6, "a critical"])
+        after_critical = await page.evaluate(badge)
+        await page.evaluate("state.logSeverityFloor = 7")  # Min ALERT: an error is not listed, so not counted
+        await page.evaluate(INGEST_DIAGNOSTIC, [0, 5, "an error under Min ALERT"])
+        await page.evaluate("state.logSeverityFloor = 0")
+        after_hidden = await page.evaluate(badge)
+        await set_log_panel(page, True)
+        reopened = await page.evaluate(badge)
+    finally:
+        await set_log_panel(page, True)
+        await page.locator("#logClearBtn").click()
+        await set_log_panel(page, was_open)
+    assert not while_open["shown"] and not after_info["shown"], \
+        f"Nothing to count while open, or for an INFO: {while_open}, {after_info}"
+    assert after_warning["shown"] and after_warning["text"] == "1" and not after_warning["error"] \
+        and after_warning["inWindow"] and "1 warning or error" in after_warning["title"], f"After a warning: {after_warning}"
+    assert after_critical["text"] == "2" and after_critical["error"], f"After a critical too: {after_critical}"
+    assert after_hidden["text"] == "2", f"A message its Min hides should not count: {after_hidden}"
+    assert not reopened["shown"] and "warning" not in reopened["title"], f"Opened, the count is gone: {reopened}"
+
+
 # Keep last: it reloads the page with every other host unreachable.
 @test("Dashboard works with no internet access")
 async def _(page):

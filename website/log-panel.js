@@ -29,6 +29,10 @@ const SERVER_LEVEL_TO_SEVERITY = {
 
 const DIAGNOSTIC_SUBJECT_ID = 8184;
 
+// From this severity on a message is one to notice: the shut panel's toggle counts it.
+const SEVERITY_WARNING = 4;
+const SEVERITY_ERROR = 5;
+
 // Per-source entry counters mirror state.logBuffer composition.
 // Kept in sync via _pushEntry, _onClearLog, _recomputeSrcCounts.
 const _srcCounts = { cyphal: 0, server: 0 };
@@ -84,6 +88,25 @@ const _refreshSourcePillBadges = () => {
 const renderLogConnection = () => {
   _refreshSourcePillBadges();
   updateEmptyHint();
+};
+
+// ── The toggle at the window's edge ─────────────────────────────────
+
+// A bare arrow: it says what it opens, and, while the panel is shut, how many
+// warnings and errors came since, in the colour of the worst of them.
+const renderLogToggle = () => {
+  const toggle = el('logPanelCollapseBtn');
+  const badge = el('logUnread');
+  if (!toggle || !badge) return;
+  const n = state.logUnreadCount;
+  const since = n ? `: ${n} ${n === 1 ? 'warning or error' : 'warnings or errors'} since it was shut` : '';
+  toggle.setAttribute('aria-expanded', String(!state.logPanelCollapsed));
+  toggle.setAttribute('aria-label', `Toggle log panel${since}`);
+  toggle.title = state.logPanelCollapsed ? `Show the log panel${since}` : 'Hide the log panel';
+  toggle.classList.toggle('has-unread', n > 0);
+  badge.textContent = n > 99 ? '99+' : String(n);
+  badge.classList.toggle('hidden', n === 0);
+  badge.classList.toggle('log-unread--error', state.logUnreadWorst >= SEVERITY_ERROR);
 };
 
 // ── Width plumbing ──────────────────────────────────────────────────
@@ -340,10 +363,17 @@ const _pushEntry = (entry) => {
   if (!list) return;
   const wasAtBottom = isAtBottom(list.parentElement);
   const after = _rowAfter(list, entry.t);
+  let listed = false;  // drawn, and not hidden by a filter
   if (after !== undefined) {
     const row = renderLogRow(entry);
     applyAllFiltersToRow(row);
     list.insertBefore(row, after);
+    listed = !row.classList.contains('hidden');
+  }
+  if (listed && state.logPanelCollapsed && entry.severity >= SEVERITY_WARNING) {
+    state.logUnreadCount++;
+    state.logUnreadWorst = Math.max(state.logUnreadWorst, entry.severity);
+    renderLogToggle();
   }
   while (list.childElementCount > LOG_CAP) {
     list.removeChild(list.firstElementChild);
@@ -602,17 +632,14 @@ const initLogPanel = () => {
     applyLogPanelWidth(panel);
   }
 
-  // The toggle is a bare arrow at the window's edge: it says what it opens.
-  const showPanelState = () => {
-    collapseBtn.setAttribute('aria-expanded', String(!state.logPanelCollapsed));
-    collapseBtn.title = state.logPanelCollapsed ? 'Show the log panel' : 'Hide the log panel';
-  };
-  showPanelState();
+  renderLogToggle();
 
   collapseBtn.addEventListener('click', () => {
     state.logPanelCollapsed = !state.logPanelCollapsed;
     panel.classList.toggle('collapsed', state.logPanelCollapsed);
-    showPanelState();
+    state.logUnreadCount = 0;  // opened, they are read; shut, the count starts again
+    state.logUnreadWorst = 0;
+    renderLogToggle();
     if (!state.logPanelCollapsed) {
       applyLogPanelWidth(panel);
       rebuildLogList();
