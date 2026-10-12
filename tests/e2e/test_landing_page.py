@@ -6008,6 +6008,8 @@ async def _(page):
     assert opened[0] == "true" and "hide" in opened[1].lower(), f"Open, the toggle says: {opened}"
     assert usable == "logFilterInput", f"Open again, the filter box takes the focus: {usable}"
     assert await toggle.get_attribute("aria-controls") == "logPanel", "The toggle does not name the panel it controls"
+    assert await toggle.locator("svg").get_attribute("aria-hidden") == "true", \
+        "The toggle's arrow is read out as an image with no name"
 
 
 @test("Log panel: a row keeps its node's name once the bus is gone and the list is drawn again")
