@@ -254,6 +254,11 @@ updateDashboardConnectButton();
 updateCanConnectButton();
 renderSelectedNodeContent();
 updateSemaphores();
+// The saved layout is back in place, drawn without sliding there (.restoring
+// in styles.css): once that is painted, panels slide when toggled.
+requestAnimationFrame(() => requestAnimationFrame(() => {
+  document.querySelector('.app-shell').classList.remove('restoring');
+}));
 
 // Restore previous connection state
 (async () => {

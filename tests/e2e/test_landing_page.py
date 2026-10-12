@@ -6636,6 +6636,45 @@ async def _(page):
         f"Turned on again: {on_again}; after one more message: {followed}"
 
 
+# Notes, from before the page's own scripts run, every transition the log panel or
+# its toggle starts. Stays registered for later loads, where it does nothing
+# unless asked to through sessionStorage.
+LOG_SLIDE_WATCH = """if (sessionStorage.getItem('e2eWatchLogSlide')) {
+    window.e2eLogSlide = [];
+    document.addEventListener('transitionrun', (event) => {
+        if (['logPanel', 'logPanelCollapseBtn'].includes(event.target.id)) {
+            window.e2eLogSlide.push(`${event.target.id} ${event.propertyName}`);
+        }
+    }, true);
+}"""
+_log_slide_watched = False
+
+
+@test("Log panel: saved open, it is in place as the page loads rather than sliding in; its toggle still slides it")
+async def _(page):
+    global _log_slide_watched
+    if not _log_slide_watched:
+        _log_slide_watched = True
+        await page.add_init_script(LOG_SLIDE_WATCH)
+    was_open = await set_log_panel(page, True)
+    try:
+        await page.evaluate("_writeSettingsNow(); sessionStorage.setItem('e2eWatchLogSlide', '1')")
+        await page.reload(wait_until="load")
+        await page.wait_for_timeout(500)
+        at_load = await page.evaluate("window.e2eLogSlide.splice(0)")
+        open_after_load = await page.evaluate("!el('logPanel').classList.contains('collapsed')")
+        await page.locator("#logPanelCollapseBtn").click()
+        await page.wait_for_timeout(400)
+        on_toggle = await page.evaluate("window.e2eLogSlide.splice(0)")
+        await page.locator("#logPanelCollapseBtn").click()
+        await page.wait_for_timeout(400)
+    finally:
+        await page.evaluate("sessionStorage.removeItem('e2eWatchLogSlide')")
+        await set_log_panel(page, was_open)
+    assert open_after_load and at_load == [], f"Transitions started while the page loaded: {at_load}"
+    assert "logPanel width" in on_toggle, f"Its toggle should still slide it: {on_toggle}"
+
+
 # Keep last: it reloads the page with every other host unreachable.
 @test("Dashboard works with no internet access")
 async def _(page):

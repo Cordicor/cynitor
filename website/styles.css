@@ -258,6 +258,13 @@ body {
   transition: none;
 }
 
+/* While the page loads and puts the saved layout back (app.js), the panel is
+   simply where it was left: it slides only when its toggle is used. */
+.app-shell.restoring .log-panel,
+.app-shell.restoring .log-panel-collapse-btn {
+  transition: none;
+}
+
 .log-panel.collapsed {
   width: 0;
   min-width: 0;
