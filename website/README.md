@@ -92,6 +92,7 @@ Open in browser:
   - Resizable split between card list and plot area (drag handle)
   - Vertical resize handle between nodes table and detail panel
 - Right log panel (hidden by default, toggled from the right edge):
+  - Shut, its toggle counts the warnings and errors that came since, amber or red by the worst of them; opening the panel clears the count
   - Its left edge drags to resize it, and a double-click there resets it; the width is kept. It is never narrower than its controls need (20rem), and in a small window takes no more than leaves the main area room
   - In a window under 60rem (960 px) wide it sits under everything else, a few rows high, and the page scrolls down to it
   - Unified timeline of Cyphal diagnostic messages, user-picked text subjects, and the backend's `/api/logs` stream
@@ -100,7 +101,10 @@ Open in browser:
   - `+` button opens a subject picker listing every subject whose payload carries a string field
   - A message from a replayed recording is listed where it arrives, tagged `replay`; the tag's tooltip gives the time it was recorded
   - Cyphal row layout: `time · n<id> · s<id> · MessageType · text`; Server: `time · LEVEL · logger · message`
-  - SERVER pill turns amber with a corner dot, its tooltip saying why, while nothing can come from it: no backend connection, or a log that cannot be read
+  - A source's pill turns amber with a corner dot, its tooltip saying why, while it is on with nothing to come from: no backend, no CAN bus (and no replay) for `CYPHAL`, a log that cannot be read for `SERVER`. Otherwise the tooltip says what the source is
+  - An empty list says why it is empty: no backend, no CAN bus, or which of Min, the filter and the source toggles hide the messages it keeps
+  - Scrolled up from its end, the list keeps its place, and a count of the messages that came below (`3 new ↓`, amber or red if a warning or an error is among them) goes to them on a click
+  - Escape, or a click elsewhere, shuts the subject picker
   - The server's log is asked only for what came since the last record shown; where more came than one request takes, a line says records are missing there
   - The newest 1000 messages are kept, in memory only, and all of them are listed: the counts and the filters cover every one
 - Server down overlay:
