@@ -93,14 +93,17 @@ Open in browser:
   - Vertical resize handle between nodes table and detail panel
 - Right log panel (hidden by default, toggled from the right edge):
   - Shut, its toggle counts the warnings and errors that came since, amber or red by the worst of them; opening the panel clears the count
-  - Its left edge drags to resize it, and a double-click there resets it; the width is kept. It is never narrower than its controls need (20rem), and in a small window takes no more than leaves the main area room
+  - Its left edge drags to resize it, and a double-click there resets it; the width is kept, in rem. It is never narrower than its controls need (20rem), and in a small window takes no more than leaves the main area room
   - In a window under 60rem (960 px) wide it sits under everything else, a few rows high, and the page scrolls down to it
   - Unified timeline of Cyphal diagnostic messages, user-picked text subjects, and the backend's `/api/logs` stream
   - Per-source toggle pills (`CYPHAL`, `SERVER`) with live count badges
   - `Min: TRACE…ALERT` severity floor applies across all sources via mapped levels; user-added subjects always show
   - `+` button opens a subject picker listing every subject whose payload carries a string field
   - A message from a replayed recording is listed where it arrives, tagged `replay`; the tag's tooltip gives the time it was recorded
-  - Cyphal row layout: `time · n<id> · s<id> · MessageType · text`; Server: `time · LEVEL · logger · message`
+  - One row layout for both sources: `time · severity · who · message`. The time is to the millisecond, as the Debug tab times its frames, with the date in its tooltip. "Who" is a node's ID and name, or the backend logger's name; small tags follow it: `replay`, `s<id>` for a text subject, `×N` for repeats
+  - Severity: TRACE and DEBUG are plain, INFO and NOTICE bold; WARNING and ERROR take amber and red, with a bar at the row's edge; CRITICAL and ALERT are a filled red label on a tinted row. Every label has at least 4.5:1 against its row in both themes
+  - A message said again within 5 seconds by the same sender adds to its row's count (`×N`, the first time in the tooltip) instead of a row, so a subject repeating one text does not push other messages out
+  - The download button beside the sources saves the messages listed, filters applied, to a `.log` file: a header line, then tab-separated time (UTC), severity, who and message
   - A source's pill turns amber with a corner dot, its tooltip saying why, while it is on with nothing to come from: no backend, no CAN bus (and no replay) for `CYPHAL`, a log that cannot be read for `SERVER`. Otherwise the tooltip says what the source is
   - An empty list says why it is empty: no backend, no CAN bus, or which of Min, the filter and the source toggles hide the messages it keeps
   - Scrolled up from its end, the list keeps its place, and a count of the messages that came below (`3 new ↓`, amber or red if a warning or an error is among them) goes to them on a click

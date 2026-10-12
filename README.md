@@ -117,7 +117,7 @@ Then connect Cynitor to `vcan0`.
 | **DSDL** | Every loaded type in a searchable tree, marked when it is seen on the bus. Create, edit and compile your own types |
 | **Record** | Record chosen subjects, services and nodes, up to a time or a number of events; save the last N seconds; export CSV or JSONL; replay a recording through the dashboard. Raw CAN logs in candump format, which python-can, SavvyCAN and can-utils read, play back as if they were the live bus |
 | **Debug** | The bus's health, transport diagnostics, and a raw CAN frame monitor |
-| **Log panel** | One timeline of `uavcan.diagnostic.Record` messages, any text subject you add, and Cynitor's own log, filtered by severity and text |
+| **Log panel** | One timeline of `uavcan.diagnostic.Record` messages, any text subject you add, and Cynitor's own log, timed to the millisecond and filtered by severity and text. Shut, it counts the warnings and errors that came since; what it lists saves to a file |
 
 Cynitor also gives plug-and-play nodes their node-IDs when no other allocator
 is on the bus, has a dark and a light theme, reconnects by itself, keeps your
