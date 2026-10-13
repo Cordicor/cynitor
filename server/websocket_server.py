@@ -413,6 +413,8 @@ class WebSocketServer:
             "cyphal_v11": v11.status() if isinstance(v11 := getattr(self.session, "v11", None), V11Traffic) else None,
             "bus_errors": (errors.status() if isinstance(errors := getattr(self.session, "bus_errors", None), BusErrors)
                            else None),
+            # Cynitor's node-ID allocator, while it is on; None while it is off.
+            "allocator": self.session.allocator_status(),
         })
 
     async def _get_adapters(self, request: web.Request) -> web.Response:
@@ -440,6 +442,11 @@ class WebSocketServer:
             resolve_data_bitrate(iface, self.session.default_data_bitrate if data_bitrate is None else data_bitrate)
         except ValueError as e:
             return web.json_response({"error": str(e)}, status=400)
+        # Optional; whether Cynitor gives plug-and-play nodes their node-IDs
+        # in this session. --allocator stands in when the request says neither.
+        allocator = payload.get("allocator")
+        if allocator is not None and not isinstance(allocator, bool):
+            return web.json_response({"error": "Field 'allocator' must be true or false"}, status=400)
 
         if self.session.is_running:
             return web.json_response({"error": "Already connected"}, status=409)
@@ -456,9 +463,10 @@ class WebSocketServer:
                 )
 
         try:
-            await self.session.connect(iface, bitrate=bitrate, data_bitrate=data_bitrate)
+            await self.session.connect(iface, bitrate=bitrate, data_bitrate=data_bitrate, allocator=allocator)
             return web.json_response({"status": "running", "can_interface": iface,
-                                      "can_fd": self.session.can_fd})
+                                      "can_fd": self.session.can_fd,
+                                      "allocator": self.session.allocator_status()})
         except Exception as e:
             logger.error(f"Failed to connect CAN: {e}", exc_info=True)
             return web.json_response({"error": str(e)}, status=500)

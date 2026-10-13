@@ -44,6 +44,10 @@ const bind = () => {
     if (el('canBitrateSelect').value === 'custom') el('canBitrateCustom').focus();
   });
   el('canBitrateCustom').addEventListener('input', updateCanConnectButton);
+  el('canAllocatorToggle').addEventListener('change', () => {
+    state.canAllocator = el('canAllocatorToggle').checked;
+    saveSettings();
+  });
   const sidebarToggle = el('sidebarCollapseBtn');
   const showSidebarState = () => sidebarToggle.setAttribute('aria-expanded', String(!state.sidebarCollapsed));
   showSidebarState();

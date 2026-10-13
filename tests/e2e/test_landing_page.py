@@ -5627,6 +5627,8 @@ class _SidebarServer:
         self.token = None          # the CYNITOR_AUTH_TOKEN it wants, if any
         self.connect_delay = 0     # seconds a CAN connect takes
         self.bus_errors = None     # what it says of errors on the bus, while connected
+        self.connect_body = None   # what the last CAN connect asked for
+        self.allocator = None      # what it says of its node-ID allocator, while it runs one
 
     async def handle(self, route):
         if self.down:
@@ -5644,17 +5646,21 @@ class _SidebarServer:
                       "available_interfaces": ["vcan0"], "available_adapters": self.adapters,
                       "bus_utilization": 30.0 if self.can else None, "dropped": None,
                       "last_error": self.last_error, "cyphal_v11": None,
-                      "bus_errors": self.bus_errors if self.can else None}
+                      "bus_errors": self.bus_errors if self.can else None,
+                      "allocator": self.allocator if self.can else None}
         elif path == "/api/can/connect" and self.connect_error:
             await route.fulfill(json={"error": self.connect_error}, status=500,
                                 headers={"Access-Control-Allow-Origin": "*"})
             return
         elif path == "/api/can/connect":
             await asyncio.sleep(self.connect_delay)
-            self.can = request.post_data_json["interface"]
-            answer = {"status": "running", "can_interface": self.can, "can_fd": False}
+            self.connect_body = request.post_data_json
+            self.can = self.connect_body["interface"]
+            # As the backend: its allocator runs only in a session asked to run it.
+            self.allocator = {"other_allocator": None, "allocated": 0} if self.connect_body.get("allocator") else None
+            answer = {"status": "running", "can_interface": self.can, "can_fd": False, "allocator": self.allocator}
         elif path == "/api/can/disconnect":
-            self.can, answer = None, {"status": "idle"}
+            self.can, self.allocator, answer = None, None, {"status": "idle"}
         elif path == "/api/nodes" and self.can:
             answer = {"node_count": 2, "nodes": {"10": _graph_node(10, "org.example.imu", [100], [], uid_byte=1),
                                                  "11": _graph_node(11, "org.example.esc", [101], [], uid_byte=2)}}
@@ -6107,6 +6113,79 @@ async def _(page):
         await page.set_viewport_size(size)
     assert left == {"sidebar": 0, "toggleTop": 0}, f"Collapsed in a 900 px window, the sidebar's height and its toggle's top: {left}"
     assert hovered == left, f"Under the pointer the toggle moved: {hovered}, then {left} with the pointer away"
+
+
+async def sidebar_connect_can(page):
+    await page.locator("#connectCanBtn").click()
+    await page.wait_for_function("state.canState === 'connected'", timeout=WAIT_MS)
+
+
+async def sidebar_disconnect_can(page):
+    await page.locator("#connectCanBtn").click()
+    await page.wait_for_function("state.canState === 'idle'", timeout=WAIT_MS)
+
+
+@test("Sidebar: Cynitor allocates node-IDs only once its box is ticked; Connect says so, and the choice is kept")
+async def _(page):
+    server = _SidebarServer()
+    await sidebar_open(page, server)
+    row, box = page.locator("#canAllocatorRow"), page.locator("#canAllocatorToggle")
+    try:
+        await page.locator("#connectDashboardBtn").click()
+        await page.wait_for_function("state.dashboardConnected", timeout=WAIT_MS)
+        offered = (await row.is_visible(), await box.is_checked(), await box.is_enabled())
+        await sidebar_connect_can(page)
+        unticked = (server.connect_body.get("allocator"), await row.is_hidden())
+        await sidebar_disconnect_can(page)
+
+        await box.check()
+        await sidebar_connect_can(page)
+        ticked = server.connect_body.get("allocator")
+        running = (await row.is_visible(), await box.is_checked(), await box.is_disabled())
+        server.allocator["allocated"] = 2
+        await page.evaluate("pollStatus()")  # the 5 s poll, without waiting for it
+        await page.wait_for_function("el('canAllocatorRow').title.includes('2 given')", timeout=WAIT_MS)
+        await sidebar_disconnect_can(page)
+        again = (await row.is_visible(), await box.is_checked(), await box.is_enabled())
+
+        await page.evaluate("_writeSettingsNow()")
+        await page.reload(wait_until="load")
+        kept = (await page.evaluate("state.canAllocator"), await box.is_checked())
+        assert offered == (True, False, True), f"Before connecting, the box shown, ticked, enabled: {offered}"
+        assert unticked == (False, True), f"Unticked, Connect asked for the allocator, and connected the box is hidden: {unticked}"
+        assert ticked is True, f"Ticked, Connect asked for the allocator: {ticked}"
+        assert running == (True, True, True), f"Connected with it, the box shown, ticked, locked: {running}"
+        assert again == (True, True, True), f"Disconnected again, the box shown, ticked, enabled: {again}"
+        assert kept == (True, True), f"After a reload, the choice and the box: {kept}"
+    finally:
+        await page.evaluate("state.canAllocator = false; _writeSettingsNow()")  # off again for the tests after
+        await sidebar_close(page, server)
+
+
+@test("Sidebar: an allocator that another on the bus has silenced names the node that allocates there, until CAN disconnects")
+async def _(page):
+    server = _SidebarServer()
+    await sidebar_open(page, server)
+    notice = page.locator("#canAllocatorNotice")
+    try:
+        await page.locator("#connectDashboardBtn").click()
+        await page.wait_for_function("state.dashboardConnected", timeout=WAIT_MS)
+        await page.locator("#canAllocatorToggle").check()
+        await sidebar_connect_can(page)
+        answering = await notice.is_hidden()
+        server.allocator = {"other_allocator": 42, "allocated": 1}  # node 42 answered a request too
+        await page.evaluate("pollStatus()")
+        await notice.wait_for(state="visible", timeout=WAIT_MS)
+        text, title = await notice.inner_text(), await notice.get_attribute("title")
+        await sidebar_disconnect_can(page)
+        gone = await notice.is_hidden()
+        assert answering, "While Cynitor's allocator answers, its notice shows"
+        assert text == "Allocator silent · node 42 allocates here", f"Notice: {text}"
+        assert "A bus has one allocator" in title and "Connect without the allocator" in title, f"Its title: {title}"
+        assert gone, "After CAN Disconnect the notice still shows"
+    finally:
+        await page.evaluate("state.canAllocator = false; _writeSettingsNow()")
+        await sidebar_close(page, server)
 
 
 def _contrast(colour, behind):

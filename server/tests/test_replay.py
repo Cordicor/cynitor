@@ -356,6 +356,7 @@ def _make_session_for_rest(replay_db, is_running: bool = False):
     s.bus_load = None
     s.last_error = None
     s.dropped_events.return_value = None
+    s.allocator_status.return_value = None
     s.default_data_bitrate = None
     s.can_data_bitrate = None
     s.can_fd = False

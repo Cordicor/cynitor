@@ -215,7 +215,6 @@ class TestTestNodes:
 
     def test_node_ids_in_use_are_cynitors_own_and_those_online(self, tmp_path):
         from types import SimpleNamespace
-        from can_config import ALLOCATOR_NODE_ID
         from main import CANSession
         s = CANSession(data_dir=tmp_path)
 
@@ -223,7 +222,7 @@ class TestTestNodes:
             return SimpleNamespace(has_appeared=appeared, has_disappeared=disappeared)
         s.scanner = SimpleNamespace(node=SimpleNamespace(id=10),
                                     all_nodes={20: node(True, False), 21: node(True, True), 22: node(False, False)})
-        assert s._node_ids_in_use() == {ALLOCATOR_NODE_ID, 10, 20}
+        assert s._node_ids_in_use() == {10, 20}
 
     @pytest.mark.parametrize("bitrate, mtu, payload", [("1000000 1000000", "8", 7), ("1000000 4000000", "64", 63)])
     async def test_behind_the_hub_they_share_its_channel(self, tmp_path, monkeypatch, bitrate, mtu, payload):
@@ -238,6 +237,95 @@ class TestTestNodes:
             assert transport.local_node_id == 60 and transport.protocol_parameters.mtu == payload
         finally:
             transport.close()
+
+
+class TestAllocator:
+    """Cynitor gives plug-and-play nodes their node-IDs only when asked to (see allocator)."""
+
+    @pytest.fixture
+    def asked(self, monkeypatch, hubs, tmp_path):
+        """connect() up to the allocator's turn; lists each time it was started."""
+        import main
+        import scanner_node
+        import telemetry_manager
+        starts = []
+
+        def stop_after_the_scanner(scanner):
+            raise RuntimeError("stop after the scanner")
+
+        monkeypatch.setattr(main, "prepare_runtime", lambda *args: None)
+        monkeypatch.setattr(scanner_node, "ScannerNode", lambda register_file: MagicMock())
+        monkeypatch.setattr(main, "FirmwareServer", MagicMock())  # the real one needs compiled DSDL
+        monkeypatch.setattr(telemetry_manager, "TelemetryManager", stop_after_the_scanner)
+        monkeypatch.setattr(main.CANSession, "_start_allocator", lambda self: starts.append(True))
+        return starts
+
+    @pytest.mark.parametrize("default, given, starts", [
+        (False, None, False),   # off unless asked for
+        (False, True, True),    # for this session
+        (True, None, True),     # --allocator
+        (True, False, False),   # this session without it
+    ])
+    async def test_it_starts_only_when_asked_for(self, asked, tmp_path, default, given, starts):
+        from main import CANSession
+        s = CANSession(data_dir=tmp_path, default_allocator=default)
+        with pytest.raises(RuntimeError, match="stop after the scanner"):
+            await s.connect("gs_usb:0", bitrate=500_000, allocator=given)
+        assert bool(asked) == starts
+
+    async def test_never_while_a_raw_log_plays(self, asked, tmp_path):
+        from main import CANSession
+        s = CANSession(data_dir=tmp_path, default_allocator=True)
+        with pytest.raises(RuntimeError, match="stop after the scanner"):
+            await s.connect("rawlog:bus.log", bitrate=500_000, allocator=True, offline={})
+        assert asked == []
+
+    def test_it_answers_from_the_scanners_node_with_no_node_id_seen_on_the_bus(self, monkeypatch, tmp_path):
+        from types import SimpleNamespace
+        import allocator
+        from main import CANSession
+        made = []
+        monkeypatch.setattr(allocator, "NodeIdAllocator",
+                            lambda node, node_ids_taken: made.append((node, node_ids_taken)) or "the allocator")
+
+        def node(appeared, disappeared):
+            return SimpleNamespace(has_appeared=appeared, has_disappeared=disappeared)
+        s = CANSession(data_dir=tmp_path)
+        s.scanner = SimpleNamespace(node=SimpleNamespace(id=10),
+                                    all_nodes={20: node(True, False), 21: node(True, True), 22: node(False, False)})
+        s._start_allocator()
+        (on_node, node_ids_taken), = made
+        assert s.allocator == "the allocator" and on_node is s.scanner.node
+        # Node 21 is off now, and comes back on the node-ID it had.
+        assert node_ids_taken() == {10, 20, 21}
+
+    def test_not_without_a_node_id_to_answer_from(self, monkeypatch, tmp_path):
+        from types import SimpleNamespace
+        import allocator
+        from main import CANSession
+        monkeypatch.setattr(allocator, "NodeIdAllocator", lambda *args: pytest.fail("should not start"))
+        s = CANSession(data_dir=tmp_path)
+        s.scanner = SimpleNamespace(node=SimpleNamespace(id=None), all_nodes={})
+        s._start_allocator()
+        assert s.allocator is None and s.allocator_status() is None
+
+    async def test_it_stops_with_the_session(self, tmp_path):
+        from main import CANSession
+        s = CANSession(data_dir=tmp_path)
+        s.allocator = running = MagicMock()
+        running.status.return_value = {"other_allocator": None, "allocated": 3}
+        assert s.allocator_status() == {"other_allocator": None, "allocated": 3}
+        await s._teardown()
+        running.close.assert_called_once_with()
+        assert s.allocator is None and s.allocator_status() is None
+
+    def test_cynitor_uses_one_node_id(self, tmp_path):
+        from types import SimpleNamespace
+        from main import CANSession
+        s = CANSession(data_dir=tmp_path)
+        assert s._own_node_ids() == set()  # not connected
+        s.scanner = SimpleNamespace(node=SimpleNamespace(id=10))
+        assert s._own_node_ids() == {10}
 
 
 class TestConnectCanFd:
@@ -315,7 +403,7 @@ class TestConnectThroughHub:
         monkeypatch.delenv("UAVCAN__NODE__ID")
         with pytest.raises(RuntimeError, match="stop"):
             await main.CANSession().connect("gs_usb:0", bitrate=500_000)
-        assert picks == [("virtual:fake-hub", frozenset({1}))]  # never the allocator's
+        assert picks == [("virtual:fake-hub", frozenset())]
         assert os.environ["UAVCAN__NODE__ID"] == "42"
 
     async def test_preset_node_id_is_kept(self, captured, hubs, monkeypatch):
@@ -340,7 +428,7 @@ class TestNodeIdOnSocketcan:
         monkeypatch.delenv("UAVCAN__NODE__ID")
         with pytest.raises(RuntimeError, match="stop"):
             await main.CANSession().connect("vcan0")
-        assert picks == [("socketcan:vcan0", frozenset({1}), None, fd)]
+        assert picks == [("socketcan:vcan0", frozenset(), None, fd)]
         assert os.environ["UAVCAN__NODE__ID"] == "42"
 
     async def test_preset_node_id_is_kept(self, captured, hubs, monkeypatch):

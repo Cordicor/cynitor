@@ -46,6 +46,7 @@
         </div>
         <div class="can-v11-notice hidden" id="canV11Notice" role="status"></div>
         <div class="can-bus-notice hidden" id="canBusNotice" role="status"></div>
+        <div class="can-allocator-notice hidden" id="canAllocatorNotice" role="status"></div>
         <div class="sidebar-connect">
           <div class="sparkline-wrap">
             <select id="interfacesSelect" aria-label="CAN interface"></select>
@@ -86,6 +87,10 @@
               <option value="8000000">CAN FD · 8 Mbit/s data</option>
             </select>
           </div>
+          <label id="canAllocatorRow" class="can-allocator-toggle">
+            <input id="canAllocatorToggle" type="checkbox" />
+            <span>Node-ID allocator</span>
+          </label>
           <button id="connectCanBtn" class="sidebar-action btn-primary">Connect</button>
           <div id="canError" class="can-error hidden"></div>
         </div>

@@ -101,7 +101,7 @@ class TestPrepareRuntimeCanEnv:
 
     def test_socketcan_without_bitrate_clears_a_stale_one(self, runtime_env):
         # The kernel's setting applies; a value left by an earlier adapter
-        # session must not reach the allocator.
+        # session must not reach the scanner.
         os.environ["UAVCAN__CAN__BITRATE"] = "250000 250000"
         prepare_runtime("vcan0")
         assert "UAVCAN__CAN__BITRATE" not in os.environ

@@ -26,7 +26,7 @@ TelemetryManager (pub-sub router)
 ✅ **Optional Persistence** - SQLite logging for historical replay  
 ✅ **Browser Origin Policy** - The API accepts browser requests only from its own dashboard and from pages served on this machine  
 ✅ **Clean Shutdown** - Graceful WebSocket disconnect and logger queue flush  
-✅ **Allocator Guard** - Reuses external allocator if present, otherwise starts local allocator and re-checks every 10s
+✅ **Node-ID Allocator, on request** - Off by default. Turned on, Cynitor gives plug-and-play nodes node-IDs nothing uses on the bus, from its own node-ID, and stops answering if another allocator answers too
 ✅ **CAN Health Monitoring** - Detects CAN bus faults (BUS-OFF, interface disappearance on SocketCAN; a failing or unplugged adapter otherwise) and auto-disconnects; errors on a bus still in use (ERROR-WARNING, ERROR-PASSIVE, error counters growing) are shown and logged once instead
 ✅ **Bus Load Monitoring** - Real-time CAN bus utilization via `canbusload` subprocess on SocketCAN, or counted from the forwarded frames for other adapters (Classic CAN and CAN FD alike), streamed to clients via WebSocket  
 ✅ **Register Access** - Read and write Cyphal node registers via REST API  
@@ -132,11 +132,17 @@ At startup, Python setup runs automatically and configures:
 
 ### 4. Allocator Behavior
 
-Before scanner startup, allocator procedure runs automatically:
-- Detects allocator heartbeat on node-ID `1`
-- If allocator exists, uses it (does not start local allocator)
-- If not found, starts local allocator service
-- While relying on external allocator, checks every 10 seconds and starts local allocator if external allocator disappears
+Cynitor has a plug-and-play node-ID allocator (`uavcan.pnp.NodeIDAllocationData`, versions 1 and 2), which is **off unless asked for**: a bus may have one allocator only, and one cannot be told from any other node until it answers a request, so Cynitor does not guess. Turn it on for a bus that has none of its own:
+- `--allocator` on the command line, for sessions started with `--can` and for connect requests that do not say;
+- `"allocator": true` in `POST /api/can/connect`, for that session (`false` turns it off for a server started with `--allocator`);
+- the **Node-ID allocator** box in the dashboard's connect form, which always says one or the other.
+
+Turned on:
+- It answers from Cynitor's own node-ID, the scanner's, so Cynitor still uses one node-ID. No node-ID is reserved for it; node-ID `1` is like any other.
+- A node that asks is given a node-ID no node has used on the bus in this session, online or not, and the same one if it asks again. Without a preference (version 1, Classic CAN) that is the highest free one, from 125 down; a version 2 request (CAN FD) names the one it would like, and gets the nearest free one. 126 and 127 are left to diagnostic tools.
+- If another node answers a request too, Cynitor's allocator answers no more for the rest of the session, says so in the log, and `GET /api/status` names that node.
+- What it gave is forgotten when CAN disconnects: the table belongs to the bus, and the next one may be another.
+- It never runs while a raw log plays, and not when Cynitor has no node-ID of its own.
 
 ```bash
 python3 main.py
@@ -157,9 +163,10 @@ Startup options:
   --can <iface>    attach to a CAN interface at startup (e.g. vcan0, can0, gs_usb:0, pcan:PCAN_USBBUS1)
   --bitrate <n>    bus speed in bit/s; required with --can for any adapter except SocketCAN
   --data-bitrate <n>  CAN FD data-phase speed; opens PCAN/Kvaser/Vector/IXXAT/gs_usb/slcan as CAN FD
+  --allocator      give plug-and-play nodes their node-IDs; only for a bus with no allocator of its own
   --bind <host>    bind HTTP server to <host>  (default 127.0.0.1; 0.0.0.0 to expose on the network)
   --port <n>       listen on <n> instead of 8080
-  --data-dir <dir> keep history, recordings and node-IDs in <dir>
+  --data-dir <dir> keep history, recordings and raw logs in <dir>
   --recompile      force DSDL recompilation via nnvg
   --help           full reference
 ============================================================
@@ -309,7 +316,7 @@ to 2000):
 the kernel's timestamp; from an adapter whose clock counts from its power-up,
 the time the frame reached Cynitor). `dir` is `tx` for a frame Cynitor sent: one
 sent from this computer that, if it is a Cyphal frame, comes from Cynitor's
-node-ID or its allocator's (on SocketCAN the tap also hears the computer's other
+node-ID (on SocketCAN the tap also hears the computer's other
 programs, such as every node on a vcan, which stay `rx`). `dlc` is the data
 length in bytes (0–64), not the DLC code. An error frame has `"cyphal": false`
 and `error`: what it reports, in words, on SocketCAN, candleLight (`gs_usb`)
@@ -359,9 +366,12 @@ Response:
     "dropped": {"scanner": 0, "logger": 0, "clients": 12},
     "last_error": null,
     "cyphal_v11": null,
-    "bus_errors": null
+    "bus_errors": null,
+    "allocator": null
 }
 ```
+
+`allocator` is `null` unless the CAN session runs Cynitor's node-ID allocator (see [Allocator Behavior](#4-allocator-behavior)). Then it is `{"other_allocator", "allocated"}`: `other_allocator` is `null` while Cynitor's allocator answers requests, and the node-ID of another allocator once one has answered a request too, from when Cynitor's stays silent; `allocated` is how many nodes it gave a node-ID in this session. The dashboard shows a silenced allocator under the CAN status.
 
 `bus_errors` is `null` while the bus has no errors, and when not connected to CAN. While it has some, it is `{"state", "tx_errors", "rx_errors", "since_unix"}`: the CAN controller's state (`"ERROR-WARNING"`, `"ERROR-PASSIVE"`) and its transmit and receive error counters, all three `null` where the adapter does not report them (only SocketCAN does), and when the errors began. The bus has errors while its controller is in one of those states, or while an error counter grew in the last 10 s: SocketCAN's bus-error and state-change counters, or, for an adapter behind the hub, the error frames it reports and the sends it refused. The session's health check samples them every 3 s. Most often the bus is not terminated (120 Ω at each end) or a node runs another bitrate; the dashboard shows the errors under the CAN status, and the server logs a line when they start and one when they stop, in place of pycyphal's line per error frame. A controller in ERROR-WARNING or ERROR-PASSIVE still sends and receives, so the session goes on; BUS-OFF ends it, `last_error` saying so.
 
@@ -391,12 +401,22 @@ curl -X POST http://localhost:8080/api/can/connect \
 
 Response (success):
 ```json
-{"status": "running", "can_interface": "vcan0", "can_fd": false}
+{"status": "running", "can_interface": "vcan0", "can_fd": false, "allocator": null}
 ```
+
+`allocator` is as in `GET /api/status`: `null` unless the session runs Cynitor's node-ID allocator.
 
 `interface` is either a SocketCAN name, which must be one of `available_interfaces`, a python-can spec such as `gs_usb:0` or `pcan:PCAN_USBBUS1`, which is opened without that check, or a simulated bus: `sim:classic` (1 Mbit/s) or `sim:fd` (CAN FD, 1 and 4 Mbit/s), a bus inside Cynitor with demo nodes on it. A simulated bus runs at its own rates: a `bitrate` or `data_bitrate` given is checked, then ignored. `bitrate` (integer, 1–1000000 bit/s) is the bus speed, required for every adapter except SocketCAN, which ignores it. It may be left out only if the server was started with `--bitrate`, which then applies.
 
 `data_bitrate` (integer, 1–12000000 bit/s, optional) opens the adapter as CAN FD with that data-phase bitrate; left out, the session is Classic CAN unless the server was started with `--data-bitrate`. Only adapters whose `supports_fd` is true take it (PEAK, Kvaser, Vector, IXXAT, candleLight with CAN FD firmware, slcan), at one of their `data_bitrates` where those are given (slcan: 2000000 or 5000000); SocketCAN ignores it and runs CAN FD when the interface is set up for it. `can_fd` in the response says which it became.
+
+`allocator` (boolean, optional) has Cynitor give plug-and-play nodes their node-IDs in this session (see [Allocator Behavior](#4-allocator-behavior)); left out, it does only if the server was started with `--allocator`. Turn it on only for a bus with no allocator of its own.
+
+```bash
+curl -X POST http://localhost:8080/api/can/connect \
+  -H 'Content-Type: application/json' \
+  -d '{"interface":"can0","allocator":true}'
+```
 
 ```bash
 curl -X POST http://localhost:8080/api/can/connect \
@@ -416,7 +436,7 @@ curl -X POST http://localhost:8080/api/can/connect \
   -d '{"interface":"gs_usb:0","bitrate":1000000,"data_bitrate":4000000}'
 ```
 
-Returns `409` if already connected, `400` if a SocketCAN name is unknown, `bitrate` is missing or invalid, or `data_bitrate` is invalid, given for an adapter that cannot run CAN FD, or not one of its presets. A candleLight adapter whose firmware runs Classic CAN only, or whose CAN clock cannot make the two bitrates, fails to open (`500`), saying so.
+Returns `409` if already connected, `400` if a SocketCAN name is unknown, `bitrate` is missing or invalid, `allocator` is not a boolean, or `data_bitrate` is invalid, given for an adapter that cannot run CAN FD, or not one of its presets. A candleLight adapter whose firmware runs Classic CAN only, or whose CAN clock cannot make the two bitrates, fails to open (`500`), saying so.
 
 **Disconnect from CAN:**
 ```bash
@@ -1499,7 +1519,7 @@ asyncio.run(main())
 | `websocket_server.py` | WebSocket/REST server |
 | `log_store.py` | In-memory API log buffer + log handler |
 | `event_logger.py` | SQLite persistence |
-| `allocator.py` | Allocator detection + fallback allocator manager |
+| `allocator.py` | Cynitor's node-ID allocator, off unless asked for; answers from the scanner's node |
 | `startup_setup.py` | DSDL compilation via nnvg, env setup |
 | `main.py` | System orchestration |
 

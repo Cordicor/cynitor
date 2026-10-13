@@ -15,7 +15,8 @@ Checks, in order:
   2. the scanner sees node 50 and its GetInfo name, and decodes the
      uavcan.diagnostic.Record it publishes on the fixed subject-ID (no
      register names it, as with most firmware);
-  3. Cynitor's allocator gives the anonymous node a node-ID;
+  3. Cynitor's allocator, turned on for the session, gives the anonymous node
+     a node-ID no node uses, answering from Cynitor's own;
   4. bus load is measured by the hub, not canbusload;
      and a raw log of the frames reads back through python-can;
   4a. a firmware update: node 50 accepts the command and reads the whole
@@ -29,7 +30,8 @@ Checks, in order:
   6. the databases are written to the session's data folder;
   7. a raw log plays back as a bus;
   8. the simulated bus (sim:classic, or sim:fd with --fd) runs its demo
-     sensor, which Cynitor sees, names and decodes;
+     sensor, which Cynitor sees, names and decodes; no allocator runs, as
+     none was asked for;
   9. a test node made as the Test nodes tab makes one runs on it: Cynitor
      names it, decodes its waveform through the registers it fills in, sees
      its mode change as it runs, and stops it on disconnect.
@@ -187,11 +189,11 @@ async def run() -> None:
     session = CANSession(data_dir=data)
     tap = can.Bus(interface="virtual", channel=WIRE)  # what an analyzer on the bus would see
     try:
-        await session.connect(f"virtual:{WIRE}", bitrate=BITRATE, data_bitrate=DATA_BITRATE)
+        await session.connect(f"virtual:{WIRE}", bitrate=BITRATE, data_bitrate=DATA_BITRATE, allocator=True)
         check(session.is_running and session.hub is not None, "connected through the CAN hub")
         own_id = os.environ.get("UAVCAN__NODE__ID")
-        check(own_id is not None and int(own_id) not in (1, DEVICE_NODE_ID),
-              f"picked its own node-ID ({own_id}), clear of the allocator and the device")
+        check(own_id is not None and int(own_id) != DEVICE_NODE_ID,
+              f"picked its own node-ID ({own_id}), clear of the device")
         check(session.can_fd == FD, f"session runs {'CAN FD' if FD else 'Classic CAN'}")
         own_frame = await first_frame_from(tap, int(own_id))
         check(own_frame is not None and own_frame.is_fd == FD,
@@ -225,7 +227,10 @@ async def run() -> None:
               f"diagnostic record decoded from its fixed subject: {attributes}")
 
         allocated = await wait_for(lambda: allocatee.get_result() is not None)
-        check(allocated, f"anonymous node was allocated node-ID {allocatee.get_result()}")
+        check(allocated and allocatee.get_result() not in (int(own_id), DEVICE_NODE_ID),
+              f"anonymous node was allocated node-ID {allocatee.get_result()}, which no node uses")
+        check(session.allocator_status() == {"other_allocator": None, "allocated": 1},
+              f"by Cynitor's allocator, on its one node-ID: {session.allocator_status()}")
 
         check(isinstance(session.bus_load, HubBusLoad), "bus load comes from the hub")
         loaded = await wait_for(lambda: session.bus_load.utilization > 0, timeout=5.0)
@@ -325,7 +330,7 @@ async def run() -> None:
               f"with a reason: {session.last_error!r}")
 
         written = sorted(p.name for p in data.glob("*.db"))
-        check(written == ["allocator_2app.db", "monitor_app.db", "telemetry_events.db"],
+        check(written == ["monitor_app.db", "telemetry_events.db"],
               f"databases written to the data folder: {written}")
 
         # Play the raw log back: the bus as it was, from the file alone.
@@ -348,6 +353,8 @@ async def run() -> None:
         await session.connect(sim)
         check(session.is_running and session.simulation is not None and session.can_fd == FD,
               f"connected to the simulated bus {sim}")
+        check(session.allocator is None and session.allocator_status() is None,
+              "with no allocator, as none was asked for")
         named = await wait_for(lambda: session.telemetry.get_all_nodes_info()["nodes"]
                                .get(DEVICE_NODE_ID, {}).get("name") == "demo.sensor")
         check(named, f"its demo sensor appears, named, on node-ID {DEVICE_NODE_ID}")
@@ -366,7 +373,7 @@ async def run() -> None:
         test_id = session.test_nodes.add(definition)["id"]
         started = await session.test_nodes.start(test_id)  # the simulated bus asks for no confirmation
         test_node_id = started["assigned_node_id"]
-        check(started["running"] and test_node_id not in (None, int(own_id), 1, DEVICE_NODE_ID),
+        check(started["running"] and test_node_id not in (None, int(own_id), DEVICE_NODE_ID),
               f"a test node starts on the node-ID Cynitor gives it, {test_node_id}, clear of the bus's")
 
         def test_node():

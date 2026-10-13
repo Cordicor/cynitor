@@ -131,9 +131,37 @@ const renderBusNotice = () => {
   notice.title = `Errors on the bus since ${formatPlotTime(errors.since_unix)}.${counted} ${BUS_ERROR_CAUSES}`;
 };
 
+// Cynitor's node-ID allocator: the choice in the connect form, and while
+// connected the session's own, if it runs one. One that another allocator on
+// the bus has silenced says which node that is.
+const ALLOCATOR_HINT = 'Have Cynitor give node-IDs to the nodes that ask for one (Cyphal plug-and-play). '
+  + 'Only for a bus with no allocator of its own: a bus may have one only.';
+const renderAllocator = () => {
+  const row = el('canAllocatorRow');
+  if (!row) return;
+  const idle = !state.canConnected && !state.canDisconnecting;
+  const running = state.canConnected ? state.allocatorStatus : null;
+  row.classList.toggle('hidden', !(idle || running));
+  const toggle = el('canAllocatorToggle');
+  toggle.checked = idle ? state.canAllocator : !!running;
+  toggle.disabled = !idle || !state.dashboardConnected || state.canConnecting;
+  row.classList.toggle('is-locked', toggle.disabled);
+  row.title = running
+    ? `Cynitor gives node-IDs to the nodes that ask for one: ${running.allocated} given in this session.`
+    : ALLOCATOR_HINT;
+  const other = running ? running.other_allocator : null;
+  const notice = el('canAllocatorNotice');
+  notice.classList.toggle('hidden', other == null);
+  if (other == null) return;
+  notice.textContent = `Allocator silent · node ${other} allocates here`;
+  notice.title = `Node ${other} answers node-ID requests on this bus too. A bus has one allocator, so `
+    + "Cynitor's answers no more. Connect without the allocator on this bus.";
+};
+
 const updateSemaphores = () => {
   renderV11Notice();
   renderBusNotice();
+  renderAllocator();
   const serverDot = el('serverSemaphore');
   const canDot = el('canSemaphore');
   const serverInfo = el('serverThroughput');
@@ -630,7 +658,7 @@ const selectInterface = async () => {
   if (!target.interface) {
     return null;
   }
-  const body = { interface: target.interface };
+  const body = { interface: target.interface, allocator: state.canAllocator };
   if (target.needsBitrate) {
     body.bitrate = selectedCanBitrate();
     if (body.bitrate === null) {
@@ -650,6 +678,7 @@ const selectInterface = async () => {
       timeoutMs: CAN_CONNECT_TIMEOUT_MS,
     });
     state.preferredCanInterface = el('interfacesSelect').value;
+    state.allocatorStatus = data?.allocator ?? null;
     if (body.bitrate) {
       state.canBitrates[target.interface] = body.bitrate;
       if (body.data_bitrate) {
@@ -682,6 +711,7 @@ const clearCanSession = () => {
   state.latestNodesPayload = { node_count: 0, nodes: {} };
   state.busUtilization = null;
   state.droppedEvents = null;
+  state.allocatorStatus = null;
   state.busLoadHistory.length = 0;
   drawBusLoadSparkline();
   renderNodesTable();
@@ -747,6 +777,7 @@ const pollStatus = async () => {
   state.droppedEvents = data.dropped ?? null;
   state.cyphalV11 = data.cyphal_v11 ?? null;
   state.busErrors = data.bus_errors ?? null;
+  state.allocatorStatus = data.allocator ?? null;
 
   const backendCanRunning = data.status === 'running' && !!data.can_interface;
 
@@ -929,6 +960,7 @@ const openDashboard = async () => {
   if (statusData.status === 'running' && statusData.can_interface) {
     state.canAdapters = statusData.available_adapters || [];
     state.canConnected = true;
+    state.allocatorStatus = statusData.allocator ?? null;
     setCanError(null);
     showConnectedCanInterface(statusData.can_interface, statusData.can_bitrate,
       statusData.can_data_bitrate, statusData.can_fd);

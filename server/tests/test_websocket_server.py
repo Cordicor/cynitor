@@ -29,6 +29,7 @@ def _make_session(is_running=False, can_interface=None):
     session.bus_load = None
     session.last_error = None
     session.dropped_events.return_value = None
+    session.allocator_status.return_value = None
     session.default_data_bitrate = None
     session.can_data_bitrate = None
     session.can_fd = False
@@ -192,7 +193,7 @@ class TestCANConnectSpecsAndBitrate:
         with patch("main.discover_can_interfaces", return_value=["vcan0"]):
             resp = await client.post("/api/can/connect", json={"interface": "vcan0"})
         assert resp.status == 200
-        session.connect.assert_awaited_once_with("vcan0", bitrate=None, data_bitrate=None)
+        session.connect.assert_awaited_once_with("vcan0", bitrate=None, data_bitrate=None, allocator=None)
 
     @pytest.mark.asyncio
     async def test_explicit_spec_skips_discovery(self, client, session):
@@ -204,7 +205,7 @@ class TestCANConnectSpecsAndBitrate:
             )
         assert resp.status == 200
         discover.assert_not_called()
-        session.connect.assert_awaited_once_with("gs_usb:0", bitrate=250000, data_bitrate=None)
+        session.connect.assert_awaited_once_with("gs_usb:0", bitrate=250000, data_bitrate=None, allocator=None)
 
     @pytest.mark.asyncio
     async def test_adapter_without_bitrate_is_refused(self, client, session):
@@ -219,7 +220,7 @@ class TestCANConnectSpecsAndBitrate:
         session.default_bitrate = 250_000
         resp = await client.post("/api/can/connect", json={"interface": "gs_usb:0"})
         assert resp.status == 200
-        session.connect.assert_awaited_once_with("gs_usb:0", bitrate=None, data_bitrate=None)
+        session.connect.assert_awaited_once_with("gs_usb:0", bitrate=None, data_bitrate=None, allocator=None)
 
     @pytest.mark.asyncio
     async def test_data_bitrate_opens_can_fd(self, client, session):
@@ -227,7 +228,8 @@ class TestCANConnectSpecsAndBitrate:
             "interface": "pcan:PCAN_USBBUS1", "bitrate": 500000, "data_bitrate": 2000000,
         })
         assert resp.status == 200
-        session.connect.assert_awaited_once_with("pcan:PCAN_USBBUS1", bitrate=500000, data_bitrate=2000000)
+        session.connect.assert_awaited_once_with("pcan:PCAN_USBBUS1", bitrate=500000, data_bitrate=2000000,
+                                                     allocator=None)
         assert (await resp.json())["can_fd"] is False  # what the (mock) session reports
 
     @pytest.mark.asyncio
@@ -257,6 +259,32 @@ class TestCANConnectSpecsAndBitrate:
         })
         assert resp.status == 400
         session.connect.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("allocator", [True, False])
+    async def test_allocator_choice_reaches_the_session(self, client, session, allocator):
+        with patch("main.discover_can_interfaces", return_value=["vcan0"]):
+            resp = await client.post("/api/can/connect", json={"interface": "vcan0", "allocator": allocator})
+        assert resp.status == 200
+        session.connect.assert_awaited_once_with("vcan0", bitrate=None, data_bitrate=None, allocator=allocator)
+        assert (await resp.json())["allocator"] is None  # what the (mock) session reports it runs
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("allocator", ["yes", 1, 0])
+    async def test_rejects_an_allocator_choice_that_is_no_boolean(self, client, session, allocator):
+        resp = await client.post("/api/can/connect", json={"interface": "vcan0", "allocator": allocator})
+        assert resp.status == 400
+        assert "allocator" in (await resp.json())["error"]
+        session.connect.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("status", [None, {"other_allocator": 42, "allocated": 1}])
+    async def test_status_reports_cynitors_allocator(self, client, session, status):
+        session.allocator_status.return_value = status
+        with patch("main.discover_can_interfaces", return_value=[]):
+            resp = await client.get("/api/status")
+        assert resp.status == 200
+        assert (await resp.json())["allocator"] == status
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("bitrate", [0, 5_000_000, "500000", True])

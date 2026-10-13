@@ -47,9 +47,9 @@ CANHub.start()             Non-SocketCAN only: open the adapter once, pick a fre
         |
 prepare_runtime()          Set env vars, compile DSDL via nnvg
         |
-AllocatorManager.start()   Detect external allocator on node-ID 1, or start a local one
-        |
 ScannerNode()              Begin CAN network discovery
+        |
+NodeIdAllocator()          Only if asked for (--allocator, or "allocator" on connect): answer node-ID requests from the scanner's node
         |
 TelemetryManager.start()   Consume scanner events, cache + broadcast
         |
@@ -68,10 +68,10 @@ EventLogger.start()        SQLite persistence
 | `telemetry_manager.py` | Event router: maintains `latest_by_subject` and `latest_by_node` caches, broadcasts to subscriber queues |
 | `websocket_server.py` | aiohttp HTTP+WS server, REST endpoints, per-client WebSocket filtering, periodic metrics broadcast, node history and service call history endpoints; also serves `website/` so one binary hosts both the API and the dashboard; refuses API and event-stream requests from browser pages of other sites (`_browser_request_allowed`) |
 | `event_logger.py` | SQLite persistence with batch writes, `asyncio.to_thread` for non-blocking I/O, configurable retention, node lifecycle history (30-day), service call history with response bodies |
-| `allocator.py` | Node-ID allocator detection / fallback (CentralizedAllocator), 10s re-check |
+| `allocator.py` | Cynitor's plug-and-play node-ID allocator (`NodeIdAllocator`), off unless asked for. Runs on the scanner's node, so it takes no node-ID of its own; gives a node-ID no node has used on the bus in the session (`CANSession._node_ids_seen`), the same one to a node that asks again; its table lasts for the session; answers no more once another allocator answers a request |
 | `can_config.py` | Interface-spec and bitrate rules: bare names mean SocketCAN, `sim:classic` and `sim:fd` the simulated buses (at rates of their own, `SIM_BUSES`), `--bitrate` is required for anything else, `UAVCAN__CAN__BITRATE` is published as `"<n> <n>"` (`"<n> <data>"` for CAN FD); which adapters can run CAN FD, at which data bitrates where they have presets (slcan's 2 and 5 Mbit/s), and whether a SocketCAN interface is set up for it |
 | `can_discovery.py` | Lists the adapters the dashboard offers besides SocketCAN: python-can vendor detection (PEAK, Kvaser, Vector, IXXAT), and off Linux a gs_usb USB scan, each device asked whether its firmware does CAN FD, and slcan serial ports by USB ID; cached for 10 s in `AdapterCatalog`. The simulated buses are listed on every OS (`simulated_adapters`) |
-| `can_hub.py` | Opens a non-SocketCAN adapter once and bridges it to an in-process python-can `virtual` channel that the allocator probe, allocator and scanner all open instead; also picks Cynitor's node-ID from heartbeats on that channel; for those adapters it also opens CAN FD adapters with pycyphal's parameters, where pycyphal has them (slcan takes its two rates as a `BitTimingFd`, gs_usb goes through `gs_usb_fd`), measures bus load (`HubBusLoad`, from forwarded frames' time on the wire, counted as canbusload counts: worst-case stuffing, CAN FD data phase at the data rate), counts error frames, and, for python-can's gs_usb, whose reads hide USB errors, checks every few seconds that the device is still enumerated |
+| `can_hub.py` | Opens a non-SocketCAN adapter once and bridges it to an in-process python-can `virtual` channel that the node-ID picker, the scanner and the test nodes all open instead; also picks Cynitor's node-ID from heartbeats on that channel; for those adapters it also opens CAN FD adapters with pycyphal's parameters, where pycyphal has them (slcan takes its two rates as a `BitTimingFd`, gs_usb goes through `gs_usb_fd`), measures bus load (`HubBusLoad`, from forwarded frames' time on the wire, counted as canbusload counts: worst-case stuffing, CAN FD data phase at the data rate), counts error frames, and, for python-can's gs_usb, whose reads hide USB errors, checks every few seconds that the device is still enumerated |
 | `gs_usb_fd.py` | CAN FD for candleLight (gs_usb) adapters, which python-can's gs_usb runs as Classic CAN only: `GsUsbFdBus` is a python-can bus speaking the protocol's CAN FD extensions as the Linux driver does (data-phase timing limits and request, the FD mode flag, 64-byte frames, echoes dropped, a receive overflow reported as SocketCAN's error frame). `fd_bit_timing` takes python-can's timings that the device's limits admit, for the sample points the Linux kernel uses (`sample_point`: 87.5 % up to 500 kbit/s, 80 % up to 800 kbit/s, 75 % above), so that an adapter's frames are taken on Windows by the nodes that take them on Linux; `read_capability` also tells discovery whether a device's firmware does CAN FD. pyusb is optional at import, as only Windows installs it |
 | `startup_setup.py` | DSDL compilation via `nnvg`, sets `UAVCAN__CAN__IFACE` / `UAVCAN__CAN__MTU` (64 for CAN FD, else 8), calls `yakut accommodate` for the node-ID only as a fallback: the session picks one itself first (`CANSession._pick_node_id`, from heartbeats, as the hub path does) |
 | `node_identity_map.py` | Bidirectional `unique_id ↔ node_id` mapping with displacement detection, snapshot storage, and SQLite-backed persistence |
@@ -267,7 +267,7 @@ cynitor/
     telemetry_manager.py    Event routing and caching
     websocket_server.py     REST + WebSocket server, serves the dashboard
     event_logger.py         SQLite event persistence
-    allocator.py            Node-ID allocation management
+    allocator.py            Node-ID allocator, off unless asked for
     startup_setup.py        DSDL compilation, env setup
     log_store.py            In-memory log buffer for /api/logs
     dsdl_manager.py         DSDL discovery, namespace tree, custom-type CRUD

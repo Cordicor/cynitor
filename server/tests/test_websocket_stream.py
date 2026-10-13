@@ -47,6 +47,7 @@ def _make_session_with_telemetry():
     session.bus_load = None
     session.last_error = None
     session.dropped_events.return_value = None
+    session.allocator_status.return_value = None
     session.default_data_bitrate = None
     session.can_data_bitrate = None
     session.can_fd = False

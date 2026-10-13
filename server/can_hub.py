@@ -2,14 +2,14 @@
 
 SocketCAN lets any number of sockets open can0. Most other adapters do not:
 a candleLight (gs_usb) device or an slcan COM port admits one open handle at a
-time, and Cynitor opens the bus several times over -- the allocator probe, the
-allocator node and the scanner. The second open fails with "Access denied".
+time, and Cynitor opens the bus several times over -- the node-ID picker, the
+scanner and each test node. The second open fails with "Access denied".
 
 The hub opens the adapter once through python-can and bridges it to an
 in-process python-can virtual channel. Every component then opens
 ``virtual:<channel>`` instead, which any number of buses may share:
 
-    adapter <-> CANHub (two pump threads) <-> virtual channel <-> allocator, scanner, ...
+    adapter <-> CANHub (two pump threads) <-> virtual channel <-> scanner, test nodes, ...
 
 Frames one component sends reach the others directly through the virtual
 channel, and reach the adapter through the hub, which is how separate
