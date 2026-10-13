@@ -14,6 +14,7 @@ from aiohttp import web, WSCloseCode
 from can_config import is_explicit_spec, is_socketcan, resolve_bitrate, resolve_data_bitrate, socketcan_device
 from version import __version__
 from bus_errors import BusErrors
+from cpu_load import ProcessCpu
 from cyphal_v11 import V11Traffic
 from firmware import MAX_FIRMWARE_BYTES, firmware_path, list_firmware
 from raw_log import list_logs, log_path, sidecar_path
@@ -141,6 +142,7 @@ class WebSocketServer:
 
         # Client management
         self.clients: Set[web.WebSocketResponse] = set()
+        self.cpu = ProcessCpu()  # the server's own CPU use, for the dashboard
         self.client_filters: dict[web.WebSocketResponse, dict[str, Any]] = {}
         # Clients that opted into the raw frame-capture stream → their per-client
         # subscriber queue on the FrameCaptureManager. Empty unless a Debugging
@@ -278,6 +280,7 @@ class WebSocketServer:
         self.app.router.add_get('/api/can/adapters', self._get_adapters)
         self.app.router.add_post('/api/can/connect', self._can_connect)
         self.app.router.add_post('/api/can/disconnect', self._can_disconnect)
+        self.app.router.add_post('/api/decoding', self._set_decoding)
         self.app.router.add_get('/api/can/transport', self._get_transport_diagnostics)
         self.app.router.add_get('/api/can/capture', self._get_capture)
 
@@ -415,7 +418,23 @@ class WebSocketServer:
                            else None),
             # Cynitor's node-ID allocator, while it is on; None while it is off.
             "allocator": self.session.allocator_status(),
+            # The server's CPU use in percent of one core; None in its first second.
+            "server_cpu": self.cpu.read(),
+            # Whether only the subjects watched or recorded are decoded (POST /api/decoding).
+            "decode_on_demand": self.session.decode_on_demand,
         })
+
+    async def _set_decoding(self, request: web.Request) -> web.Response:
+        """Decode on demand, or every subject: {"on_demand": true|false}. Takes effect at once."""
+        try:
+            body = await request.json()
+        except Exception:
+            return web.json_response({"error": "Invalid JSON body"}, status=400)
+        on_demand = body.get("on_demand") if isinstance(body, dict) else None
+        if not isinstance(on_demand, bool):
+            return web.json_response({"error": "Field 'on_demand' must be true or false"}, status=400)
+        await self.session.set_decode_on_demand(on_demand)
+        return web.json_response({"decode_on_demand": on_demand})
 
     async def _get_adapters(self, request: web.Request) -> web.Response:
         refresh = request.query.get("refresh", "").lower() in ("1", "true", "yes")
@@ -1438,6 +1457,7 @@ class WebSocketServer:
         finally:
             self.clients.discard(ws)
             self.client_filters.pop(ws, None)
+            self.session.set_watched(ws, None)
             cap_queue = self.capture_clients.pop(ws, None)
             if cap_queue is not None and self.session.frame_capture is not None:
                 self.session.frame_capture.unsubscribe(cap_queue)
@@ -1500,7 +1520,7 @@ class WebSocketServer:
                 break
 
     async def _send_metrics_loop(self, ws: web.WebSocketResponse) -> None:
-        """Send bus utilization metrics to the client every second."""
+        """Send the bus load and the server's CPU use to the client every second."""
         try:
             while self._running and not ws.closed:
                 await asyncio.sleep(1.0)
@@ -1508,6 +1528,7 @@ class WebSocketServer:
                 await ws.send_json({
                     "type": "metrics",
                     "bus_utilization": bus_load.utilization if bus_load else None,
+                    "server_cpu": self.cpu.read(),
                 })
         except asyncio.CancelledError:
             raise
@@ -1592,6 +1613,8 @@ class WebSocketServer:
             await ws.send_json({"type": "capture_status", "active": False,
                                 "capturing": mgr is not None and mgr.active, "forwarding": False})
 
+    _MAX_WATCHED = 8192  # there are no more subject-IDs
+
     async def _receive_client_messages(self, ws: web.WebSocketResponse) -> None:
         async for msg in ws:
             try:
@@ -1610,6 +1633,17 @@ class WebSocketServer:
                             "type": "filter_updated",
                             "filter": self.client_filters[ws]
                         })
+
+                    elif data.get("type") == "watch":
+                        # The subjects this dashboard shows the values of: what
+                        # is decoded for it while the server decodes on demand.
+                        subject_ids = data.get("subject_ids")
+                        if isinstance(subject_ids, list) and len(subject_ids) <= self._MAX_WATCHED and all(
+                                isinstance(s, int) and not isinstance(s, bool) and 0 <= s <= 8191
+                                for s in subject_ids):
+                            self.session.set_watched(ws, subject_ids)
+                        else:
+                            await ws.send_json({"error": "watch: subject_ids must be a list of subject-IDs"})
 
                     elif data.get("type") == "ping":
                         await ws.send_json({"type": "pong"})
@@ -1672,6 +1706,7 @@ class WebSocketServer:
                     "/api/health": "Server health check",
                     "/api/can/adapters": "GET - CAN adapters to connect to (?refresh=1 rescans)",
                     "/api/can/connect": "POST - Connect to a CAN interface",
+                    "/api/decoding": "POST - Decode on demand, or every subject",
                     "/api/can/disconnect": "POST - Disconnect from CAN interface",
                     "/api/can/transport": "Transport-layer diagnostics (MTU, frame stats, bus state)",
                     "/api/can/capture": "Raw frame-capture ring-buffer snapshot (WS 'capture' message streams live)",

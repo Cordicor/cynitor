@@ -62,6 +62,11 @@ const state = {
   savedCompareConfigs: [],
   wsBytesAccum: 0,
   wsThroughput: 0,
+  serverCpu: null,   // the server's CPU use in percent of one core (metrics message); null: not known
+  // Whether the server decodes only the subjects watched or recorded (GET
+  // /api/status decode_on_demand); the Server section's switch sets it.
+  decodeOnDemand: false,
+  _watchedSent: null,  // the subjects last told to the server as watched, as sent; null: none yet
   lastWsMessageMs: 0,
   busUtilization: null,
   droppedEvents: null,   // {scanner, logger, clients} from /api/status, null when not on CAN

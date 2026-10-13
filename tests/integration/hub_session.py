@@ -26,6 +26,8 @@ Checks, in order:
      its payloads offers the right one, and setting it decodes the subject;
   4c. Cyphal v1.1 transfers on the wire (16-bit subject-IDs) are noticed,
      though not decoded;
+  4d. decoding on demand: a subject nobody watches is counted from its
+     frames, not decoded, until a dashboard watches it;
   5. an adapter that disappears ends the session with an error;
   6. the databases are written to the session's data folder;
   7. a raw log plays back as a bus;
@@ -322,6 +324,32 @@ async def run() -> None:
         v11 = session.v11.status()
         check(seen and v11["nodes"] == [77] and v11["subject_ids"] == [0x1234, 0xBEEF],
               f"Cyphal v1.1 traffic noticed: {v11}")
+
+        # Decoding on demand: a subject nobody watches is counted from its
+        # frames, not decoded, until a dashboard shows its values.
+        def latest_temperature() -> dict:
+            return session.telemetry.latest_by_subject.get(TEMPERATURE_SUBJECT_ID, {})
+
+        await session.set_decode_on_demand(True)
+        counted = await wait_for(lambda: latest_temperature().get("undecoded") and latest_temperature()["rate"] > 0,
+                                 timeout=10)
+        event = latest_temperature()
+        check(counted and event["attributes"] == [] and 5 <= event["rate"] <= 15
+              and event["publisher_node_id"] == DEVICE_NODE_ID,
+              f"decoding on demand, subject {TEMPERATURE_SUBJECT_ID} is counted at {event.get('rate')} Hz "
+              "from its frames, not decoded")
+        check(TEMPERATURE_SUBJECT_ID not in session.scanner.publishers_subscribers
+              and 8184 in session.scanner.publishers_subscribers,
+              "pycyphal no longer receives it; diagnostics are decoded all the same")
+        session.set_watched("a dashboard", [TEMPERATURE_SUBJECT_ID])
+        decoded = await wait_for(
+            lambda: latest_temperature().get("attributes") and not latest_temperature().get("undecoded"), timeout=5)
+        check(decoded and latest_temperature()["attributes"][-1]["value"] == 300.0,
+              "watched by a dashboard, it is decoded again at once")
+        session.set_watched("a dashboard", None)
+        await session.set_decode_on_demand(False)
+        check(TEMPERATURE_SUBJECT_ID in session.scanner.publishers_subscribers and session._rates is None,
+              "switched off, every subject is decoded again")
 
         session.hub._still_present = lambda: False  # the adapter goes away
         gone = await wait_for(lambda: not session.is_running, timeout=10.0)

@@ -48,6 +48,10 @@ const bind = () => {
     state.canAllocator = el('canAllocatorToggle').checked;
     saveSettings();
   });
+  el('decodeOnDemandToggle').addEventListener('change', () => {
+    setDecodeOnDemand(el('decodeOnDemandToggle').checked);
+  });
+  window.setInterval(syncWatchedSubjects, 250);
   const sidebarToggle = el('sidebarCollapseBtn');
   const showSidebarState = () => sidebarToggle.setAttribute('aria-expanded', String(!state.sidebarCollapsed));
   showSidebarState();

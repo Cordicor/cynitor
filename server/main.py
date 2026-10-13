@@ -41,6 +41,7 @@ from raw_log import (RAW_LOG_DIR, LogPlayer, RawLog, SocketcanTap, log_has_fd_fr
                      new_log_name, read_sidecar, write_sidecar)
 from simulation import SimulatedBus
 from testnodes import TestNodeBus, TestNodeManager
+from transfer_rates import TransferRates
 from type_guess import load_candidates, rank_types
 from startup_setup import ensure_libusb_on_path, prepare_runtime, resolve_project_root
 from version import __version__
@@ -230,7 +231,8 @@ class CANSession:
     """Manages the lifecycle of all CAN-dependent components."""
 
     def __init__(self, default_bitrate: Optional[int] = None, data_dir: Path = Path("."),
-                 default_data_bitrate: Optional[int] = None, default_allocator: bool = False) -> None:
+                 default_data_bitrate: Optional[int] = None, default_allocator: bool = False,
+                 decode_on_demand: bool = False) -> None:
         # Where the databases live; main() passes the resolved data folder.
         self.data_dir = Path(data_dir)
         # --bitrate, used when connect() is not given one. There is no built-in
@@ -242,6 +244,15 @@ class CANSession:
         # --allocator, likewise: whether Cynitor gives plug-and-play nodes
         # their node-IDs. Off unless asked for: a bus may have one allocator only.
         self.default_allocator = default_allocator
+        # --decode-on-demand, and the dashboard's switch: decode only the
+        # subjects a dashboard watches or a recording takes, and count the rest
+        # from their frames (see transfer_rates). For a bus that carries more
+        # than can be decoded; off, every subject is decoded.
+        self.decode_on_demand = decode_on_demand
+        self._watched: dict[object, frozenset[int]] = {}  # by dashboard: the subjects it shows the values of
+        self._rates: Optional[TransferRates] = None       # the frame-level count, while decoding on demand
+        self._stop_rates_tap: Optional[Callable[[], None]] = None
+        self._on_demand_task: Optional[asyncio.Task] = None
         self.can_interface: Optional[str] = None
         self.can_bitrate: Optional[int] = None
         self.can_data_bitrate: Optional[int] = None
@@ -434,6 +445,8 @@ class CANSession:
                     self.service_calls.start()
                 except Exception as exc:  # CAN works on; only the recordings miss the calls
                     logger.warning("Service calls will not be recorded: %s", exc)
+                if self.decode_on_demand:
+                    self._start_on_demand()
                 if simulation is not None:
                     # Last, so that the devices join a bus Cynitor already watches.
                     self.simulation = simulation
@@ -495,6 +508,78 @@ class CANSession:
         if self.scanner is not None:
             seen |= {node_id for node_id, node in self.scanner.all_nodes.items() if node.has_appeared}
         return seen
+
+    # ── Decoding on demand ──
+
+    # For a SocketCAN socket: let the kernel pass message frames only, as
+    # transfer_rates counts no others (bit 25 marks a service frame).
+    _MESSAGE_FRAMES = [{"can_id": 0, "can_mask": 1 << 25, "extended": True}]
+
+    async def set_decode_on_demand(self, on: bool) -> None:
+        """Decode only what is watched or recorded (True), or every subject (False). Takes effect at once."""
+        async with self._lock:
+            self.decode_on_demand = on
+            if not self.is_running:
+                return
+            if on and self._rates is None:
+                self._start_on_demand()
+            elif not on:
+                self._stop_on_demand()
+
+    def set_watched(self, dashboard: object, subject_ids) -> None:
+        """The subjects ``dashboard`` shows the values of; None once it has gone."""
+        if subject_ids is None:
+            self._watched.pop(dashboard, None)
+        else:
+            self._watched[dashboard] = frozenset(subject_ids)
+        self._apply_decoding()
+
+    def _start_on_demand(self) -> None:
+        self._rates = TransferRates()
+        self._stop_rates_tap = self._open_capture_tap(self._rates.on_frame, self._MESSAGE_FRAMES)
+        self._on_demand_task = asyncio.create_task(self._on_demand_loop())
+        self._apply_decoding()
+        logger.info("Decoding on demand: only the subjects watched or recorded are decoded, the rest counted")
+
+    def _stop_on_demand(self, decode_all: bool = True) -> None:
+        """Stop counting; ``decode_all`` unless the session is ending anyway."""
+        if self._on_demand_task is not None:
+            self._on_demand_task.cancel()
+        self._on_demand_task = None
+        if self._stop_rates_tap is not None:
+            self._stop_rates_tap()
+        self._stop_rates_tap = None
+        if decode_all and self._rates is not None and self.scanner is not None:
+            self.scanner.set_decoding(None)
+            logger.info("Decoding every subject again")
+        self._rates = None
+
+    def _wanted_subjects(self) -> set[int]:
+        """The subjects some dashboard watches or some recording takes."""
+        wanted: set[int] = set().union(*self._watched.values())
+        if self.event_logger is not None:
+            for subject_id, message_type in self.scanner.subject_types.items():
+                if subject_id not in wanted and self.event_logger.records_subject(
+                        subject_id, self.scanner.active_publishers.get(subject_id, ()),
+                        message_type.rpartition(".")[2]):
+                    wanted.add(subject_id)
+        return wanted
+
+    def _apply_decoding(self) -> None:
+        if self._rates is not None and self.scanner is not None:
+            self.scanner.set_decoding(self._wanted_subjects())
+
+    async def _on_demand_loop(self) -> None:
+        """Every second: follow the recordings that started or stopped, and report the rates counted."""
+        while True:
+            await asyncio.sleep(1.0)
+            try:
+                self._apply_decoding()
+                await self.scanner.queue_rates(self._rates.sample())
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # a second's rates missed must not end the loop
+                logger.error("Decoding on demand: %s", exc, exc_info=True)
 
     def _node_ids_in_use(self) -> set[int]:
         """Cynitor's own node-IDs, and those of the nodes online on the bus."""
@@ -570,16 +655,17 @@ class CANSession:
             await self._teardown()
 
     def dropped_events(self) -> Optional[dict[str, int]]:
-        """Decoded events discarded because a queue was full, by where they were lost.
+        """What was discarded because a queue was full, by where it was lost.
 
-        ``scanner``: before reaching anything. ``logger``: missing from history
-        and recordings. ``clients``: missing from a dashboard's live view.
-        None when CAN is not connected.
+        ``scanner``: before reaching anything, CAN frames of subjects whose
+        decoding fell too far behind, and decoded events.
+        ``logger``: events missing from history and recordings. ``clients``:
+        missing from a dashboard's live view. None when CAN is not connected.
         """
         if not self.is_running or not self.scanner or not self.telemetry:
             return None
         return {
-            "scanner": self.scanner.dropped_events,
+            "scanner": self.scanner.dropped_events + self.scanner.dropped_frames(),
             "logger": self.telemetry.dropped["logger"]
                       + (self.event_logger.dropped_events if self.event_logger else 0),
             "clients": self.telemetry.dropped["client"],
@@ -887,6 +973,7 @@ class CANSession:
         if self.allocator is not None:
             self.allocator.close()
         self.allocator = None
+        self._stop_on_demand(decode_all=False)  # before the hub and the scanner too
         # Before the hub and the scanner, which its tap listens to.
         if self.frame_capture is not None:
             self.frame_capture.stop()
@@ -1168,6 +1255,8 @@ async def _event_logger_loop(event_logger, queue: asyncio.Queue) -> None:
     try:
         while True:
             event = await queue.get()
+            if event.get("undecoded"):  # a rate counted from frames: nothing to keep
+                continue
             await event_logger.log_event(event)
     except asyncio.CancelledError:
         logger.debug("Event logger loop cancelled")
@@ -1271,7 +1360,8 @@ def _quiet_completion_of_cancelled_futures(loop: asyncio.AbstractEventLoop, cont
 async def main(can_iface: Optional[str] = None, force_compile: bool = False, bind: str = "127.0.0.1",
                port: int = 8080, serve_frontend: bool = True,
                can_bitrate: Optional[int] = None, data_dir: Optional[str] = None,
-               can_data_bitrate: Optional[int] = None, allocator: bool = False) -> None:
+               can_data_bitrate: Optional[int] = None, allocator: bool = False,
+               decode_on_demand: bool = False) -> None:
     from websocket_server import WebSocketServer
     from dsdl_manager import DsdlManager
 
@@ -1287,7 +1377,8 @@ async def main(can_iface: Optional[str] = None, force_compile: bool = False, bin
         logger.info("Moved %s from %s into the data folder", ", ".join(moved), Path.cwd())
 
     session = CANSession(default_bitrate=can_bitrate, data_dir=data_path,
-                         default_data_bitrate=can_data_bitrate, default_allocator=allocator)
+                         default_data_bitrate=can_data_bitrate, default_allocator=allocator,
+                         decode_on_demand=decode_on_demand)
     project_root = resolve_project_root()
     dsdl_mgr = DsdlManager(project_root, data_dir=data_path)
     dsdl_mgr.make_importable()
@@ -1343,6 +1434,7 @@ async def main(can_iface: Optional[str] = None, force_compile: bool = False, bin
     logger.info("  --bitrate <n>    bus speed in bit/s; required with --can for any adapter except SocketCAN")
     logger.info("  --data-bitrate <n>  CAN FD data-phase speed; opens PCAN/Kvaser/Vector/IXXAT/gs_usb/slcan as CAN FD")
     logger.info("  --allocator      give plug-and-play nodes their node-IDs; only for a bus with no allocator of its own")
+    logger.info("  --decode-on-demand  decode only the subjects watched or recorded; for a bus too busy to decode whole")
     logger.info("  --bind <host>    bind HTTP server to <host>  (default 127.0.0.1; 0.0.0.0 to expose on the network)")
     logger.info("  --port <n>       listen on <n> instead of 8080")
     logger.info("  --data-dir <dir> keep history, recordings and raw logs in <dir>")
@@ -1510,6 +1602,14 @@ if __name__ == "__main__":
              "The dashboard and POST /api/can/connect can also turn it on for one session.",
     )
     parser.add_argument(
+        "--decode-on-demand",
+        action="store_true",
+        help="Decode only the subjects a dashboard shows the values of or a recording takes; "
+             "every other subject is counted from its frames, so its rate still shows. For a "
+             "bus that carries more than the server can decode. History and 'save the last "
+             "N seconds' then hold only what was decoded. The dashboard can switch it too.",
+    )
+    parser.add_argument(
         "--recompile",
         action="store_true",
         help="Force DSDL recompilation even if already compiled",
@@ -1566,6 +1666,7 @@ if __name__ == "__main__":
             data_dir=args.data_dir,
             can_data_bitrate=args.data_bitrate,
             allocator=args.allocator,
+            decode_on_demand=args.decode_on_demand,
         ))
     except KeyboardInterrupt:
         logger.info("Interrupted by user")

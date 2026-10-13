@@ -158,10 +158,78 @@ const renderAllocator = () => {
     + "Cynitor's answers no more. Connect without the allocator on this bus.";
 };
 
+// The server's CPU use, under its data rate. It takes the bus's traffic on one
+// core, so the reading turns amber, then red, as it nears all of one.
+const SERVER_CPU_WARN = 70;
+const SERVER_CPU_FULL = 90;
+const renderServerCpu = () => {
+  const reading = el('serverCpu');
+  if (!reading) return;
+  const cpu = state.dashboardConnected ? state.serverCpu : null;
+  reading.classList.toggle('hidden', cpu == null);
+  reading.classList.toggle('load-warn', cpu != null && cpu >= SERVER_CPU_WARN && cpu < SERVER_CPU_FULL);
+  reading.classList.toggle('load-err', cpu != null && cpu >= SERVER_CPU_FULL);
+  if (cpu == null) return;
+  reading.textContent = `CPU ${Math.round(cpu)}%`;
+  reading.title = `The server uses ${cpu}% of one core. It takes the bus's traffic on one core: near 100% `
+    + 'it cannot keep up, and what it then loses is counted as dropped.';
+};
+
+// The server's switch between decoding every subject and only those watched
+// or recorded: for a bus that carries more than it can decode.
+const renderDecodeSwitch = () => {
+  const toggle = el('decodeOnDemandToggle');
+  if (!toggle) return;
+  toggle.checked = state.dashboardConnected && state.decodeOnDemand;
+  toggle.disabled = !state.dashboardConnected;
+  el('decodeOnDemandRow').classList.toggle('is-locked', toggle.disabled);
+};
+
+const setDecodeOnDemand = async (on) => {
+  try {
+    const data = await requestJson('/api/decoding', { method: 'POST', body: JSON.stringify({ on_demand: on }) });
+    state.decodeOnDemand = data?.decode_on_demand === true;
+  } catch (error) {
+    showToast(`Decoding not switched: ${error.message}`, 'error');
+  }
+  renderDecodeSwitch();
+};
+
+// The subjects whose values this dashboard shows: the selected node's, those
+// plotted here or in Compare, those the log panel lists. The server is told
+// whenever they change, and while it decodes on demand decodes no others
+// (but what a recording takes). Asked several times a second: nothing is sent
+// unless they changed.
+const watchedSubjects = () => {
+  const watched = new Set(state.logSubjectIds);
+  const node = getSelectedNode();
+  for (const sid of [...(node?.publishers || []), ...(node?.subscribers || [])]) watched.add(sid);
+  for (const sid of [state.selectedPlotSubject, state._subjectsPlotSubject]) {
+    if (sid != null) watched.add(Number(sid));
+  }
+  for (const graph of state.compareGraphs) {
+    for (const series of graph.series || []) watched.add(series.subjectId);
+  }
+  return [...watched].filter((sid) => Number.isInteger(sid) && sid >= 0 && sid <= 8191).sort((a, b) => a - b);
+};
+
+const syncWatchedSubjects = () => {
+  if (state.ws?.readyState !== WebSocket.OPEN) {
+    state._watchedSent = null;  // a new socket is told anew
+    return;
+  }
+  const watched = watchedSubjects();
+  const sent = watched.join(',');
+  if (sent === state._watchedSent) return;
+  state._watchedSent = sent;
+  state.ws.send(JSON.stringify({ type: 'watch', subject_ids: watched }));
+};
+
 const updateSemaphores = () => {
   renderV11Notice();
   renderBusNotice();
   renderAllocator();
+  renderDecodeSwitch();
   const serverDot = el('serverSemaphore');
   const canDot = el('canSemaphore');
   const serverInfo = el('serverThroughput');
@@ -211,6 +279,7 @@ const updateSemaphores = () => {
       serverInfo.classList.add('hidden');
     }
   }
+  renderServerCpu();
 
   if (canInfo) {
     if (state.canConnected) {
@@ -348,6 +417,8 @@ const connectWs = () => {
   state.ws = new WebSocket(wsUrlWithToken('/ws'));
 
   state.ws.onopen = () => {
+    state._watchedSent = null;
+    syncWatchedSubjects();
     state.wsReconnectAttempts = 0;
     state.lastWsMessageMs = Date.now();
     _updateStaleBanner();
@@ -407,6 +478,7 @@ const connectWs = () => {
         return;
       }
       if (event.type === 'metrics') {
+        state.serverCpu = event.server_cpu ?? null;
         state.busUtilization = event.bus_utilization ?? null;
         if (state.busUtilization != null) {
           state.busLoadHistory.push(state.busUtilization);
@@ -437,7 +509,8 @@ const connectWs = () => {
         return;
       }
       cacheEvent(event);
-      ingestLogEvent(event);
+      // A rate counted from frames (the server decodes on demand) has no text.
+      if (!event.undecoded) ingestLogEvent(event);
       scheduleDetailRefresh();
       scheduleTableRefresh();
     } catch (err) {
@@ -778,6 +851,8 @@ const pollStatus = async () => {
   state.cyphalV11 = data.cyphal_v11 ?? null;
   state.busErrors = data.bus_errors ?? null;
   state.allocatorStatus = data.allocator ?? null;
+  state.serverCpu = data.server_cpu ?? state.serverCpu;
+  state.decodeOnDemand = data.decode_on_demand === true;
 
   const backendCanRunning = data.status === 'running' && !!data.can_interface;
 
@@ -945,6 +1020,7 @@ const openDashboard = async () => {
   stopRetryingDashboard();
   state.dashboardConnecting = false;
   state.dashboardConnected = true;
+  state.decodeOnDemand = statusData.decode_on_demand === true;
   updateDashboardConnectButton();
   startStatusPolling();
 

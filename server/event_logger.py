@@ -68,6 +68,9 @@ class EventLogger:
     # many rows it holds, so throughput scales with the batch: ~1k events/s at
     # 10 per commit, ~20k at 500.
     BATCH_SIZE = 500
+    # A warning for every dropped event buried the log and slowed an overloaded
+    # server further: thousands of lines a second. One says it, then one every so long.
+    DROP_WARNING_INTERVAL_S = 5.0
     QUEUE_SIZE = 5000
 
     def __init__(
@@ -91,6 +94,7 @@ class EventLogger:
         self.max_events = max_events
         self._queue: asyncio.Queue = asyncio.Queue(maxsize=self.QUEUE_SIZE)
         self.dropped_events = 0  # events discarded because _queue was full
+        self._drop_warning_at: Optional[float] = None  # monotonic time of the last warning of that
         self._running = False
         self._task: Optional[asyncio.Task] = None
         self._autostop_task: Optional[asyncio.Task] = None
@@ -302,13 +306,20 @@ class EventLogger:
         try:
             self._queue.put_nowait(event)
         except asyncio.QueueFull:
-            logger.warning("Logger queue full, dropping oldest event")
             try:
                 self._queue.get_nowait()
                 self.dropped_events += 1
                 self._queue.put_nowait(event)
             except asyncio.QueueEmpty:
                 logger.debug("Logger queue was empty while attempting to drop the oldest event")
+            self._warn_of_drops()
+
+    def _warn_of_drops(self) -> None:
+        now = time.monotonic()
+        if self._drop_warning_at is None or now - self._drop_warning_at >= self.DROP_WARNING_INTERVAL_S:
+            self._drop_warning_at = now
+            logger.warning("Logger queue full: events come faster than they are written, and the oldest "
+                           "are dropped from history and recordings (%d so far)", self.dropped_events)
     
     async def _log_loop(self) -> None:
         """Main logging loop."""
@@ -1004,6 +1015,19 @@ class EventLogger:
         if max_t and (now - info.get("start_unix", now)) >= max_t:
             return "max_length_seconds"
         return None
+
+    def records_subject(self, subject_id: int, node_ids, message_type: Optional[str]) -> bool:
+        """Whether a recording in progress takes ``subject_id``'s messages, published by ``node_ids``.
+
+        ``message_type`` is as in an event ("Scalar_1_0"). What Cynitor must
+        go on decoding while it decodes on demand.
+        """
+        with self._active_lock:
+            matchers = [info["matcher"] for info in self._active_recordings.values()]
+        return any(
+            matcher.matches_subject({"subject_id": subject_id, "publisher_node_id": node_id,
+                                     "message_type": message_type})
+            for matcher in matchers for node_id in (tuple(node_ids) or (None,)))
 
     def _make_active_entry(self, rec: dict[str, Any]) -> dict[str, Any]:
         return {

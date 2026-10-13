@@ -814,6 +814,13 @@ body {
   transition: color 0.2s;
 }
 
+/* The server's readings, one under the other: its data rate, its CPU use. */
+.server-readings {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+}
+
 .throughput-value.load-ok { color: var(--ok); }
 .throughput-value.load-warn { color: var(--warn); }
 .throughput-value.load-err { color: var(--error); }
@@ -1141,9 +1148,9 @@ body {
   font-size: 0.8125rem;
 }
 
-/* Whether Cynitor gives plug-and-play nodes their node-IDs: the choice
-   before connecting, and while connected a session that does (ticked, locked). */
-.can-allocator-toggle {
+/* A switch in the sidebar: whether Cynitor gives plug-and-play nodes their
+   node-IDs (CAN section), whether the server decodes on demand (Server section). */
+.sidebar-toggle {
   display: flex;
   align-items: center;
   gap: 0.375rem;
@@ -1153,14 +1160,14 @@ body {
   user-select: none;
 }
 
-.can-allocator-toggle input[type="checkbox"] {
+.sidebar-toggle input[type="checkbox"] {
   accent-color: var(--accent);
   /* Not the global inputs' 100 % */
   width: auto;
 }
 
 /* Not to be changed now: the server is off, or CAN is connecting or connected. */
-.can-allocator-toggle.is-locked {
+.sidebar-toggle.is-locked {
   cursor: default;
 }
 

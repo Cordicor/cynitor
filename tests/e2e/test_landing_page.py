@@ -5629,6 +5629,9 @@ class _SidebarServer:
         self.bus_errors = None     # what it says of errors on the bus, while connected
         self.connect_body = None   # what the last CAN connect asked for
         self.allocator = None      # what it says of its node-ID allocator, while it runs one
+        self.decode_on_demand = False  # whether it decodes only what is watched or recorded
+        self.decoding_error = None     # what switching that fails with, if it does
+        self.watched = []          # every list of watched subjects the dashboard sent, in turn
 
     async def handle(self, route):
         if self.down:
@@ -5647,7 +5650,15 @@ class _SidebarServer:
                       "bus_utilization": 30.0 if self.can else None, "dropped": None,
                       "last_error": self.last_error, "cyphal_v11": None,
                       "bus_errors": self.bus_errors if self.can else None,
-                      "allocator": self.allocator if self.can else None}
+                      "allocator": self.allocator if self.can else None,
+                      "decode_on_demand": self.decode_on_demand}
+        elif path == "/api/decoding" and self.decoding_error:
+            await route.fulfill(json={"error": self.decoding_error}, status=500,
+                                headers={"Access-Control-Allow-Origin": "*"})
+            return
+        elif path == "/api/decoding":
+            self.decode_on_demand = request.post_data_json["on_demand"]
+            answer = {"decode_on_demand": self.decode_on_demand}
         elif path == "/api/can/connect" and self.connect_error:
             await route.fulfill(json={"error": self.connect_error}, status=500,
                                 headers={"Access-Control-Allow-Origin": "*"})
@@ -5675,6 +5686,12 @@ class _SidebarServer:
 
     def on_socket(self, ws):
         self.ws = ws
+        ws.on_message(self._on_message)
+
+    def _on_message(self, text):
+        message = json.loads(text)
+        if message.get("type") == "watch":
+            self.watched.append(message["subject_ids"])
 
 
 async def sidebar_open(page, server, saved_connected=False):
@@ -6185,6 +6202,105 @@ async def _(page):
         assert gone, "After CAN Disconnect the notice still shows"
     finally:
         await page.evaluate("state.canAllocator = false; _writeSettingsNow()")
+        await sidebar_close(page, server)
+
+
+@test("Sidebar: decoding on demand is switched in the Server section, and the switch follows what the server says")
+async def _(page):
+    server = _SidebarServer()
+    await sidebar_open(page, server)
+    box = page.locator("#decodeOnDemandToggle")
+    try:
+        off = (await box.is_disabled(), await box.is_checked())
+        await page.locator("#connectDashboardBtn").click()
+        await page.wait_for_function("state.dashboardConnected", timeout=WAIT_MS)
+        ready = (await box.is_enabled(), await box.is_checked())
+        await box.check()
+        await page.wait_for_function("state.decodeOnDemand === true", timeout=WAIT_MS)
+        on = (server.decode_on_demand, await box.is_checked())
+        server.decode_on_demand = False   # another dashboard switched it back
+        await page.evaluate("pollStatus()")
+        await page.wait_for_function("!el('decodeOnDemandToggle').checked", timeout=WAIT_MS)
+        server.decoding_error = "CAN is busy"
+        await box.click()
+        toast = page.locator("#toastContainer .toast", has_text="Decoding not switched")
+        await toast.wait_for(state="visible", timeout=WAIT_MS)
+        refused = (server.decode_on_demand, await box.is_checked())
+        title = await page.locator("#decodeOnDemandRow").get_attribute("title")
+        assert off == (True, False), f"With no server, the switch is disabled, ticked: {off}"
+        assert ready == (True, False), f"Connected to a server that decodes everything, enabled, ticked: {ready}"
+        assert on == (True, True), f"Ticked, the server decodes on demand, and the box is ticked: {on}"
+        assert refused == (False, False), f"Refused by the server, the server's mode and the box: {refused}"
+        assert "rates still show" in title and "hold only what was decoded" in title, f"Its title: {title}"
+    finally:
+        await sidebar_close(page, server)
+
+
+@test("Sidebar: the server is told which subjects' values are on screen, once, and again when they change")
+async def _(page):
+    server = _SidebarServer()
+    await sidebar_open(page, server)
+    try:
+        await page.locator("#connectDashboardBtn").click()
+        await page.wait_for_function("state.ws?.readyState === 1", timeout=5000)
+        await sidebar_connect_can(page)
+        await page.evaluate("getAllNodes()")
+        await page.wait_for_function("nodesTabulator.getRows().length === 2", timeout=WAIT_MS)
+
+        async def told(expected):
+            for _ in range(15):
+                if server.watched and server.watched[-1] == expected:
+                    return True
+                await page.wait_for_timeout(100)
+            return False
+
+        nothing = await told([])                       # a new socket is told, though nothing is on screen
+        await page.evaluate("setSelectedNode(10)")     # node 10 publishes subject 100
+        node = await told([100])
+        await page.evaluate("state.logSubjectIds.add(7)")   # a text subject in the log panel
+        log = await told([7, 100])
+        sent = len(server.watched)
+        await page.wait_for_timeout(700)               # nothing changes: nothing more is said
+        quiet = len(server.watched) == sent
+        await page.evaluate("clearSelectedNode()")
+        left = await told([7])
+        assert nothing and node and log and left, \
+            f"Told of nothing, node 10's subject, the log's too, then the log's alone: {server.watched}"
+        assert quiet, f"With nothing changed, more was sent: {server.watched}"
+    finally:
+        await page.evaluate("state.logSubjectIds.delete(7); clearSelectedNode()")
+        await sidebar_close(page, server)
+
+
+@test("Sidebar: the server's CPU use shows under its data rate, amber when high and red when it is full")
+async def _(page):
+    server = _SidebarServer()
+    await sidebar_open(page, server)
+    reading = page.locator("#serverCpu")
+    try:
+        await page.locator("#connectDashboardBtn").click()
+        await page.wait_for_function("state.ws?.readyState === 1", timeout=5000)
+        before = await reading.is_hidden()
+        seen = {}
+        for cpu in (12.4, 75, 96.2):  # the backend's metrics, once a second
+            server.ws.send(json.dumps({"type": "metrics", "bus_utilization": None, "server_cpu": cpu}))
+            await page.wait_for_function(f"state.serverCpu === {cpu}", timeout=WAIT_MS)
+            await page.evaluate("updateSemaphores()")  # the one-second timer, without waiting for it
+            seen[cpu] = (await reading.inner_text(), sorted(set((await reading.get_attribute("class")).split())
+                                                           & {"load-warn", "load-err"}))
+        title = await reading.get_attribute("title")
+        one_line = await page.evaluate("""() => { const r = el('serverCpu').getBoundingClientRect();
+            return r.height < 1.6 * parseFloat(getComputedStyle(el('serverCpu')).fontSize); }""")
+        await page.evaluate("disconnectAll()")
+        gone = await reading.is_hidden()
+        assert before, "Before the server said what it uses, the reading shows"
+        assert seen[12.4] == ("CPU 12%", []), f"At 12.4 %: {seen[12.4]}"
+        assert seen[75] == ("CPU 75%", ["load-warn"]), f"At 75 %: {seen[75]}"
+        assert seen[96.2] == ("CPU 96%", ["load-err"]), f"At 96.2 %: {seen[96.2]}"
+        assert "96.2% of one core" in title and "cannot keep up" in title, f"Its title: {title}"
+        assert one_line, "The reading wraps"
+        assert gone, "Disconnected from the server, its reading still shows"
+    finally:
         await sidebar_close(page, server)
 
 

@@ -27,6 +27,11 @@ import uavcan.pnp
 from node_info import NodeInfo
 from node_identity_map import NodeIdentityMap
 
+# pycyphal logs each frame it drops from a full queue, at INFO: thousands of
+# lines a second from a bus that outruns the decoding. They are counted
+# instead (ScannerNode.dropped_frames).
+logging.getLogger("pycyphal.transport.can._session._input").setLevel(logging.WARNING)
+
 
 def _fire_and_log(coro, context: str = "background task"):
     """Schedule a coroutine and log any exception with full traceback."""
@@ -66,7 +71,22 @@ class ScannerNode:
     INFO_REFRESH_S = 60.0   # GetInfo refresh period once a node has answered
     INFO_RETRY_S = 10.0     # retry period while it has not
     NODE_ID_CONFLICT_REPORT_S = 60.0  # report a shared node-ID at most this often
+    # The furthest the decoding of a subject may fall behind the bus. pycyphal
+    # keeps the frames that wait to be decoded without limit, so a subject that
+    # outran the decoding put the live view ever further behind, with nothing
+    # counted as lost. A burst is still taken whole; but once a message is this
+    # old when its turn comes, the frames waiting behind it are let go, all at
+    # once, and counted (dropped_frames). Dropping them one by one as they
+    # arrive would leave no transfer of several frames whole.
+    MAX_DECODING_LAG_S = 1.0
     offline: Optional[dict] = None    # set per session while a raw log plays (see __init__)
+    _dropped_frames_closed = 0        # frames dropped on subjects no longer decoded (see dropped_frames)
+    # While Cynitor decodes on demand: the only subjects decoded, of those
+    # whose type is known (see set_decoding). None: all of them.
+    decode_only: Optional[frozenset] = None
+    # Decoded whatever is asked for: what the dashboard cannot do without, each
+    # a message a second or so from a node.
+    ALWAYS_DECODED = frozenset({7509, 7510, 8165, 8166, 8184})
     STANDARD_SERVICES = {
         384: 'uavcan.register.Access_1_0',
         385: 'uavcan.register.List_1_0',
@@ -129,7 +149,7 @@ class ScannerNode:
         self._prev_uptime: dict[int, int] = {}
         self._prev_ports: dict[int, dict] = {}  # node_id -> {publishers: [...], ...}
         self._info_in_flight: set[int] = set()  # node_ids with a GetInfo running
-        self._rate_timestamps: dict[tuple[int, int], collections.deque] = {}  # (subject_id, node_id) -> times
+        self._rate_timestamps: dict[int, dict[int, collections.deque]] = {}  # subject_id -> node_id -> times
         self.subject_types: dict[int, str] = {}           # subject_id -> the type it is decoded as
         # Those of subject_types the user set, for subjects no register names.
         self.user_subject_types: dict[int, str] = {}
@@ -417,7 +437,7 @@ class ScannerNode:
             message_type = self._dsdl_type_to_module_name(message_type)  # "ns.Name.1.0" -> "ns.Name_1_0"
         data_type_class = None if message_type is None else self._message_class(message_type)
         if subject_id in self.user_subject_types:
-            self.publishers_subscribers.pop(subject_id).close()
+            self._unsubscribe(subject_id)
             self.subject_types.pop(subject_id, None)
             del self.user_subject_types[subject_id]
         if data_type_class is not None:
@@ -440,7 +460,7 @@ class ScannerNode:
 
         Listens at the transport level, as no type is known yet.
         """
-        if subject_id in self.publishers_subscribers:
+        if subject_id in self.subject_types:
             raise RuntimeError(f"Subject {subject_id} is already decoded")
         if subject_id in self._sampling:
             raise RuntimeError(f"Subject {subject_id} is already being listened to")
@@ -463,18 +483,63 @@ class ScannerNode:
         return payloads
 
     def _subscribe(self, subject_id: int, data_type_class, message_type: str) -> None:
-        """Decode ``subject_id`` as ``data_type_class`` from now on."""
+        """Decode ``subject_id`` as ``data_type_class`` from now on, whenever it is to be decoded."""
         model = get_model(data_type_class)
         self.subject_attributes[subject_id] = [a.name for a in model.attributes if isinstance(a, Field)]
         self.subject_types[subject_id] = message_type
+        if self._decoded_now(subject_id):
+            self._listen(subject_id, data_type_class)
 
+    def _decoded_now(self, subject_id: int) -> bool:
+        return self.decode_only is None or subject_id in self.decode_only or subject_id in self.ALWAYS_DECODED
+
+    def set_decoding(self, subject_ids) -> None:
+        """Decode only ``subject_ids`` of the subjects whose type is known; None decodes them all.
+
+        A subject not decoded costs next to nothing, as its frames are let go
+        on arrival; its type is kept, so decoding it again is a matter of
+        listening. What is decoded whatever is asked for: ALWAYS_DECODED.
+        """
+        self.decode_only = None if subject_ids is None else frozenset(subject_ids)
+        for subject_id, message_type in list(self.subject_types.items()):
+            listening = subject_id in self.publishers_subscribers
+            if listening and not self._decoded_now(subject_id):
+                self._unsubscribe(subject_id)
+            elif not listening and self._decoded_now(subject_id):
+                try:
+                    self._listen(subject_id, self._message_class(message_type))
+                except ValueError as exc:  # its type is compiled no more
+                    logging.warning(f"Subject {subject_id} cannot be decoded: {exc}")
+
+    def _listen(self, subject_id: int, data_type_class) -> None:
+        """Receive ``subject_id``'s messages and turn them into events."""
         async def callback(msg, transfer, sub_id=subject_id):
             await self._publisher_callback(msg, transfer, sub_id)
 
         subscriber = self._node.make_subscriber(data_type_class, subject_id)
         subscriber.receive_in_background(callback)
         self.publishers_subscribers[subject_id] = subscriber
-        logging.debug(f"Subscribed to subject {subject_id} as {message_type}")
+        logging.debug(f"Listening to subject {subject_id}")
+
+    def _unsubscribe(self, subject_id: int) -> None:
+        """Stop receiving ``subject_id``, if it is received, keeping count of the frames it lost."""
+        subscriber = self.publishers_subscribers.pop(subject_id, None)
+        if subscriber is None:
+            return
+        self._dropped_frames_closed += self._frames_dropped(subscriber)
+        subscriber.close()
+
+    @staticmethod
+    def _frames_dropped(subscriber) -> int:
+        try:
+            return int(subscriber.transport_session.sample_statistics().drops)
+        except (AttributeError, TypeError, ValueError):
+            return 0
+
+    def dropped_frames(self) -> int:
+        """CAN frames let go before decoding: their subject's messages came faster than they were decoded."""
+        return self._dropped_frames_closed + sum(
+            self._frames_dropped(subscriber) for subscriber in self.publishers_subscribers.values())
 
     @staticmethod
     def _major_type(type_name: str) -> str:
@@ -1203,13 +1268,12 @@ class ScannerNode:
         only the publishers still sending: one that stopped would otherwise
         keep its full rate in it until its messages left the window.
         """
-        times = self._rate_timestamps.setdefault((subject_id, node_id), collections.deque())
+        publishers = self._rate_timestamps.setdefault(subject_id, {})
+        times = publishers.setdefault(node_id, collections.deque())
         times.append(timestamp)
         publisher_rate = self._windowed_rate(times, timestamp)
         subject_rate = 0.0
-        for (sid, _nid), other in self._rate_timestamps.items():
-            if sid != subject_id:
-                continue
+        for other in publishers.values():
             other_rate = self._windowed_rate(other, timestamp)
             if self._still_publishing(other, other_rate, timestamp):
                 subject_rate += other_rate
@@ -1258,6 +1322,9 @@ class ScannerNode:
             "unique_id": self._get_node_unique_id_hex(publisher_node_id) or self.identity_map.get_uid(publisher_node_id),
             "payload_bytes": payload_bytes,
         }
+        await self._enqueue(event)
+
+    async def _enqueue(self, event: dict) -> None:
         try:
             self.message_queue.put_nowait(event)
         except asyncio.QueueFull:
@@ -1265,11 +1332,59 @@ class ScannerNode:
             self.dropped_events += 1
             await self.message_queue.put(event)
 
+    async def queue_rates(self, rates: dict[tuple[int, int], tuple[float, float]]) -> None:
+        """Report the rates of the subjects not decoded, as counted from their frames (transfer_rates).
+
+        One event for each publisher of each such subject, as a message of
+        its would give but with no values and ``"undecoded": true``: the rate
+        and the time of the last message are what a dashboard shows of a
+        subject nobody watches. ``rates``: {(subject-ID, node-ID): (messages
+        a second, time of the last)}.
+        """
+        own = self._node.id
+        reported = {key: value for key, value in rates.items()
+                    if key[0] not in self.publishers_subscribers and key[0] not in self.ALWAYS_DECODED
+                    and key[1] != own}
+        subject_rates: dict[int, float] = collections.defaultdict(float)
+        for (subject_id, _node_id), (rate, _last) in reported.items():
+            subject_rates[subject_id] += rate
+        for (subject_id, node_id), (rate, last_seen) in reported.items():
+            await self._enqueue({
+                "subject_id": subject_id,
+                "timestamp": datetime.datetime.fromtimestamp(last_seen).isoformat(timespec="seconds"),
+                "timestamp_unix": last_seen,
+                "rate": round(rate, 1),
+                "subject_rate": round(subject_rates[subject_id], 1),
+                "message_type": self.subject_types.get(subject_id, "").rpartition(".")[2] or None,
+                "attributes": [],
+                "publisher_node_id": node_id,
+                "unique_id": self._get_node_unique_id_hex(node_id) or self.identity_map.get_uid(node_id),
+                "payload_bytes": None,
+                "undecoded": True,
+            })
+
+    def _skip_backlog_if_behind(self, subject_id: int, transfer) -> None:
+        """Let go of the frames ``subject_id`` has waiting, if ``transfer`` waited longer than may be."""
+        try:
+            lag = time.monotonic() - float(transfer.timestamp.monotonic)
+        except (AttributeError, TypeError, ValueError):
+            return
+        subscriber = self.publishers_subscribers.get(subject_id)
+        # A raw log played from a file is behind nothing: all of it is wanted.
+        if lag <= self.MAX_DECODING_LAG_S or subscriber is None or self.offline is not None:
+            return
+        # Shrinking pycyphal's queue discards what does not fit and counts it
+        # (see dropped_frames); unlimited again, it takes what arrives next.
+        session = subscriber.transport_session
+        session.frame_queue_capacity = 1
+        session.frame_queue_capacity = None
+
     async def _publisher_callback(self, msg, transfer: pycyphal.transport.TransferFrom, subject_id: int) -> None:
         """Callback for publisher messages. Extracts attributes and queues standardized event."""
         if subject_id not in self.subject_attributes:
             logging.warning(f"Subject attributes not found for subject_id {subject_id}")
             return
+        self._skip_backlog_if_behind(subject_id, transfer)
 
         attributes = self._extract_attributes(msg, self.subject_attributes[subject_id])
         await self._queue_event(
@@ -1453,11 +1568,10 @@ class ScannerNode:
 
             # The diagnostic subject is decoded for every node, whoever advertises
             # it, and a subject the user typed until the user says otherwise.
-            if not nodes and subject_id in self.publishers_subscribers \
+            if not nodes and subject_id in self.subject_types \
                     and subject_id != self.DIAGNOSTIC_SUBJECT_ID and subject_id not in self.user_subject_types:
                 logging.info(f"Unsubscribing from subject {subject_id}, no active publishers")
-                self.publishers_subscribers[subject_id].close()
-                del self.publishers_subscribers[subject_id]
+                self._unsubscribe(subject_id)
                 self.subject_types.pop(subject_id, None)
                 to_remove.append(subject_id)
 
@@ -1491,8 +1605,8 @@ class ScannerNode:
     def _get_node_unique_id_hex(self, node_id: int) -> Optional[str]:
         node = self.all_nodes.get(node_id)
         if node and node.has_responded_to_getInfo and node.unique_id.size > 0:
-            uid = ''.join(f'{byte:02x}' for byte in node.unique_id)
-            if any(c != '0' for c in uid):
+            uid = bytes(node.unique_id).hex()  # run for every message: no loop in Python over its bytes
+            if uid.strip('0'):
                 return uid
         return None
 

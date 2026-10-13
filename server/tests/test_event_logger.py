@@ -748,6 +748,30 @@ class TestEventLogger:
         assert loaded["uid_async"]["servers"] == [384, 385, 430]
 
 
+class TestRecordsSubject:
+    """What a recording in progress takes must stay decoded while Cynitor decodes on demand."""
+
+    def recording(self, db_path, *filters):
+        el = EventLogger(db_path=db_path)
+        for i, filt in enumerate(filters, start=1):
+            el._active_recordings[i] = el._make_active_entry({"id": i, "start_unix": 0.0, "filter": filt})
+        return el
+
+    def test_nothing_while_nothing_is_recorded(self, db_path):
+        assert not self.recording(db_path).records_subject(1620, {42}, "T_1_0")
+
+    def test_a_recording_of_everything_takes_every_subject(self, db_path):
+        assert self.recording(db_path, None).records_subject(1620, {42}, "T_1_0")
+
+    def test_by_subject_by_publisher_or_by_type(self, db_path):
+        el = self.recording(db_path, {"subject_ids": [1620]}, {"node_ids": [43]}, {"message_types": ["Scalar_1_0"]})
+        assert el.records_subject(1620, {42}, "T_1_0")           # the subject
+        assert el.records_subject(1700, {42, 43}, "T_1_0")       # one of its publishers
+        assert el.records_subject(1701, {42}, "Scalar_1_0")      # its type
+        assert not el.records_subject(1702, {42}, "T_1_0")
+        assert not el.records_subject(1702, (), "T_1_0")         # no publisher known yet
+
+
 class TestLoggerThroughput:
 
     @pytest.mark.asyncio
@@ -757,6 +781,27 @@ class TestLoggerThroughput:
         for i in range(5):
             await el.log_event(_sample_event(subject_id=i))
         assert el.dropped_events == 3
+
+    @pytest.mark.asyncio
+    async def test_full_queue_warns_now_and_then_not_for_every_event(self, db_path, caplog, monkeypatch):
+        # A line per dropped event was thousands a second from an overloaded server.
+        import event_logger
+        clock = [100.0]
+        monkeypatch.setattr(event_logger.time, "monotonic", lambda: clock[0])
+        el = EventLogger(db_path=db_path)
+        el._queue = asyncio.Queue(maxsize=1)
+
+        def warnings():
+            return [r.getMessage() for r in caplog.records if "Logger queue full" in r.getMessage()]
+
+        with caplog.at_level("WARNING", logger="event_logger"):
+            for i in range(50):
+                await el.log_event(_sample_event(subject_id=i))
+            assert len(warnings()) == 1 and "(1 so far)" in warnings()[0]
+            clock[0] += EventLogger.DROP_WARNING_INTERVAL_S
+            await el.log_event(_sample_event())
+            assert len(warnings()) == 2 and "(50 so far)" in warnings()[1]
+        assert el.dropped_events == 50
 
     @pytest.mark.asyncio
     async def test_queued_events_are_written_in_large_batches(self, db_path):

@@ -11,7 +11,10 @@ import json
 import time
 import types
 from decimal import Decimal
-from unittest.mock import AsyncMock, MagicMock, patch
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
+
+import numpy as np
 
 import pytest
 
@@ -308,6 +311,167 @@ class TestInfoRefresh:
         assert not node._info_due(info, now)
         info.last_info_attempt = now - datetime.timedelta(seconds=ScannerNode.INFO_REFRESH_S + 1)
         assert node._info_due(info, now)
+
+
+def subscriber_that_dropped(frames):
+    """A pycyphal subscriber whose frame queue overflowed by ``frames``."""
+    subscriber = MagicMock()
+    subscriber.transport_session.sample_statistics.return_value = SimpleNamespace(drops=frames)
+    return subscriber
+
+
+class TestFramesDroppedBeforeDecoding:
+    """A subject that outruns the decoding loses its backlog, counted, rather than fall ever further behind."""
+
+    def make(self, lag_s: float, offline=None):
+        """A scanner decoding subject 1620, and a message of it that waited ``lag_s`` for its turn."""
+        node = ScannerNode.__new__(ScannerNode)
+        node.offline = offline
+        subscriber = MagicMock()
+        subscriber.transport_session.frame_queue_capacity = None
+        node.publishers_subscribers = {1620: subscriber}
+        transfer = SimpleNamespace(timestamp=SimpleNamespace(monotonic=time.monotonic() - lag_s, system=time.time()))
+        return node, subscriber.transport_session, transfer
+
+    def test_a_message_that_waited_too_long_lets_go_of_what_waits_behind_it(self):
+        node, session, transfer = self.make(ScannerNode.MAX_DECODING_LAG_S + 0.5)
+        type(session).frame_queue_capacity = capacity = PropertyMock(return_value=None)
+        node._skip_backlog_if_behind(1620, transfer)
+        # pycyphal's queue shrunk to one frame, which discards and counts the rest, then unlimited again.
+        assert [call.args[0] for call in capacity.call_args_list] == [1, None]
+
+    def test_a_message_in_time_leaves_the_queue_alone(self):
+        node, session, transfer = self.make(ScannerNode.MAX_DECODING_LAG_S / 2)
+        type(session).frame_queue_capacity = capacity = PropertyMock(return_value=None)
+        node._skip_backlog_if_behind(1620, transfer)
+        capacity.assert_not_called()
+
+    def test_a_raw_log_played_from_a_file_is_decoded_whole(self):
+        node, session, transfer = self.make(60.0, offline={"version": 1})
+        type(session).frame_queue_capacity = capacity = PropertyMock(return_value=None)
+        node._skip_backlog_if_behind(1620, transfer)
+        capacity.assert_not_called()
+
+    def test_a_transfer_without_a_time_is_let_be(self):
+        node, session, _ = self.make(60.0)
+        type(session).frame_queue_capacity = capacity = PropertyMock(return_value=None)
+        node._skip_backlog_if_behind(1620, SimpleNamespace())
+        capacity.assert_not_called()
+
+    def test_dropped_frames_are_summed_over_the_subjects(self):
+        node = ScannerNode.__new__(ScannerNode)
+        node.publishers_subscribers = {1620: subscriber_that_dropped(7), 1621: subscriber_that_dropped(0),
+                                       1622: subscriber_that_dropped(5)}
+        assert node.dropped_frames() == 12
+
+    def test_the_count_outlasts_a_subject_no_longer_decoded(self):
+        node = ScannerNode.__new__(ScannerNode)
+        gone = subscriber_that_dropped(7)
+        node.publishers_subscribers = {1620: gone, 1621: subscriber_that_dropped(5)}
+        node._unsubscribe(1620)
+        gone.close.assert_called_once_with()
+        assert 1620 not in node.publishers_subscribers and node.dropped_frames() == 12
+
+    def test_a_subscriber_without_statistics_counts_nothing(self):
+        node = ScannerNode.__new__(ScannerNode)
+        node.publishers_subscribers = {1620: SimpleNamespace()}
+        assert node.dropped_frames() == 0
+
+
+class TestDecodingOnDemand:
+    """Only the subjects asked for go through pycyphal; the others keep their type and are counted."""
+
+    TYPES = SimpleNamespace(T_1_0=object(), U_1_0=object(), Record_1_1=object())
+
+    @pytest.fixture
+    def node(self):
+        node = ScannerNode.__new__(ScannerNode)
+        node.subject_attributes, node.subject_types, node.publishers_subscribers = {}, {}, {}
+        node._node = MagicMock(id=10)
+        node._node.make_subscriber.side_effect = lambda dtype, subject_id: MagicMock()
+        node.message_queue = asyncio.Queue()
+        node.dropped_events = 0
+        node.identity_map = MagicMock(get_uid=MagicMock(return_value=None))
+        node._get_node_unique_id_hex = lambda node_id: "ab" * 16 if node_id == 42 else None
+        with patch("scanner_node.get_model", return_value=SimpleNamespace(attributes=[])), \
+                patch("scanner_node.importlib.import_module", return_value=self.TYPES):
+            node._subscribe(1620, self.TYPES.T_1_0, "ns.T_1_0")
+            node._subscribe(1621, self.TYPES.U_1_0, "ns.U_1_0")
+            node._subscribe(8184, self.TYPES.Record_1_1, "uavcan.diagnostic.Record_1_1")
+            yield node
+
+    def test_every_subject_is_decoded_unless_told_otherwise(self, node):
+        assert set(node.publishers_subscribers) == {1620, 1621, 8184}
+
+    def test_only_those_asked_for_and_the_diagnostics(self, node):
+        other = node.publishers_subscribers[1621]
+        node.set_decoding({1620})
+        assert set(node.publishers_subscribers) == {1620, 8184}
+        other.close.assert_called_once_with()
+        assert node.subject_types[1621] == "ns.U_1_0"   # its type is kept: it can be decoded again at once
+
+    def test_one_asked_for_later_is_listened_to_again(self, node):
+        node.set_decoding(set())
+        kept = node.publishers_subscribers[8184]
+        node.set_decoding({1621})
+        assert set(node.publishers_subscribers) == {1621, 8184}
+        assert node.publishers_subscribers[8184] is kept   # not listened to twice
+        node._node.make_subscriber.assert_called_with(self.TYPES.U_1_0, 1621)
+
+    def test_a_subject_found_meanwhile_waits_to_be_asked_for(self, node):
+        node.set_decoding({1620})
+        node._subscribe(1700, self.TYPES.T_1_0, "ns.T_1_0")
+        assert 1700 not in node.publishers_subscribers and node.subject_types[1700] == "ns.T_1_0"
+        node.set_decoding({1700})
+        assert set(node.publishers_subscribers) == {1700, 8184}
+
+    def test_none_decodes_them_all_again(self, node):
+        node.set_decoding(set())
+        node.set_decoding(None)
+        assert set(node.publishers_subscribers) == {1620, 1621, 8184}
+
+    def test_a_subject_with_a_type_is_not_one_to_guess_the_type_of(self, node):
+        node.set_decoding(set())   # typed, though not listened to
+        node._sampling = set()
+        with pytest.raises(RuntimeError, match="already decoded"):
+            asyncio.run(node.sample_subject(1620, 0.1))
+
+    async def test_the_rates_counted_are_reported_for_what_is_not_decoded(self, node):
+        node.set_decoding({1620})
+        await node.queue_rates({
+            (1620, 42): (100.0, 1000.0),   # decoded: its own messages carry its rate
+            (1621, 42): (250.04, 1000.5),
+            (1621, 43): (50.0, 1000.25),
+            (1900, 42): (5.0, 1000.0),     # no type known: counted all the same
+            (7509, 42): (1.0, 1000.0),     # heartbeats are decoded whatever happens
+            (1621, 10): (9.0, 1000.0),     # Cynitor's own node
+        })
+        events = [node.message_queue.get_nowait() for _ in range(node.message_queue.qsize())]
+        assert [(e["subject_id"], e["publisher_node_id"], e["rate"], e["subject_rate"]) for e in events] == [
+            (1621, 42, 250.0, 300.0), (1621, 43, 50.0, 300.0), (1900, 42, 5.0, 5.0)]
+        first = events[0]
+        assert first["undecoded"] is True and first["attributes"] == [] and first["payload_bytes"] is None
+        assert first["message_type"] == "U_1_0" and first["timestamp_unix"] == 1000.5
+        assert first["unique_id"] == "ab" * 16
+        assert events[2]["message_type"] is None
+
+
+class TestUniqueIdHex:
+    def make(self, unique_id, answered=True):
+        node = ScannerNode.__new__(ScannerNode)
+        node.all_nodes = {42: SimpleNamespace(has_responded_to_getInfo=answered,
+                                              unique_id=np.array(unique_id, dtype=np.uint8))}
+        return node
+
+    def test_two_hex_digits_a_byte(self):
+        assert self.make(list(range(16)))._get_node_unique_id_hex(42) == "000102030405060708090a0b0c0d0e0f"
+        assert self.make([0] * 15 + [0xA0])._get_node_unique_id_hex(42) == "0" * 30 + "a0"
+
+    def test_none_for_a_node_with_no_unique_id(self):
+        assert self.make([0] * 16)._get_node_unique_id_hex(42) is None   # all zeros: not set
+        assert self.make([])._get_node_unique_id_hex(42) is None
+        assert self.make(list(range(16)), answered=False)._get_node_unique_id_hex(42) is None
+        assert self.make(list(range(16)))._get_node_unique_id_hex(7) is None  # no such node
 
 
 class TestQueueDrops:

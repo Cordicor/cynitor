@@ -30,6 +30,8 @@ def _make_session(is_running=False, can_interface=None):
     session.last_error = None
     session.dropped_events.return_value = None
     session.allocator_status.return_value = None
+    session.decode_on_demand = False
+    session.set_decode_on_demand = AsyncMock()
     session.default_data_bitrate = None
     session.can_data_bitrate = None
     session.can_fd = False
@@ -285,6 +287,31 @@ class TestCANConnectSpecsAndBitrate:
             resp = await client.get("/api/status")
         assert resp.status == 200
         assert (await resp.json())["allocator"] == status
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("on_demand", [True, False])
+    async def test_decoding_is_switched_and_status_says_which(self, client, session, on_demand):
+        resp = await client.post("/api/decoding", json={"on_demand": on_demand})
+        assert resp.status == 200 and await resp.json() == {"decode_on_demand": on_demand}
+        session.set_decode_on_demand.assert_awaited_once_with(on_demand)
+        session.decode_on_demand = on_demand   # as the session then has it
+        with patch("main.discover_can_interfaces", return_value=[]):
+            status = await (await client.get("/api/status")).json()
+        assert status["decode_on_demand"] is on_demand
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("body", [{}, {"on_demand": "yes"}, {"on_demand": 1}, [True]])
+    async def test_decoding_wants_true_or_false(self, client, session, body):
+        resp = await client.post("/api/decoding", json=body)
+        assert resp.status == 400 and "on_demand" in (await resp.json())["error"]
+        session.set_decode_on_demand.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_status_reports_the_servers_cpu_use(self, client, server, session):
+        server.cpu.read = lambda: 42.5
+        with patch("main.discover_can_interfaces", return_value=[]):
+            resp = await client.get("/api/status")
+        assert (await resp.json())["server_cpu"] == 42.5
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("bitrate", [0, 5_000_000, "500000", True])

@@ -643,21 +643,125 @@ class TestRegisterNodesRetry:
         scanner.add_subscriptions.assert_awaited_once_with(42, {1620: "t.T_1_0"})
 
 
+class TestDecodeOnDemand:
+    """With the switch on, only what a dashboard watches or a recording takes is decoded; the rest is counted."""
+
+    @pytest.fixture
+    def session(self, tmp_path, monkeypatch):
+        from main import CANSession
+        s = CANSession(data_dir=tmp_path)
+        s.scanner = MagicMock(subject_types={1620: "ns.T_1_0", 1621: "uavcan.si.unit.velocity.Scalar_1_0"},
+                              active_publishers={1620: {42}, 1621: {43, 44}}, queue_rates=AsyncMock())
+        s.taps = []   # (what the frames go to, the kernel's filter, whether it is stopped)
+
+        def open_tap(on_frame, can_filters=None):
+            tap = [on_frame, can_filters, False]
+            s.taps.append(tap)
+            return lambda: tap.__setitem__(2, True)
+
+        monkeypatch.setattr(s, "_open_capture_tap", open_tap)
+        return s
+
+    def test_off_unless_asked_for(self, tmp_path):
+        from main import CANSession
+        assert CANSession(data_dir=tmp_path).decode_on_demand is False
+        assert CANSession(data_dir=tmp_path, decode_on_demand=True).decode_on_demand is True
+
+    async def test_switched_on_it_counts_message_frames_and_decodes_what_is_watched(self, session):
+        session.set_watched("a dashboard", [1620])
+        session.scanner.set_decoding.assert_not_called()   # off: every subject is decoded
+        await session.set_decode_on_demand(True)
+        try:
+            (on_frame, can_filters, _), = session.taps
+            assert on_frame == session._rates.on_frame
+            assert can_filters == [{"can_id": 0, "can_mask": 1 << 25, "extended": True}]   # no service frames
+            session.scanner.set_decoding.assert_called_with({1620})
+            session.set_watched("another", [1621, 1700])
+            session.scanner.set_decoding.assert_called_with({1620, 1621, 1700})
+            session.set_watched("a dashboard", None)    # it has gone
+            session.scanner.set_decoding.assert_called_with({1621, 1700})
+        finally:
+            await session.set_decode_on_demand(False)
+        session.scanner.set_decoding.assert_called_with(None)
+        assert session.taps[0][2] and session._rates is None and session._on_demand_task is None
+        assert session.decode_on_demand is False
+
+    async def test_a_recording_keeps_what_it_takes_decoded(self, session):
+        asked = []
+
+        def records_subject(subject_id, node_ids, message_type):
+            asked.append((subject_id, set(node_ids), message_type))
+            return subject_id == 1621
+        session.event_logger = MagicMock(records_subject=records_subject)
+        await session.set_decode_on_demand(True)
+        try:
+            session.scanner.set_decoding.assert_called_with({1621})
+            assert (1621, {43, 44}, "Scalar_1_0") in asked and (1620, {42}, "T_1_0") in asked
+        finally:
+            session._stop_on_demand()
+
+    async def test_every_second_the_counted_rates_go_to_the_scanner(self, session, monkeypatch):
+        import main
+        slept = []
+
+        async def no_wait(seconds):
+            slept.append(seconds)
+            if len(slept) > 2:
+                raise asyncio.CancelledError
+        monkeypatch.setattr(main.asyncio, "sleep", no_wait)
+        session._rates = MagicMock(sample=MagicMock(return_value={(1621, 43): (250.0, 1000.0)}))
+        with pytest.raises(asyncio.CancelledError):
+            await session._on_demand_loop()
+        assert session.scanner.queue_rates.await_count == 2
+        session.scanner.queue_rates.assert_awaited_with({(1621, 43): (250.0, 1000.0)})
+        session._rates = None
+
+    async def test_not_connected_the_choice_waits_for_the_next_session(self, tmp_path):
+        from main import CANSession
+        s = CANSession(data_dir=tmp_path)
+        await s.set_decode_on_demand(True)
+        assert s.decode_on_demand is True and s._rates is None
+
+    async def test_a_session_that_ends_does_not_start_decoding_everything_first(self, session):
+        await session.set_decode_on_demand(True)
+        scanner = session.scanner
+        scanner.set_decoding.reset_mock()
+        await session._teardown()
+        scanner.set_decoding.assert_not_called()
+        assert session.taps[0][2] and session._rates is None
+        assert session.decode_on_demand is True   # the next session decodes on demand too
+
+    async def test_counted_rates_are_not_written_to_history(self):
+        from main import _event_logger_loop
+        queue: asyncio.Queue = asyncio.Queue()
+        queue.put_nowait({"subject_id": 1621, "undecoded": True, "attributes": []})
+        queue.put_nowait({"subject_id": 1620, "attributes": [{"attribute": "x", "value": 1}]})
+        logger = MagicMock(log_event=AsyncMock())
+        task = asyncio.create_task(_event_logger_loop(logger, queue))
+        for _ in range(20):
+            await asyncio.sleep(0)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        logger.log_event.assert_awaited_once_with({"subject_id": 1620, "attributes": [{"attribute": "x", "value": 1}]})
+
+
 class TestDroppedEvents:
 
     def test_none_when_not_connected(self):
         from main import CANSession
         assert CANSession().dropped_events() is None
 
-    def test_sums_logger_drops_from_both_queues(self):
+    def test_sums_what_each_stage_dropped(self):
         from collections import defaultdict
         from main import CANSession
         s = CANSession()
-        s.scanner = MagicMock(dropped_events=1)
+        # The scanner: an event its queue had no room for, and ten frames never decoded.
+        s.scanner = MagicMock(dropped_events=1, dropped_frames=MagicMock(return_value=10))
         s.telemetry = MagicMock(dropped=defaultdict(int, {"logger": 2, "client": 7}))
         s.event_logger = MagicMock(dropped_events=3)
         with patch.object(CANSession, "is_running", new_callable=PropertyMock, return_value=True):
-            assert s.dropped_events() == {"scanner": 1, "logger": 5, "clients": 7}
+            assert s.dropped_events() == {"scanner": 11, "logger": 5, "clients": 7}
 
 
 class TestEventLogger:

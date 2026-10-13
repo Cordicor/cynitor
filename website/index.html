@@ -27,12 +27,20 @@
             <span class="semaphore" id="serverSemaphore"></span>
             Server
           </div>
-          <span class="throughput-value hidden" id="serverThroughput"></span>
+          <div class="server-readings">
+            <span class="throughput-value hidden" id="serverThroughput"></span>
+            <span class="throughput-value hidden" id="serverCpu"></span>
+          </div>
         </div>
         <div class="sidebar-connect">
           <input id="apiBase" type="text" value="http://localhost:8080" placeholder="http://localhost:8080"
                  aria-label="Backend URL" />
           <button id="connectDashboardBtn" class="sidebar-action btn-primary">Connect</button>
+          <label id="decodeOnDemandRow" class="sidebar-toggle"
+                 title="Decode only the subjects whose values are on screen or being recorded. The rest are counted, so their rates still show. For a bus that carries more than the server can decode (see its CPU use). History and 'save the last N seconds' then hold only what was decoded.">
+            <input id="decodeOnDemandToggle" type="checkbox" />
+            <span>Decode on demand</span>
+          </label>
         </div>
       </div>
 
@@ -87,7 +95,7 @@
               <option value="8000000">CAN FD · 8 Mbit/s data</option>
             </select>
           </div>
-          <label id="canAllocatorRow" class="can-allocator-toggle">
+          <label id="canAllocatorRow" class="sidebar-toggle">
             <input id="canAllocatorToggle" type="checkbox" />
             <span>Node-ID allocator</span>
           </label>

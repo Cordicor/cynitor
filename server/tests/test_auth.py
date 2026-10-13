@@ -18,6 +18,7 @@ def _make_session():
     s.last_error = None
     s.dropped_events.return_value = None
     s.allocator_status.return_value = None
+    s.decode_on_demand = False
     s.default_data_bitrate = None
     s.can_data_bitrate = None
     s.can_fd = False

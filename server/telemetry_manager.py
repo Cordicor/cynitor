@@ -299,10 +299,6 @@ class TelemetryManager:
             
             if publisher_node_id is not None:
                 self.latest_by_node[publisher_node_id][subject_id] = event
-                logging.debug(f"Updated subject {subject_id} from node {publisher_node_id}, "
-                             f"rate: {event.get('rate')}Hz")
-            else:
-                logging.debug(f"Updated subject {subject_id}, rate: {event.get('rate')}Hz")
         except Exception as e:
             logging.error(f"Invalid event structure: {event}, error: {e}")
 

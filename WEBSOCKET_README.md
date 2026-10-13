@@ -26,6 +26,7 @@ TelemetryManager (pub-sub router)
 ✅ **Optional Persistence** - SQLite logging for historical replay  
 ✅ **Browser Origin Policy** - The API accepts browser requests only from its own dashboard and from pages served on this machine  
 ✅ **Clean Shutdown** - Graceful WebSocket disconnect and logger queue flush  
+✅ **Decode on Demand, a switch** - For a bus that carries more than can be decoded: only the subjects a dashboard shows or a recording takes are decoded, the rest counted from their frames, so every rate still shows  
 ✅ **Node-ID Allocator, on request** - Off by default. Turned on, Cynitor gives plug-and-play nodes node-IDs nothing uses on the bus, from its own node-ID, and stops answering if another allocator answers too
 ✅ **CAN Health Monitoring** - Detects CAN bus faults (BUS-OFF, interface disappearance on SocketCAN; a failing or unplugged adapter otherwise) and auto-disconnects; errors on a bus still in use (ERROR-WARNING, ERROR-PASSIVE, error counters growing) are shown and logged once instead
 ✅ **Bus Load Monitoring** - Real-time CAN bus utilization via `canbusload` subprocess on SocketCAN, or counted from the forwarded frames for other adapters (Classic CAN and CAN FD alike), streamed to clients via WebSocket  
@@ -144,6 +145,19 @@ Turned on:
 - What it gave is forgotten when CAN disconnects: the table belongs to the bus, and the next one may be another.
 - It never runs while a raw log plays, and not when Cynitor has no node-ID of its own.
 
+### 5. Decode on Demand
+
+By default every subject whose type is known is decoded, fanned out to the dashboards and written to the 24 h history, whether anyone looks at it or not. That takes one core, and a busy bus carries more than one core decodes (see [Performance Considerations](#performance-considerations)). **Decode on demand** is the switch for such a bus. It is off unless turned on:
+- `--decode-on-demand` on the command line;
+- `POST /api/decoding` with `{"on_demand": true}`, at any time, connected to CAN or not (`false` turns it off);
+- the **Decode on demand** box in the dashboard's Server section.
+
+While it is on:
+- A subject is decoded only while a dashboard shows its values (see the `watch` message) or a recording in progress takes it (by its subject-ID, a publisher's node-ID or its type; a recording of everything keeps everything decoded). Heartbeats, port lists, plug-and-play allocation and `uavcan.diagnostic.Record` are decoded whatever happens.
+- Every other subject is counted from its CAN frames as they pass, by the subject-ID and node-ID of each transfer's last frame, whether its type is known or not. Once a second each of its publishers gets an event with `"undecoded": true`, an empty `attributes`, and the `rate`, `subject_rate` and `timestamp_unix` (of its last message) counted, so that rates, last-seen times and the graph show as before.
+- The 24 h history, "save the last N seconds" and `GET /api/latest/*` hold values only for what was decoded at the time. Start a recording, or leave the switch off, for what must be kept.
+- Switching it off decodes every subject again at once.
+
 ```bash
 python3 main.py
 ```
@@ -164,6 +178,7 @@ Startup options:
   --bitrate <n>    bus speed in bit/s; required with --can for any adapter except SocketCAN
   --data-bitrate <n>  CAN FD data-phase speed; opens PCAN/Kvaser/Vector/IXXAT/gs_usb/slcan as CAN FD
   --allocator      give plug-and-play nodes their node-IDs; only for a bus with no allocator of its own
+  --decode-on-demand  decode only the subjects watched or recorded; for a bus too busy to decode whole
   --bind <host>    bind HTTP server to <host>  (default 127.0.0.1; 0.0.0.0 to expose on the network)
   --port <n>       listen on <n> instead of 8080
   --data-dir <dir> keep history, recordings and raw logs in <dir>
@@ -248,13 +263,26 @@ Telemetry events (filtered per client):
 
 `payload_bytes` is the size, in bytes, of the received transfer's serialized payload (sum of `transfer.fragmented_payload` fragment lengths). It is `null` if the transport did not expose the fragmented payload (best-effort field).
 
+`undecoded` is present, and `true`, only in the events the server sends once a second for a subject it does not decode while it [decodes on demand](#5-decode-on-demand): `attributes` is then empty, `payload_bytes` `null`, `message_type` `null` if the subject's type is not known, and `rate`, `subject_rate` and `timestamp_unix` are counted from the subject's CAN frames. Such events are not written to history or recordings.
+
 Metrics (sent to all clients every 1 second):
 ```json
 {
     "type": "metrics",
-    "bus_utilization": 3.0
+    "bus_utilization": 3.0,
+    "server_cpu": 12.5
 }
 ```
+
+`server_cpu` is the server process's CPU use over the last second, in percent of one core (`null` in its first second). The server takes the bus's traffic on one core, so near 100 it cannot keep up; its other threads count too, so it can pass 100. The dashboard shows it under the server's data rate.
+
+**Say which subjects are on screen:**
+```javascript
+// The subjects whose values this client shows now; send again whenever they change
+ws.send(JSON.stringify({ type: 'watch', subject_ids: [1620, 2000] }));
+```
+
+While the server [decodes on demand](#5-decode-on-demand), it decodes the subjects some client watches (and those a recording takes) and no others. A client's list lasts until it sends another or its socket closes; `subject_ids` is a list of subject-IDs (0–8191), otherwise the reply is `{"error": ...}`. There is no acknowledgement. The dashboard sends the subjects of the selected node, of its plots and Compare graphs, and of its log panel. While every subject is decoded the list changes nothing.
 
 Filter acknowledgement (sent in response to a client `filter` message):
 ```json
@@ -367,9 +395,15 @@ Response:
     "last_error": null,
     "cyphal_v11": null,
     "bus_errors": null,
-    "allocator": null
+    "allocator": null,
+    "server_cpu": 12.5,
+    "decode_on_demand": false
 }
 ```
+
+`decode_on_demand` is whether the server decodes only the subjects watched or recorded (see [Decode on Demand](#5-decode-on-demand)); `POST /api/decoding` switches it.
+
+`server_cpu` is as in the `metrics` message: the server's own CPU use, in percent of one core.
 
 `allocator` is `null` unless the CAN session runs Cynitor's node-ID allocator (see [Allocator Behavior](#4-allocator-behavior)). Then it is `{"other_allocator", "allocated"}`: `other_allocator` is `null` while Cynitor's allocator answers requests, and the node-ID of another allocator once one has answered a request too, from when Cynitor's stays silent; `allocated` is how many nodes it gave a node-ID in this session. The dashboard shows a silenced allocator under the CAN status.
 
@@ -379,7 +413,7 @@ Response:
 
 `bus_utilization` is the bus load in percent, here and in the `metrics` message and `/api/can/transport`. It is `null` when not connected to CAN, and when nothing can measure it: on SocketCAN it comes from `canbusload` (Linux can-utils), so a host without it reports `null`, not an idle 0.
 
-`dropped` counts decoded messages discarded since the CAN connection opened because a queue was full: `scanner` before reaching anything, `logger` missing from the 24 h history and from recordings, `clients` missing from some dashboard's live view (each open dashboard has its own 100-event queue). `null` when not connected to CAN. The dashboard shows the total next to the CAN message rate.
+`dropped` counts what was discarded since the CAN connection opened because a queue was full: `scanner` before reaching anything, `logger` messages missing from the 24 h history and from recordings, `clients` messages missing from some dashboard's live view (each open dashboard has its own 100-event queue). `scanner` counts decoded messages, and CAN frames let go before decoding: when a subject's messages come faster than they can be decoded, its frames wait, and once a message is more than a second old by the time it is decoded, all that waits behind it is let go at once and counted here, rather than put the live view ever further behind. A burst that is decoded within the second loses nothing. A raw log being played is decoded whole. `null` when not connected to CAN. The dashboard shows the total next to the CAN message rate.
 
 `status` is `"running"` when connected to CAN, `"idle"` otherwise. `last_error` contains the error message if CAN was auto-disconnected due to a bus fault. `can_bitrate` is the bitrate Cynitor opened the adapter at, or `null` for SocketCAN, whose bitrate the kernel sets. `can_data_bitrate` is the CAN FD data-phase bitrate it opened the adapter with, or `null` (Classic CAN, or SocketCAN). `can_fd` says whether the session runs Cyphal/CAN FD; for SocketCAN that follows the interface's own setup when it connects. A SocketCAN interface switched between CAN FD and Classic CAN while connected ends the session within a few seconds, `last_error` saying so ("Interface can0 was switched to Classic CAN; connect again to use it"); connecting again takes the new setup.
 
@@ -437,6 +471,15 @@ curl -X POST http://localhost:8080/api/can/connect \
 ```
 
 Returns `409` if already connected, `400` if a SocketCAN name is unknown, `bitrate` is missing or invalid, `allocator` is not a boolean, or `data_bitrate` is invalid, given for an adapter that cannot run CAN FD, or not one of its presets. A candleLight adapter whose firmware runs Classic CAN only, or whose CAN clock cannot make the two bitrates, fails to open (`500`), saying so.
+
+**Switch decoding on demand:**
+```bash
+curl -X POST http://localhost:8080/api/decoding \
+  -H 'Content-Type: application/json' \
+  -d '{"on_demand":true}'
+```
+
+Response: `{"decode_on_demand": true}`. `on_demand` (boolean, required) turns [decoding on demand](#5-decode-on-demand) on or off, at once if CAN is connected, and for the sessions that follow until the server stops. `400` if it is not a boolean.
 
 **Disconnect from CAN:**
 ```bash
@@ -1463,12 +1506,18 @@ queue = telemetry.subscribe(max_queue=200)  # Increase from 100
 
 ## Performance Considerations
 
-| Component | Capacity | Bottleneck |
+The server takes the bus's traffic on one core: every frame is handed to pycyphal on the event loop, and every message of a decoded subject is deserialized, turned into an event, fanned out and queued for SQLite there. What it works through in a second, measured on a desktop (Intel i7-10700K) through the CAN hub, with a backlog waiting:
+
+| | Single-frame messages | Ten-frame messages (16 floats, Classic CAN) |
 |---|---|---|
-| ScannerNode | 128 nodes | UAVCAN bus saturation |
-| TelemetryManager | 100K events/s | RAM (cache) |
-| WebSocketServer | 1000 clients | Network bandwidth |
-| EventLogger | 100K events/s | Disk I/O |
+| Every subject decoded | about 6,000 | about 1,100 |
+| Decode on demand, subjects nobody watches | about 23,000 | about 2,600 |
+
+For scale, a 1 Mbit/s Classic CAN bus carries about 8,000 frames a second when full. A Raspberry Pi 4 core runs this several times slower (an estimate, not measured). SocketCAN, which needs no hub, was not measured.
+
+- `server_cpu` (in `/api/status` and the `metrics` message, shown in the dashboard's Server section) says how near the server is to its ceiling: near 100 % it cannot keep up.
+- Past the ceiling, the event logger loses messages first (`dropped.logger`): alone it writes about 30,000 rows a second, but it shares the core with the decoding. Then a subject whose decoding has fallen a second behind loses the frames it has waiting (`dropped.scanner`), all at once, so that the live view stays within about a second of the bus instead of falling ever further behind, and what is decoded is still whole.
+- [Decode on demand](#5-decode-on-demand) is for a bus past the ceiling: what nobody watches is counted, not decoded.
 
 Use `max_events` in EventLogger to prevent database bloat.
 
@@ -1520,6 +1569,8 @@ asyncio.run(main())
 | `log_store.py` | In-memory API log buffer + log handler |
 | `event_logger.py` | SQLite persistence |
 | `allocator.py` | Cynitor's node-ID allocator, off unless asked for; answers from the scanner's node |
+| `transfer_rates.py` | Message rates counted from CAN frames, for the subjects not decoded while decoding on demand |
+| `cpu_load.py` | The server's own CPU use, for the dashboard |
 | `startup_setup.py` | DSDL compilation via nnvg, env setup |
 | `main.py` | System orchestration |
 
