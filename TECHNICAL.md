@@ -69,6 +69,7 @@ EventLogger.start()        SQLite persistence
 | `node_info.py` | Per-node lifecycle state: appearance, last-heartbeat timestamp, disappearance threshold (>1.1s), port lists, GetInfo response |
 | `telemetry_manager.py` | Event router: maintains `latest_by_subject` and `latest_by_node` caches, broadcasts to subscriber queues |
 | `websocket_server.py` | aiohttp HTTP+WS server, REST endpoints, per-client WebSocket filtering, periodic metrics broadcast, node history and service call history endpoints; also serves `website/` so one binary hosts both the API and the dashboard; refuses API and event-stream requests from browser pages of other sites (`_browser_request_allowed`) |
+| `api_*.py` | The REST API's handlers, a module a part of the API, each a class `WebSocketServer` inherits: `api_can.py` (status, adapters, connect and disconnect, transport diagnostics), `api_rawlogs.py`, `api_testnodes.py`, `api_firmware.py`, `api_nodes.py` (nodes, latest messages, subject types, services, registers, history, identities), `api_recordings.py` (recordings, their export and replay), `api_dsdl.py`; `api_helpers.py` has what they share. Every route is still listed in one place, `websocket_server.py:_setup_routes`, and they log under one name, `websocket_server` |
 | `event_logger.py` | SQLite persistence with batch writes, `asyncio.to_thread` for non-blocking I/O, configurable retention, node lifecycle history (30-day), service call history with response bodies |
 | `allocator.py` | Cynitor's plug-and-play node-ID allocator (`NodeIdAllocator`), off unless asked for. Runs on the scanner's node, so it takes no node-ID of its own; gives a node-ID no node has used on the bus in the session (`CANSession._node_ids_seen`), the same one to a node that asks again; its table lasts for the session; answers no more once another allocator answers a request |
 | `cpu_load.py` | The server's own CPU use (`ProcessCpu`, from `time.process_time`), sent in the `metrics` message and `/api/status` for the dashboard to show |
@@ -272,6 +273,7 @@ cynitor/
     node_identity_map.py    Stable unique_id ↔ node_id mapping
     telemetry_manager.py    Event routing and caching
     websocket_server.py     REST + WebSocket server, serves the dashboard
+    api_*.py                ... the REST API's handlers, a module a part of the API
     event_logger.py         SQLite event persistence
     allocator.py            Node-ID allocator, off unless asked for
     startup_setup.py        DSDL compilation, env setup
@@ -337,7 +339,7 @@ cynitor/
 
 ### Adding a new REST endpoint
 
-1. Add a route in `server/websocket_server.py:_setup_routes`.
+1. Add a route in `server/websocket_server.py:_setup_routes`, and its handler in the `server/api_*.py` module of that part of the API.
 2. Implement the handler. Use `self.session` for backend access.
 3. Document it in `WEBSOCKET_README.md`.
 4. (Optional) Wire it from the frontend in `connection.js`.

@@ -123,7 +123,7 @@ class TestApi:
         client, session = api
         assert (await client.post("/api/firmware?name=../x.bin", data=b"x")).status == 400
         assert (await client.post("/api/firmware?name=empty.bin", data=b"")).status == 400
-        with patch("websocket_server.MAX_FIRMWARE_BYTES", 4):
+        with patch("api_firmware.MAX_FIRMWARE_BYTES", 4):
             assert (await client.post("/api/firmware?name=big.bin", data=b"12345")).status == 413
         assert not list(session.firmware_folder.glob("*big*")) and not list(session.firmware_folder.glob(".*"))
 

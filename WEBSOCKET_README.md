@@ -1493,7 +1493,7 @@ queue = telemetry.subscribe(max_queue=200)  # Increase from 100
 - Async HTTP/WebSocket server (aiohttp)
 - Client connection management
 - Event filtering (subject_id, node_id, message_type)
-- REST API for queries
+- REST API for queries: every route is listed in `_setup_routes`; the handlers are in the `api_*.py` modules, one a part of the API, as classes the server inherits
 
 ### 4. EventLogger (`event_logger.py`)
 - SQLite persistence layer
@@ -1567,7 +1567,8 @@ asyncio.run(main())
 | `telemetry_manager.py` | Event pub-sub router |
 | `node_info.py` | Per-node state (lifecycle, ports, getInfo) |
 | `node_identity_map.py` | Bidirectional unique_id ↔ node_id mapping with migration detection |
-| `websocket_server.py` | WebSocket/REST server |
+| `websocket_server.py` | WebSocket/REST server: routes, access, the live stream |
+| `api_*.py` | The REST API's handlers, a module a part of the API (CAN, raw logs, test nodes, firmware, nodes, recordings, DSDL) |
 | `log_store.py` | In-memory API log buffer + log handler |
 | `event_logger.py` | SQLite persistence |
 | `allocator.py` | Cynitor's node-ID allocator, off unless asked for; answers from the scanner's node |

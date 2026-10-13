@@ -18,6 +18,14 @@ DSDL_SOURCES = PROJECT_ROOT / "dsdl_messages"
 # entry plus hidden imports so PyInstaller traces their dependency trees.
 server_modules = [
     "websocket_server",
+    "api_can",
+    "api_dsdl",
+    "api_firmware",
+    "api_helpers",
+    "api_nodes",
+    "api_rawlogs",
+    "api_recordings",
+    "api_testnodes",
     "scanner_node",
     "scanner_registers",
     "scanner_services",
