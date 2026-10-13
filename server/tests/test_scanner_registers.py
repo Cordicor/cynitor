@@ -34,6 +34,7 @@ def uavcan_types(monkeypatch):
                  "Natural8", "Real64", "Real32", "Real16"):
         monkeypatch.setattr(array, f"{kind}_1_0", made_as(kind))
     monkeypatch.setattr(scanner_node.uavcan.primitive, "String_1_0", made_as("String"))
+    monkeypatch.setattr(scanner_node.uavcan.primitive, "Unstructured_1_0", made_as("Unstructured"))
 
 
 class Node:
@@ -158,6 +159,26 @@ class TestSetRegister:
         assert sent["k"].real32.value == [0.25]
         assert sent["name"].string.value == b"left wheel"
         assert sent["flags"].bit.value == [True, False, False, True]
+
+    async def test_bytes_are_written_from_hex(self, uavcan_types):
+        # They went out wrapped in a type that does not exist, so no such register could be written.
+        node = Node({"blob": ("unstructured", "", True)})
+        answers = [(SimpleNamespace(value=("unstructured", ""), mutable=True), None),
+                   (SimpleNamespace(value=("unstructured", "01ab"), mutable=True), None)]
+        sent = []
+
+        async def access(request):
+            sent.append(request.value)
+            return answers[len(sent) - 1]
+        node.access.call = AsyncMock(side_effect=access)
+        assert await self.write(node, "blob", "01ab", "unstructured") == "01ab"
+        assert sent[1].unstructured.kind == "Unstructured" and sent[1].unstructured.value == bytearray(b"\x01\xab")
+
+    async def test_bytes_that_are_no_hex_are_refused(self, uavcan_types):
+        node = Node({"blob": ("unstructured", "", True)})
+        with pytest.raises(ValueError, match="Invalid value 'xyz' for type 'unstructured'"):
+            await self.write(node, "blob", "xyz", "unstructured")
+        assert node.written == []
 
     async def test_a_read_only_register_is_refused(self, uavcan_types):
         node = Node({"serial": ("natural16", np.array([1]), False)})

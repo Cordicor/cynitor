@@ -464,7 +464,7 @@ class ScannerRegisters:
             if reg_type == 'string':
                 new_value.string = uavcan.primitive.String_1_0(value=value.encode("utf-8"))
             elif reg_type == 'unstructured':
-                new_value.unstructured = uavcan.primitive.Unstructured_1_0(value=uavcan.primitive.array.UnstructuredElement1_0(data=bytearray.fromhex(value)))
+                new_value.unstructured = uavcan.primitive.Unstructured_1_0(value=bytearray.fromhex(value))
             elif reg_type == 'bit':
                 valid_bool = {'true': True, '1': True, 'false': False, '0': False}
                 bools = []
