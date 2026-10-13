@@ -286,6 +286,10 @@ comments show how to narrow that to a dedicated user.
 
 ## Troubleshooting
 
+This section is written for Linux, where the bus is a SocketCAN interface: the
+commands it names (`ip link`, `yakut` on a `vcan` or `can0`, `can-utils`) are
+Linux tools. The rows that name none of them hold on every system.
+
 | What you see | What to do |
 |---|---|
 | No nodes | Check that something publishes: `yakut sub uavcan.node.Heartbeat.1.0`. A `vcan` is empty until something publishes on it, such as the [demo nodes](#try-it-without-hardware), which the simulated bus has of its own |
