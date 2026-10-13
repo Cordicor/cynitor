@@ -117,159 +117,18 @@ class ScannerServices:
         logging.debug(f"Attempting service call: node_id={node_id}, service_id={service_id}, service_type={service_type}, attributes={attributes}")
 
         try:
-            client_key = (node_id, service_id)
-            client = self.service_clients.get(client_key)
-
-            # Get the cached client first — the request must be built from the
-            # SAME class the client was created with. Re-importing the module here
-            # can yield a different class object (e.g. after a custom-DSDL
-            # recompile drops the module from sys.modules), which makes
-            # client.call() reject the request with a confusing "expected X, got X"
-            # identity mismatch. Sourcing Request from client.dtype avoids that.
+            client = self.service_clients.get((node_id, service_id))
             if not client:
                 logging.error(f"No client found for service {service_id} on node {node_id}")
                 raise ValueError(f"No client found for service {service_id} on node {node_id}")
             logging.debug(f"Using cached client for service {service_id} on node {node_id}")
 
-            request_class = getattr(client.dtype, "Request", None)
-            if not request_class:
-                logging.error(f"No Request class found for service {service_type}")
-                raise ValueError(f"No Request class found for service {service_type}")
+            request = self._build_request(client, service_type, attributes)
 
-            # Instantiate the request object
-            request = request_class()
-
-            for attr in request._MODEL_.attributes:
-                logging.debug(f"Processing attribute: name={attr.name}, data_type={str(attr.data_type)}")
-                
-                try:
-                    if isinstance(attr.data_type, CompositeType):
-                        logging.debug(f"Attribute {attr.name} is a composite type: {str(attr.data_type)}")
-                        
-                        for key in attributes:
-                            if str(key) != str(attr.name):
-                                continue
-                            
-                            logging.debug(f"Matched attribute key: {key}")
-                            
-                            try:
-                                # Access type and value
-                                attr_data = attributes.get(key, {})
-                                attr_type = attr_data.get('type')
-                                attr_value = attr_data.get('value')
-                                
-                                if attr_type is None or attr_value is None:
-                                    logging.error(f"Missing type or value for attribute {key}: type={attr_type}, value={attr_value}")
-                                    raise ValueError(f"Attribute {key} missing 'type' or 'value'")
-                                
-                                logging.debug(f"Attribute {key}: type={attr_type}, value={attr_value}")
-                                
-                                # Split type into namespace and type name
-                                try:
-                                    attribute_type_split = attr_type.split('.')
-                                    if len(attribute_type_split) < 3:
-                                        logging.error(f"Invalid type format for attribute {key}: {attr_type}")
-                                        raise ValueError(f"Invalid type format: {attr_type}")
-                                    
-                                    attribute_type_name = '_'.join(attribute_type_split[-3:])
-                                    attribute_type_namespace = '.'.join(attribute_type_split[:-3])
-                                    logging.debug(f"Parsed type: namespace={attribute_type_namespace}, type_name={attribute_type_name}")
-                                except AttributeError as e:
-                                    logging.error(f"Failed to split type {attr_type} for attribute {key}: {str(e)}")
-                                    raise ValueError(f"Invalid type string {attr_type}: {str(e)}")
-                                
-                                # Import module and class
-                                try:
-                                    module = importlib.import_module(attribute_type_namespace)
-                                    attribute_class = getattr(module, attribute_type_name)
-                                    logging.debug(f"Imported class {attribute_type_name} from {attribute_type_namespace}")
-                                except (ImportError, AttributeError) as e:
-                                    logging.error(f"Failed to import {attribute_type_name} from {attribute_type_namespace}: {str(e)}")
-                                    raise ValueError(f"Cannot import {attribute_type_name}: {str(e)}")
-                                
-                                # Create instance and set field
-                                try:
-                                    struct_instance = attribute_class()
-                                    fields = struct_instance._MODEL_.fields
-                                    if not fields:
-                                        logging.error(f"No fields found in {attribute_type_name} for attribute {key}")
-                                        raise ValueError(f"No fields defined in {attribute_type_name}")
-                                    
-                                    # A dict names the fields to set; a single value sets the
-                                    # first field, as single-field wrappers (primitive.String) need.
-                                    values = attr_value if isinstance(attr_value, dict) else {fields[0].name: attr_value}
-                                    known = {f.name for f in fields}
-                                    for field_name, field_value in values.items():
-                                        if field_name not in known:
-                                            raise ValueError(f"{attribute_type_name} has no field {field_name!r}")
-                                        try:
-                                            setattr(struct_instance, field_name, field_value)
-                                        except (TypeError, ValueError) as e:
-                                            logging.error(f"Failed to set {field_name}={field_value} on {attribute_type_name}: {str(e)}")
-                                            raise ValueError(f"Invalid value {field_value} for field {field_name}: {str(e)}")
-                                    
-                                    # Assign struct to request
-                                    setattr(request, attr.name, struct_instance)
-                                    logging.debug(f"Assigned {attribute_type_name} instance to request attribute {attr.name}")
-                                
-                                except Exception as e:
-                                    logging.error(f"Failed to create or configure {attribute_type_name} for attribute {key}: {str(e)}")
-                                    raise ValueError(f"Error processing composite attribute {key}: {str(e)}")
-                            
-                            except Exception as e:
-                                logging.error(f"Error processing attribute {key} for composite type {attr.name}: {str(e)}")
-                                raise ValueError(f"Error processing attribute {key}: {str(e)}")
-                    
-                    else:
-                        logging.debug(f"Attribute {attr.name} is a primitive type: {str(attr.data_type)}")
-                        
-                        for key in attributes:
-                            if str(key) != str(attr.name):
-                                continue
-                            
-                            logging.debug(f"Matched attribute key: {key}")
-                            
-                            try:
-                                # Access value
-                                attr_data = attributes.get(key, {})
-                                attr_value = attr_data.get('value')
-                                
-                                if attr_value is None:
-                                    logging.error(f"Missing value for attribute {key}")
-                                    raise ValueError(f"Attribute {key} missing 'value'")
-                                
-                                logging.debug(f"Attribute {key}: value={attr_value}")
-                                
-                                # Convert value for primitive type (e.g., float for saturated float16)
-                                try:
-                                    if str(attr.data_type) == "saturated float16":
-                                        parsed_value = float(attr_value)  # PyCyphal coerces to float16
-                                        logging.debug(f"Converted {attr_value} to float: {parsed_value}")
-                                    else:
-                                        parsed_value = attr_value  # Keep as-is for other types
-                                    
-                                    setattr(request, attr.name, parsed_value)
-                                    logging.debug(f"Set request attribute {attr.name}={parsed_value} (type: {type(parsed_value).__name__})")
-                                
-                                except (TypeError, ValueError) as e:
-                                    logging.error(f"Failed to set {attr.name}={attr_value} on request: {str(e)}")
-                                    raise ValueError(f"Invalid value {attr_value} for attribute {attr.name}: {str(e)}")
-                            
-                            except Exception as e:
-                                logging.error(f"Error processing attribute {key} for primitive type {attr.name}: {str(e)}")
-                                raise ValueError(f"Error processing attribute {key}: {str(e)}")
-                
-                except Exception as e:
-                    logging.error(f"Failed to process attribute {attr.name}: {str(e)}")
-                    raise ValueError(f"Error processing attribute {attr.name}: {str(e)}")
-
-
-            # Log request details
             logging.info(f"Sending request for {service_type} on node {node_id}, service {service_id}:")
             for attr_name in [a.name for a in request._MODEL_.attributes]:
                 logging.info(f"  {attr_name}: {getattr(request, attr_name)} (type: {type(getattr(request, attr_name)).__name__})")
 
-            # Make service call with 5-second timeout
             try:
                 response_tuple = await asyncio.wait_for(client.call(request), timeout=self.SERVICE_CALL_TIMEOUT)
                 logging.debug(f"Received response tuple for service {service_id}: {response_tuple}")
@@ -292,6 +151,123 @@ class ScannerServices:
         except Exception as e:
             logging.error(f"Error making service call for service {service_id} on node {node_id}: {str(e)}")
             raise
+
+    def _build_request(self, client, service_type: str, attributes: dict[str, dict[str, Any]]):
+        """The request to send through ``client``, with the fields ``attributes`` gives set; the rest as the type has them.
+
+        The request must be built from the SAME class the client was created
+        with. Re-importing the module here can yield a different class object
+        (e.g. after a custom-DSDL recompile drops the module from
+        sys.modules), which makes client.call() reject the request with a
+        confusing "expected X, got X" identity mismatch. Sourcing Request from
+        client.dtype avoids that.
+        """
+        request_class = getattr(client.dtype, "Request", None)
+        if not request_class:
+            logging.error(f"No Request class found for service {service_type}")
+            raise ValueError(f"No Request class found for service {service_type}")
+        request = request_class()
+
+        for attr in request._MODEL_.attributes:
+            logging.debug(f"Processing attribute: name={attr.name}, data_type={str(attr.data_type)}")
+            try:
+                composite = isinstance(attr.data_type, CompositeType)
+                kind = "composite" if composite else "primitive"
+                logging.debug(f"Attribute {attr.name} is a {kind} type: {str(attr.data_type)}")
+                for key in attributes:
+                    if str(key) != str(attr.name):
+                        continue
+                    logging.debug(f"Matched attribute key: {key}")
+                    try:
+                        if composite:
+                            self._set_composite_field(request, attr, key, attributes.get(key, {}))
+                        else:
+                            self._set_primitive_field(request, attr, key, attributes.get(key, {}))
+                    except Exception as e:
+                        logging.error(f"Error processing attribute {key} for {kind} type {attr.name}: {str(e)}")
+                        raise ValueError(f"Error processing attribute {key}: {str(e)}")
+            except Exception as e:
+                logging.error(f"Failed to process attribute {attr.name}: {str(e)}")
+                raise ValueError(f"Error processing attribute {attr.name}: {str(e)}")
+        return request
+
+    @staticmethod
+    def _set_composite_field(request, attr, key: str, attr_data: dict[str, Any]) -> None:
+        """Set the request's field ``attr``, of a composite type, as ``attr_data`` ({type, value}) gives it."""
+        attr_type = attr_data.get('type')
+        attr_value = attr_data.get('value')
+        if attr_type is None or attr_value is None:
+            logging.error(f"Missing type or value for attribute {key}: type={attr_type}, value={attr_value}")
+            raise ValueError(f"Attribute {key} missing 'type' or 'value'")
+        logging.debug(f"Attribute {key}: type={attr_type}, value={attr_value}")
+
+        # "ns.Name.1.0" names the class Name_1_0 of the module ns.
+        try:
+            attribute_type_split = attr_type.split('.')
+            if len(attribute_type_split) < 3:
+                logging.error(f"Invalid type format for attribute {key}: {attr_type}")
+                raise ValueError(f"Invalid type format: {attr_type}")
+            attribute_type_name = '_'.join(attribute_type_split[-3:])
+            attribute_type_namespace = '.'.join(attribute_type_split[:-3])
+            logging.debug(f"Parsed type: namespace={attribute_type_namespace}, type_name={attribute_type_name}")
+        except AttributeError as e:
+            logging.error(f"Failed to split type {attr_type} for attribute {key}: {str(e)}")
+            raise ValueError(f"Invalid type string {attr_type}: {str(e)}")
+
+        try:
+            module = importlib.import_module(attribute_type_namespace)
+            attribute_class = getattr(module, attribute_type_name)
+            logging.debug(f"Imported class {attribute_type_name} from {attribute_type_namespace}")
+        except (ImportError, AttributeError) as e:
+            logging.error(f"Failed to import {attribute_type_name} from {attribute_type_namespace}: {str(e)}")
+            raise ValueError(f"Cannot import {attribute_type_name}: {str(e)}")
+
+        try:
+            struct_instance = attribute_class()
+            fields = struct_instance._MODEL_.fields
+            if not fields:
+                logging.error(f"No fields found in {attribute_type_name} for attribute {key}")
+                raise ValueError(f"No fields defined in {attribute_type_name}")
+
+            # A dict names the fields to set; a single value sets the
+            # first field, as single-field wrappers (primitive.String) need.
+            values = attr_value if isinstance(attr_value, dict) else {fields[0].name: attr_value}
+            known = {f.name for f in fields}
+            for field_name, field_value in values.items():
+                if field_name not in known:
+                    raise ValueError(f"{attribute_type_name} has no field {field_name!r}")
+                try:
+                    setattr(struct_instance, field_name, field_value)
+                except (TypeError, ValueError) as e:
+                    logging.error(f"Failed to set {field_name}={field_value} on {attribute_type_name}: {str(e)}")
+                    raise ValueError(f"Invalid value {field_value} for field {field_name}: {str(e)}")
+
+            setattr(request, attr.name, struct_instance)
+            logging.debug(f"Assigned {attribute_type_name} instance to request attribute {attr.name}")
+        except Exception as e:
+            logging.error(f"Failed to create or configure {attribute_type_name} for attribute {key}: {str(e)}")
+            raise ValueError(f"Error processing composite attribute {key}: {str(e)}")
+
+    @staticmethod
+    def _set_primitive_field(request, attr, key: str, attr_data: dict[str, Any]) -> None:
+        """Set the request's field ``attr``, of a primitive type, to the value ``attr_data`` gives."""
+        attr_value = attr_data.get('value')
+        if attr_value is None:
+            logging.error(f"Missing value for attribute {key}")
+            raise ValueError(f"Attribute {key} missing 'value'")
+        logging.debug(f"Attribute {key}: value={attr_value}")
+
+        try:
+            if str(attr.data_type) == "saturated float16":
+                parsed_value = float(attr_value)  # PyCyphal coerces to float16
+                logging.debug(f"Converted {attr_value} to float: {parsed_value}")
+            else:
+                parsed_value = attr_value  # Keep as-is for other types
+            setattr(request, attr.name, parsed_value)
+            logging.debug(f"Set request attribute {attr.name}={parsed_value} (type: {type(parsed_value).__name__})")
+        except (TypeError, ValueError) as e:
+            logging.error(f"Failed to set {attr.name}={attr_value} on request: {str(e)}")
+            raise ValueError(f"Invalid value {attr_value} for attribute {attr.name}: {str(e)}")
 
     def describe_service_transfer(self, server_node_id: int, service_id: int, is_request: bool,
                                   payload: bytes) -> tuple[Optional[str], str]:
