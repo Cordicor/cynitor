@@ -3,7 +3,7 @@
 On Linux, SocketCAN owns the bitrate (set with ``ip link``) and ignores what an
 application asks for. Every other python-can interface -- PCAN, gs_usb, slcan,
 Kvaser, ... -- runs at whatever bitrate the process that opens it chooses. The
-allocator and the scanner each open the interface, so they must agree on one
+scanner and the test nodes each open the interface, so they must agree on one
 value, and it must be the bus's: a node that joins at the wrong speed floods
 the bus with error frames. Cynitor therefore never guesses one; it has to be
 given for every interface except SocketCAN.
@@ -46,8 +46,9 @@ SIM_BUSES: dict[str, tuple[int, Optional[int]]] = {
     "fd": (1_000_000, 4_000_000),
 }
 
-# Sample points of the CAN FD bit timings Cynitor works out itself, for PCAN
-# and candleLight adapters, in percent: what pycyphal uses for PCAN.
+# Sample points of the CAN FD bit timing Cynitor works out itself for PCAN, in
+# percent: what pycyphal uses there. candleLight adapters take the Linux
+# kernel's (gs_usb_fd.sample_point).
 FD_NOMINAL_SAMPLE_POINT = 80.0
 FD_DATA_SAMPLE_POINT = 80.0
 
@@ -55,10 +56,6 @@ FD_DATA_SAMPLE_POINT = 80.0
 # struct canfd_frame (`ip link set can0 ... fd on`, or `mtu 72` for vcan).
 _CANFD_MTU = 72
 _SYSFS_NET = Path("/sys/class/net")
-
-# The local allocator's node-ID. Here rather than in allocator.py, which needs
-# compiled DSDL to import, so that the node-ID picker can steer clear of it.
-ALLOCATOR_NODE_ID = 1
 
 # PythonCANMedia insists on a bitrate even for SocketCAN, which ignores it.
 _SOCKETCAN_IGNORED_BITRATE = 500_000

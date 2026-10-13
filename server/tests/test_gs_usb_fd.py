@@ -17,7 +17,7 @@ import can
 import pytest
 
 import gs_usb_fd
-from gs_usb_fd import Capability, GsUsbFdBus, TimingLimits, fd_bit_timing, read_capability
+from gs_usb_fd import Capability, GsUsbFdBus, TimingLimits, fd_bit_timing, read_capability, sample_point
 
 
 class FakeUSBError(OSError):
@@ -174,9 +174,9 @@ class TestOpen:
         assert struct.unpack("<II", reset) == (RESET, 0)
         assert struct.unpack("<II", start) == (START, FD)
         # 40 MHz: 80 time quanta per bit at 500 kbit/s, 20 at 2 Mbit/s,
-        # one prescaler for both, each sampled at 80 %.
-        assert timing_of(device.sent_requests(BITTIMING)[0]) == {"tseg1": 63, "tseg2": 16, "sjw": 16, "brp": 1}
-        assert timing_of(device.sent_requests(DATA_BITTIMING)[0]) == {"tseg1": 15, "tseg2": 4, "sjw": 4, "brp": 1}
+        # one prescaler for both, sampled at 87.5 % and 75 % as Linux samples them.
+        assert timing_of(device.sent_requests(BITTIMING)[0]) == {"tseg1": 69, "tseg2": 10, "sjw": 10, "brp": 1}
+        assert timing_of(device.sent_requests(DATA_BITTIMING)[0]) == {"tseg1": 14, "tseg2": 5, "sjw": 5, "brp": 1}
         assert bus.protocol == can.CanProtocol.CAN_FD
 
     def test_endpoints_come_from_the_descriptors(self, monkeypatch):
@@ -187,6 +187,17 @@ class TestOpen:
             b.send(can.Message(arbitration_id=1, is_fd=True))
             b.recv(timeout=0.01)
             assert d.written[0][0] == 0x04 and d.reads[0][0] == 0x83
+        finally:
+            b.shutdown()
+
+    def test_frames_go_to_the_last_bulk_out_endpoint(self, monkeypatch):
+        # CANnectivity: a dummy 0x01 before the 0x02 that takes the frames.
+        d = FakeCandleLight(endpoints=[endpoint(0x81), endpoint(0x01), endpoint(0x02)])
+        monkeypatch.setattr(gs_usb_fd, "_scan", lambda: [d])
+        b = GsUsbFdBus(0, 500_000, 2_000_000)
+        try:
+            b.send(can.Message(arbitration_id=1, is_fd=True))
+            assert d.written[0][0] == 0x02
         finally:
             b.shutdown()
 
@@ -268,7 +279,13 @@ class TestBitTiming:
     def test_one_prescaler_for_both_phases_where_possible(self):
         timing = fd_bit_timing(Capability(FD, 80_000_000, FDCAN_NOMINAL, FDCAN_DATA), 500_000, 2_000_000)
         assert timing.nom_brp == timing.data_brp
-        assert (timing.nom_sample_point, timing.data_sample_point) == (80.0, 80.0)
+        assert (timing.nom_sample_point, timing.data_sample_point) == (87.5, 75.0)
+
+    @pytest.mark.parametrize("bitrate, percent", [
+        (125_000, 87.5), (500_000, 87.5), (800_000, 80.0), (1_000_000, 75.0), (2_000_000, 75.0),
+    ])
+    def test_sample_points_are_the_linux_kernels(self, bitrate, percent):
+        assert sample_point(bitrate) == percent
 
     def test_none_possible(self):
         with pytest.raises(ValueError, match="no CAN FD bit timing for 1000000 bit/s with a 8000000"):

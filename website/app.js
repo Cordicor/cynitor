@@ -44,6 +44,14 @@ const bind = () => {
     if (el('canBitrateSelect').value === 'custom') el('canBitrateCustom').focus();
   });
   el('canBitrateCustom').addEventListener('input', updateCanConnectButton);
+  el('canAllocatorToggle').addEventListener('change', () => {
+    state.canAllocator = el('canAllocatorToggle').checked;
+    saveSettings();
+  });
+  el('decodeOnDemandToggle').addEventListener('change', () => {
+    setDecodeOnDemand(el('decodeOnDemandToggle').checked);
+  });
+  window.setInterval(syncWatchedSubjects, 250);
   const sidebarToggle = el('sidebarCollapseBtn');
   const showSidebarState = () => sidebarToggle.setAttribute('aria-expanded', String(!state.sidebarCollapsed));
   showSidebarState();
@@ -255,7 +263,7 @@ updateCanConnectButton();
 renderSelectedNodeContent();
 updateSemaphores();
 // The saved layout is back in place, drawn without sliding there (.restoring
-// in styles.css): once that is painted, panels slide when toggled.
+// in log-panel.css): once that is painted, panels slide when toggled.
 requestAnimationFrame(() => requestAnimationFrame(() => {
   document.querySelector('.app-shell').classList.remove('restoring');
 }));

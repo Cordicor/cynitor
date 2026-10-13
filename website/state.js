@@ -29,6 +29,12 @@ const state = {
   // time. Never a guess: an adapter not connected before starts unselected.
   canBitrates: {},
   canDataBitrates: {},   // CAN FD data bitrate last used per adapter; absent = Classic CAN
+  // The connect form's choice: have Cynitor give plug-and-play nodes their
+  // node-IDs. Off unless ticked: a bus may have one allocator only.
+  canAllocator: false,
+  // Cynitor's allocator in the CAN session connected to (GET /api/status
+  // allocator): {other_allocator, allocated}, or null while it runs none.
+  allocatorStatus: null,
   rawLogPlaybackSpeed: 1,  // Record view: speed to play a raw log at; 0 = as fast as possible
   customCanSpec: '',
   favouriteNodeIds: new Set(),
@@ -56,6 +62,11 @@ const state = {
   savedCompareConfigs: [],
   wsBytesAccum: 0,
   wsThroughput: 0,
+  serverCpu: null,   // the server's CPU use in percent of one core (metrics message); null: not known
+  // Whether the server decodes only the subjects watched or recorded (GET
+  // /api/status decode_on_demand); the Server section's switch sets it.
+  decodeOnDemand: false,
+  _watchedSent: null,  // the subjects last told to the server as watched, as sent; null: none yet
   lastWsMessageMs: 0,
   busUtilization: null,
   droppedEvents: null,   // {scanner, logger, clients} from /api/status, null when not on CAN
@@ -786,6 +797,7 @@ const _writeSettingsNow = () => {
     canInterface: state.preferredCanInterface,
     canBitrates: state.canBitrates,
     canDataBitrates: state.canDataBitrates,
+    canAllocator: state.canAllocator,
     customCanSpec: state.customCanSpec,
     // A session being restored or reconnected is still the user's: a reload meanwhile goes on with it.
     dashboardConnected: state.dashboardConnected || Boolean(state.dashboardRetry || state.pendingReconnect),
@@ -930,6 +942,7 @@ const loadSettings = () => {
   if (settings.canDataBitrates && typeof settings.canDataBitrates === 'object') {
     state.canDataBitrates = settings.canDataBitrates;
   }
+  state.canAllocator = settings.canAllocator === true;
   if (typeof settings.customCanSpec === 'string') {
     state.customCanSpec = settings.customCanSpec;
     el('canSpecInput').value = settings.customCanSpec;

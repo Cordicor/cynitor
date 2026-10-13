@@ -1,0 +1,1078 @@
+/* ── Subjects: the detail panel's plot and call card, side by side ── */
+.subjects-detail {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  height: 100%;
+  min-height: 0;
+}
+
+.subjects-detail.has-plot.has-service {
+  grid-template-columns: minmax(0, 1fr) minmax(22rem, 34%);
+}
+
+.subjects-detail-plot,
+.subjects-detail-service {
+  min-width: 0;
+  min-height: 0;
+}
+
+.subjects-detail-service {
+  overflow-y: auto;
+}
+
+.subjects-detail.has-plot.has-service .subjects-detail-service {
+  border-left: 1px solid var(--border);
+  padding-left: 0.5rem;
+}
+
+.subjects-detail:not(.has-plot) .subjects-detail-plot,
+.subjects-detail:not(.has-service) .subjects-detail-service {
+  display: none;
+}
+
+/* ── Subjects: a service's call card, in the detail panel ── */
+.subject-service-card {
+  padding: 0.5rem 0.75rem 0.75rem;
+}
+
+.subject-service-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.625rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.subject-service-title {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--mono);
+  font-size: 0.8125rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.subject-service-id {
+  margin-right: 0.375rem;
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.subject-service-close {
+  flex: none;
+  width: 1.75rem;
+  height: 1.75rem;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.subject-service-close:hover {
+  border-color: var(--border);
+  color: var(--text);
+}
+
+.svc-node-selector {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  margin-bottom: 0.625rem;
+}
+
+.svc-node-selector-label {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.svc-node-btn {
+  padding: 0.25rem 0.5rem;
+  font-size: 0.6875rem;
+  font-family: var(--mono);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 0.25rem;
+  color: var(--text);
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s;
+}
+
+.svc-node-btn:hover {
+  background: var(--surface-3);
+}
+
+.svc-node-btn.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--on-accent, #fff);
+}
+
+.svc-history-node {
+  font-size: 0.6875rem;
+  font-family: var(--mono);
+  color: var(--text);
+  margin: 0 0.375rem;
+}
+
+.svc-history-uid {
+  font-size: 0.625rem;
+  font-family: var(--mono);
+  color: var(--muted);
+  margin-right: 0.375rem;
+}
+
+/* ── Detail panel resize handle ── */
+.detail-resize-handle {
+  height: 0.25rem;
+  cursor: ns-resize;
+  background: var(--border);
+  flex-shrink: 0;
+  transition: background 0.15s;
+  position: relative;
+  z-index: 5;
+  overflow: visible;
+}
+
+.detail-resize-handle:hover,
+.detail-resize-handle.dragging {
+  background: var(--accent);
+}
+
+.detail-collapse-btn {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 10;
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  color: var(--muted);
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+
+.detail-collapse-btn:hover {
+  background: var(--surface-3);
+  color: var(--text);
+  transform: translate(-50%, -50%);
+}
+
+.detail-collapse-btn.pointing-up svg {
+  transform: rotate(180deg);
+}
+
+/* ── Detail panel (bottom half until resized; a few nodes leave the table mostly empty) ── */
+.detail-panel {
+  flex: none;
+  height: 50%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border-top: none;
+  background: var(--surface);
+  transition: height 0.2s ease;
+  overflow: hidden;
+}
+
+.detail-panel.collapsed {
+  height: 0;
+}
+
+.detail-panel.no-transition {
+  transition: none;
+}
+
+
+.detail-tabs {
+  display: flex;
+  gap: 0;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  padding: 0 0.5rem;
+}
+
+.detail-tab {
+  padding: 0.375rem 0.75rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+  font-family: var(--sans);
+  color: var(--muted);
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  transition: color 0.12s, border-color 0.12s;
+}
+
+.detail-tab:hover {
+  color: var(--text);
+  background: none;
+}
+
+.detail-tab.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+
+.detail-panel-content {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0.625rem 0.75rem;
+  font-family: var(--mono);
+  font-size: 0.8125rem;
+  color: var(--text);
+}
+
+.detail-empty {
+  color: var(--muted);
+  font-family: var(--sans);
+  font-size: 0.875rem;
+  padding: 1.5rem 0;
+  text-align: center;
+}
+
+.detail-panel-content ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.detail-panel-content li {
+  padding: 0.25rem 0;
+  border-bottom: 1px solid var(--border-subtle);
+  line-height: 1.5;
+}
+
+.detail-panel-content li:last-child {
+  border-bottom: none;
+}
+
+/* ── Detail split layout ── */
+
+.detail-split {
+  display: flex;
+  height: 100%;
+  min-height: 0;
+}
+
+.detail-subject-list {
+  min-width: 0;
+  overflow-y: auto;
+}
+
+.detail-split-handle {
+  flex-shrink: 0;
+  width: 0.25rem;
+  cursor: col-resize;
+  background: var(--border);
+  border-radius: 0.125rem;
+  transition: background 0.15s;
+}
+
+.detail-split-handle:hover,
+.detail-split-handle:active {
+  background: var(--accent);
+}
+
+.detail-plot-area {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+}
+
+.detail-plot-area svg {
+  width: 100%;
+  flex: 1;
+  min-height: 0;
+}
+
+.detail-plot-area .plot-x-axis text,
+.detail-plot-area .panel-y-axis text {
+  fill: var(--muted);
+  font-family: var(--mono);
+  font-size: 0.625rem;
+}
+
+.detail-plot-area .plot-x-axis line,
+.detail-plot-area .plot-x-axis path,
+.detail-plot-area .panel-y-axis line,
+.detail-plot-area .panel-y-axis path {
+  stroke: var(--border);
+}
+
+.detail-plot-area .panel-label {
+  font-family: var(--mono);
+  font-size: 0.625rem;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+}
+
+.plot-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--muted);
+  font-family: var(--sans);
+  font-size: 0.8125rem;
+}
+
+.plot-empty-window {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  padding: 0.25rem 0.5rem;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--muted);
+  font-family: var(--sans);
+  font-size: 0.75rem;
+  z-index: 1;
+}
+
+.plot-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem 0.5rem;
+  padding: 0.25rem 0.5rem;
+  flex-shrink: 0;
+}
+
+.plot-title {
+  font-family: var(--mono);
+  font-size: 0.6875rem;
+  letter-spacing: 0.02em;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+.plot-controls {
+  display: flex;
+  flex-wrap: wrap;  /* beside the Nodes tab's cards, the plot is narrow */
+  gap: 0.25rem;
+  align-items: center;
+  margin-left: 1rem;
+}
+
+.plot-pause-btn {
+  font-size: 0.75rem;
+  width: 1.5rem;
+  height: 1.5rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--muted);
+  cursor: pointer;
+  padding: 0;
+  transition: all 0.12s;
+}
+
+.plot-pause-btn:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.plot-pause-btn.active {
+  background: var(--accent-muted);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* A card's Edit toggle in Compare, and a plot's Compare button, look like
+   the time-window buttons beside them. */
+.plot-window-btn,
+.compare-edit-btn,
+.compare-sync-btn,
+.plot-to-compare {
+  font-family: var(--mono);
+  font-size: 0.625rem;
+  font-weight: 500;
+  padding: 0.125rem 0.375rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--muted);
+  cursor: pointer;
+  transition: all 0.12s;
+}
+
+.plot-window-btn:hover,
+.compare-edit-btn:hover,
+.compare-sync-btn:hover,
+.plot-to-compare:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.plot-window-btn.active,
+.compare-edit-btn.active,
+.compare-sync-btn.active {
+  background: var(--accent-muted);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.plot-controls-sep {
+  width: 1px;
+  height: 1rem;
+  background: var(--border);
+  margin: 0 0.125rem;
+}
+
+.plot-check-label {
+  display: flex;
+  align-items: center;
+  gap: 0.2rem;
+  font-family: var(--mono);
+  font-size: 0.625rem;
+  color: var(--muted);
+  cursor: pointer;
+  white-space: nowrap;
+  user-select: none;
+}
+
+.plot-check-label input[type="checkbox"] {
+  width: 0.75rem;
+  height: 0.75rem;
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.plot-slider-group {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.plot-slider-label {
+  font-family: var(--mono);
+  font-size: 0.625rem;
+  color: var(--muted);
+  white-space: nowrap;
+  user-select: none;
+}
+
+.plot-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 4.5rem;
+  height: 0.1875rem;
+  background: var(--border);
+  border-radius: 0.125rem;
+  outline: none;
+  cursor: pointer;
+  border: none;
+  padding: 0;
+}
+
+.plot-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 0.625rem;
+  height: 0.625rem;
+  border-radius: 50%;
+  background: var(--accent);
+  border: none;
+  cursor: pointer;
+}
+
+.plot-slider::-moz-range-thumb {
+  width: 0.625rem;
+  height: 0.625rem;
+  border-radius: 50%;
+  background: var(--accent);
+  border: none;
+  cursor: pointer;
+}
+
+.plot-info-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 0.875rem;
+  height: 0.875rem;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  font-family: var(--sans);
+  font-size: 0.5625rem;
+  font-weight: 600;
+  font-style: normal;
+  color: var(--muted);
+  cursor: help;
+  flex-shrink: 0;
+  line-height: 1;
+}
+
+.plot-draw-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+}
+
+.plot-draw-icon {
+  font-size: 0.8125rem;
+  color: var(--muted);
+  line-height: 1;
+}
+
+.plot-draw-color-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.plot-draw-swatch {
+  width: 1rem;
+  height: 1rem;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--error);  /* drawings' colour until one is picked */
+  cursor: pointer;
+}
+
+.plot-draw-color-wrap input[type="color"] {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+  border: none;
+  padding: 0;
+}
+
+.plot-draw-style {
+  font-family: var(--mono);
+  font-size: 0.625rem;
+  padding: 0.0625rem 0.125rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  color: var(--text);
+  max-width: 4rem;
+}
+
+.plot-draw-size {
+  width: 2.5rem !important;
+}
+
+.plot-overlay {
+  cursor: crosshair;
+}
+
+/* While a plot is dragged (panned), or drawn on with Alt+drag. */
+.detail-plot-area svg.plot-grabbing,
+.detail-plot-area svg.plot-grabbing .plot-overlay {
+  cursor: grabbing;
+}
+
+.detail-plot-area svg.plot-drawing {
+  cursor: crosshair;
+}
+
+.plot-crosshair {
+  stroke: var(--muted);
+  stroke-width: 1;
+  stroke-dasharray: 2 2;
+  pointer-events: none;
+}
+
+.plot-grid-line {
+  stroke: var(--muted);
+  stroke-width: 0.5;
+  stroke-dasharray: 4 3;
+  opacity: 0.4;
+  pointer-events: none;
+}
+
+.plot-marker-label {
+  font-family: var(--mono);
+  font-size: 0.5625rem;
+  pointer-events: none;
+}
+
+.plot-marker-form {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  z-index: 20;
+  box-shadow: 0 0.25rem 1rem rgba(0, 0, 0, 0.25);
+  min-width: 12rem;
+}
+
+.plot-marker-form input[type="text"] {
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  padding: 0.25rem 0.375rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  color: var(--text);
+  outline: none;
+}
+
+.plot-marker-form input[type="text"]:focus {
+  border-color: var(--accent);
+}
+
+.plot-marker-form-row {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+}
+
+.plot-marker-form-color {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.plot-marker-form-swatch {
+  width: 1.25rem;
+  height: 1.25rem;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--accent);  /* a marker's colour until one is picked */
+  cursor: pointer;
+}
+
+.plot-marker-form-color input[type="color"] {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+  border: none;
+  padding: 0;
+}
+
+.plot-marker-form select {
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  padding: 0.1875rem 0.25rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  color: var(--text);
+  flex: 1;
+}
+
+.plot-marker-form-btns {
+  display: flex;
+  gap: 0.25rem;
+}
+
+.plot-marker-form-btns button {
+  font-family: var(--sans);
+  font-size: 0.6875rem;
+  padding: 0.1875rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.plot-marker-form-btns button:hover {
+  background: var(--surface-hover);
+}
+
+.plot-marker-form-delete {
+  color: var(--error) !important;
+  border-color: var(--error-muted) !important;
+}
+
+.plot-marker-form-delete:hover {
+  background: var(--error-muted) !important;
+}
+
+.plot-tooltip {
+  position: absolute;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.375rem 0.5rem;
+  font-family: var(--mono);
+  font-size: 0.6875rem;
+  color: var(--text);
+  pointer-events: none;
+  z-index: 10;
+  white-space: nowrap;
+  box-shadow: 0 0.125rem 0.5rem rgba(0, 0, 0, 0.25);
+}
+
+.plot-tooltip-time {
+  color: var(--muted);
+  margin-bottom: 0.25rem;
+}
+
+.plot-tooltip-row {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.0625rem 0;
+}
+
+.plot-tooltip-swatch {
+  display: inline-block;
+  width: 0.75rem;
+  height: 0.5rem;
+  border-radius: 0.125rem;
+  flex-shrink: 0;
+}
+
+.plot-tooltip-name {
+  flex: 1;
+  margin-right: 0.5rem;
+}
+
+.plot-tooltip-val {
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+  color: var(--text-bright);
+}
+
+.plot-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  margin-left: auto;
+  flex: 0 1 auto;
+  justify-content: flex-end;
+  /* A subject many nodes publish has a pill per field and node: a few rows
+     show, the rest scroll, and the plot keeps its room. */
+  max-height: 5.5rem;
+  overflow-y: auto;
+}
+
+.plot-legend-item {
+  display: inline-flex;
+  align-items: stretch;
+  border: 1px solid var(--border);
+  border-radius: 999rem;
+  background: transparent;
+  font-family: var(--mono);
+  font-size: 0.6875rem;
+  font-weight: 400;
+  color: var(--muted);
+  user-select: none;
+  white-space: nowrap;
+  overflow: hidden;
+  position: relative;
+  transition: border-color 0.12s, color 0.12s;
+}
+
+.plot-legend-item:hover {
+  border-color: var(--text);
+}
+
+.plot-legend-item.active {
+  border-color: var(--surface-3);
+  color: var(--text-bright);
+}
+
+.plot-legend-item.active:hover {
+  border-color: var(--text);
+}
+
+.plot-legend-swatch {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.75rem;
+  flex-shrink: 0;
+  cursor: pointer;
+  position: relative;
+  opacity: 0.5;
+  transition: opacity 0.15s;
+}
+
+.plot-legend-item.active .plot-legend-swatch {
+  opacity: 1;
+}
+
+.plot-legend-swatch:hover {
+  opacity: 1;
+}
+
+/* A swatch's colour picker, unseen over it while it is open. */
+.plot-swatch-picker-input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+  border: none;
+  padding: 0;
+}
+
+/* A pill's parts are buttons, for the keyboard: bare here, drawn below. */
+.plot-legend-label,
+.plot-legend-style,
+.plot-legend-remove {
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  color: inherit;
+}
+
+.plot-legend-item button:focus-visible {
+  outline: 0.125rem solid var(--accent);
+  outline-offset: -0.125rem;
+}
+
+.plot-legend-label {
+  display: flex;
+  align-items: center;
+  padding: 0.1875rem 0.5rem;
+  cursor: pointer;
+  transition: background 0.12s;
+}
+
+.plot-legend-item.active .plot-legend-label {
+  background: var(--surface-3);
+}
+
+.plot-legend-label:hover {
+  background: var(--surface-hover);
+}
+
+.plot-legend-style {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.5rem;
+  flex-shrink: 0;
+  cursor: pointer;
+  border-right: 1px solid var(--border);
+  opacity: 0.5;
+  transition: opacity 0.15s, background 0.12s;
+}
+
+.plot-legend-style::after {
+  content: '';
+  display: block;
+  width: 0.75rem;
+  border-top: 0.125rem solid currentColor;
+}
+
+.plot-legend-style:hover {
+  opacity: 1;
+  background: var(--surface-hover);
+}
+
+.plot-legend-style[data-style="dashed"]::after {
+  border-top-style: dashed;
+}
+
+.plot-legend-style[data-style="dotted"]::after {
+  border-top-style: dotted;
+}
+
+.plot-legend-style[data-style="dashdot"]::after {
+  border-top: none;
+  height: 0.125rem;
+  background: repeating-linear-gradient(90deg, currentColor 0 0.25rem, transparent 0.25rem 0.375rem, currentColor 0.375rem 0.5rem, transparent 0.5rem 0.625rem);
+}
+
+.plot-legend-style[data-style="longdash"]::after {
+  border-top-style: dashed;
+  border-top-width: 0.125rem;
+  border-image: repeating-linear-gradient(90deg, currentColor 0 0.5rem, transparent 0.5rem 0.6875rem) 1;
+}
+
+.plot-legend-style[data-style="circle"]::after {
+  border-top: none;
+  width: 0.375rem;
+  height: 0.375rem;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.plot-legend-style[data-style="square"]::after {
+  border-top: none;
+  width: 0.375rem;
+  height: 0.375rem;
+  background: currentColor;
+}
+
+.plot-legend-style[data-style="triangle"]::after {
+  border-top: none;
+  width: 0;
+  height: 0;
+  border-left: 0.25rem solid transparent;
+  border-right: 0.25rem solid transparent;
+  border-bottom: 0.375rem solid currentColor;
+}
+
+.plot-legend-style[data-style="diamond"]::after {
+  border-top: none;
+  width: 0.3125rem;
+  height: 0.3125rem;
+  background: currentColor;
+  transform: rotate(45deg);
+}
+
+.plot-legend-remove {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.25rem;
+  flex-shrink: 0;
+  cursor: pointer;
+  border-left: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 0.75rem;
+  line-height: 1;
+  transition: background 0.12s, color 0.12s;
+}
+
+.plot-legend-remove:hover {
+  background: var(--error);
+  color: var(--bg);
+}
+
+.plot-legend-threshold {
+  border-style: dashed;
+}
+
+/* A Compare series with nothing to plot: listed, so it can be removed. */
+.plot-legend-silent .plot-legend-label {
+  color: var(--muted);
+  font-style: italic;
+}
+
+.plot-legend-unit {
+  margin-left: 0.375rem;
+  color: var(--muted);
+}
+
+/* Compare's legend: a table, a row a series, its values in columns. */
+.plot-legend--table {
+  flex: 1 1 100%;
+  flex-direction: column;
+  flex-wrap: nowrap;
+  justify-content: flex-start;
+  gap: 0;
+  margin-left: 0;
+  max-height: 7.5rem;
+}
+
+.plot-legend--table .plot-legend-item,
+.plot-legend-head {
+  display: flex;
+  align-items: center;
+  border: none;
+  border-radius: 0;
+  overflow: visible;
+}
+
+.plot-legend--table .plot-legend-item:hover {
+  background: var(--surface-hover);
+}
+
+.plot-legend--table .plot-legend-swatch {
+  width: 0.75rem;
+  height: 0.75rem;
+  margin: 0 0.25rem 0 0.375rem;
+  border-radius: 0.125rem;
+}
+
+.plot-legend--table .plot-legend-style {
+  height: 1.25rem;
+  border-right: none;
+}
+
+.plot-legend--table .plot-legend-label {
+  display: block;
+  flex: 1;
+  min-width: 0;
+  padding: 0.125rem 0.25rem;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plot-legend--table .plot-legend-item.active .plot-legend-label,
+.plot-legend--table .plot-legend-label:hover {
+  background: none;
+}
+
+.plot-legend--table .plot-legend-remove {
+  height: 1.25rem;
+  border-left: none;
+}
+
+.plot-legend-value {
+  width: 5.5rem;
+  flex-shrink: 0;
+  padding: 0 0.375rem;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.plot-legend-head {
+  font-family: var(--mono);
+  font-size: 0.5625rem;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* Under the swatch, style and name columns; then over the remove column. */
+.plot-legend-head-name {
+  flex: 1;
+  padding-left: 2.875rem;
+}
+
+.plot-legend-head-end {
+  width: 1.25rem;
+  flex-shrink: 0;
+}
+

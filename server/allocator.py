@@ -1,185 +1,118 @@
-#!/usr/bin/env python3
+"""Cynitor's plug-and-play node-ID allocator, for a bus that has none of its own.
+
+Off unless asked for: with --allocator, with "allocator" in POST
+/api/can/connect, or in the dashboard's connect form. A bus may have one
+allocator only, and one cannot be told from any other node until it answers a
+request, so whether Cynitor is to be it is for whoever knows the bus to say.
+
+It runs on the scanner's node, so it takes no node-ID of its own. A node that
+asks is given a node-ID nothing has used on the bus this session, and the same
+one if it asks again. What was given is forgotten when CAN disconnects: the
+table belongs to the bus, and the next one Cynitor is plugged into may be
+another.
+
+Should another allocator answer a request, this one answers no more.
+"""
+
 from __future__ import annotations
 
-import os
-import socket
-import asyncio
 import logging
-import hashlib
-from typing import Optional
-
-import pycyphal
-import pycyphal.application
+from typing import Callable, Optional, Union
 
 import uavcan.node
-
-from pycyphal.transport.can import CANTransport
-from pycyphal.transport.can.media.pythoncan import PythonCANMedia
-from pycyphal.application.plug_and_play import CentralizedAllocator
-
-from can_config import ALLOCATOR_NODE_ID, media_bitrate, media_mtu, normalize_can_iface
-
+import uavcan.pnp
 
 logger = logging.getLogger(__name__)
 
+# The highest node-IDs of a network are left to diagnostic tools, as in pycyphal's allocator.
+RESERVED_TOP_NODE_IDS = 2
+# The answers keep their worth, so a long wait for the bus does them no harm.
+ANSWER_SEND_TIMEOUT_S = 5.0
 
 
-def _iface_from_env() -> str:
-    return os.environ["UAVCAN__CAN__IFACE"].strip()
+def nearest_free_node_id(preferred: int, highest: int, taken: set[int]) -> Optional[int]:
+    """The node-ID not in ``taken`` nearest ``preferred`` going up to ``highest``, else going down; None if none is free."""
+    preferred = min(max(preferred, 0), highest)
+    for node_id in (*range(preferred, highest + 1), *range(preferred - 1, -1, -1)):
+        if node_id not in taken:
+            return node_id
+    return None
 
 
-def _get_local_ip() -> str:
-    try:
-        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
-            s.connect(("8.8.8.8", 80))
-            return s.getsockname()[0]
-    except OSError:
-        return "127.0.0.1"
+class NodeIdAllocator:
+    """Answers the node-ID requests heard on ``node``, with node-IDs outside ``node_ids_taken()``."""
 
+    def __init__(self, node, node_ids_taken: Callable[[], set[int]]) -> None:
+        self._node_ids_taken = node_ids_taken
+        # Unique-ID, or its hash as a Classic CAN request carries it -> the node-ID given.
+        self._allocated: dict[Union[int, bytes], int] = {}
+        # The node-ID of another allocator heard on the bus; this one is silent from then on.
+        self.other_allocator: Optional[int] = None
+        self._highest = node.presentation.transport.protocol_parameters.max_nodes - 1 - RESERVED_TOP_NODE_IDS
+        # Version 1 of the message fits a Classic CAN frame; version 2 is what CAN FD nodes send.
+        self._answers_v1 = node.make_publisher(uavcan.pnp.NodeIDAllocationData_1_0)
+        self._answers_v2 = node.make_publisher(uavcan.pnp.NodeIDAllocationData_2_0)
+        requests_v1 = node.make_subscriber(uavcan.pnp.NodeIDAllocationData_1_0)
+        requests_v2 = node.make_subscriber(uavcan.pnp.NodeIDAllocationData_2_0)
+        self._ports = (self._answers_v1, self._answers_v2, requests_v1, requests_v2)
+        for answers in (self._answers_v1, self._answers_v2):
+            answers.send_timeout = ANSWER_SEND_TIMEOUT_S
+        requests_v1.receive_in_background(self._on_v1)
+        requests_v2.receive_in_background(self._on_v2)
+        logger.info("Allocator started: node %d gives node-IDs to the nodes that ask for one", node.id)
 
-class AllocatorApp:
-    REGISTER_FILE = "allocator_2app.db"
-    NODE_ID = ALLOCATOR_NODE_ID
-
-    def __init__(self, iface_name: Optional[str] = None, register_file: str = REGISTER_FILE) -> None:
-        node_info = uavcan.node.GetInfo_1_0.Response(
-            software_version=uavcan.node.Version_1(major=1, minor=0),
-            name=f"{_get_local_ip()}.allocator",
-        )
-
-        can_interface = normalize_can_iface(iface_name or _iface_from_env())
-        media = PythonCANMedia(iface_name=can_interface, bitrate=media_bitrate(can_interface), mtu=media_mtu())
-        transport = CANTransport(media, local_node_id=AllocatorApp.NODE_ID)
-        self.registry = pycyphal.application.make_registry(register_file)
-        self.node = pycyphal.application.make_node(info=node_info, transport=transport, registry=self.registry)
-        try:
-            self.allocator = CentralizedAllocator(node=self.node)
-            self.node.heartbeat_publisher.mode = uavcan.node.Mode_1.OPERATIONAL
-            self.node.heartbeat_publisher.vendor_specific_status_code = os.getpid() % 100
-            self.node.start()
-        except Exception:
-            self.node.close()
-            raise
-        logger.info("Local allocator started on %s with node-ID %d", can_interface, AllocatorApp.NODE_ID)
+    def status(self) -> dict:
+        """For /api/status: the other allocator that silenced this one, if any, and how many node-IDs it gave."""
+        return {"other_allocator": self.other_allocator, "allocated": len(self._allocated)}
 
     def close(self) -> None:
-        """Close allocator resources."""
-        self.node.close()
-        logger.info("Local allocator stopped")
+        for port in self._ports:
+            port.close()
+        logger.info("Allocator stopped")
 
+    async def _on_v1(self, msg, transfer) -> None:
+        if not self._is_request_to_answer(transfer):
+            return
+        node_id = self._allocate(int(msg.unique_id_hash), self._highest)
+        if node_id is not None:
+            self._answer(self._answers_v1, transfer, uavcan.pnp.NodeIDAllocationData_1_0(
+                unique_id_hash=msg.unique_id_hash, allocated_node_id=[uavcan.node.ID_1_0(node_id)]))
 
-async def allocator_exists(
-    iface_name: Optional[str] = None,
-    node_id: int = AllocatorApp.NODE_ID,
-    timeout: float = 3.0,
-) -> bool:
-    can_interface = normalize_can_iface(iface_name or _iface_from_env())
-    media = PythonCANMedia(iface_name=can_interface, bitrate=media_bitrate(can_interface), mtu=media_mtu())
-    transport = CANTransport(media, local_node_id=None)
-    registry = pycyphal.application.make_registry()
-    probe = pycyphal.application.make_node(
-        info=uavcan.node.GetInfo_1_0.Response(),
-        transport=transport,
-        registry=registry,
-    )
-    subscriber = probe.make_subscriber(uavcan.node.Heartbeat_1_0)
-    probe.start()
+    async def _on_v2(self, msg, transfer) -> None:
+        if not self._is_request_to_answer(transfer):
+            return
+        node_id = self._allocate(msg.unique_id.tobytes(), int(msg.node_id.value))  # it names the one it would like
+        if node_id is not None:
+            self._answer(self._answers_v2, transfer, uavcan.pnp.NodeIDAllocationData_2_0(
+                node_id=uavcan.node.ID_1_0(node_id), unique_id=msg.unique_id))
 
-    loop = asyncio.get_running_loop()
-    deadline = loop.time() + timeout
-
-    try:
-        while loop.time() < deadline:
-            result = await subscriber.receive(monotonic_deadline=deadline)
-            if result is None:
-                continue
-            _, meta = result
-            if meta.source_node_id == node_id:
-                return True
+    def _is_request_to_answer(self, transfer) -> bool:
+        """A request is anonymous; anything else on these subjects is another allocator answering one."""
+        source = transfer.source_node_id
+        if source is None:
+            return self.other_allocator is None
+        if self.other_allocator is None:
+            logger.warning(
+                "Node %d answers node-ID requests too. A bus has one allocator, so Cynitor's "
+                "answers no more: connect without the allocator on this bus", source)
+        self.other_allocator = source
         return False
-    finally:
-        subscriber.close()
-        probe.close()
 
+    def _allocate(self, unique_id: Union[int, bytes], preferred: int) -> Optional[int]:
+        """The node-ID for the node with ``unique_id``: the one it has, or a free one; None if none is free."""
+        node_id = self._allocated.get(unique_id)
+        if node_id is None:
+            taken = self._node_ids_taken() | set(self._allocated.values())
+            node_id = nearest_free_node_id(preferred, self._highest, taken)
+            if node_id is None:
+                logger.warning("A node asks for a node-ID, and none is free")
+                return None
+            self._allocated[unique_id] = node_id
+            name = unique_id.hex() if isinstance(unique_id, bytes) else f"hash {unique_id:#x}"
+            logger.info("Node-ID %d given to the node with unique-ID %s", node_id, name)
+        return node_id
 
-class AllocatorManager:
-    def __init__(self, check_interval: float = 10.0, check_timeout: float = 3.0,
-                 register_file: str = AllocatorApp.REGISTER_FILE) -> None:
-        self._check_interval = check_interval
-        # The allocator's node-ID table; see data_dir.
-        self._register_file = register_file
-        self._check_timeout = check_timeout
-        self._allocator: Optional[AllocatorApp] = None
-        self._task: Optional[asyncio.Task] = None
-        self._iface_name = _iface_from_env()
-
-    async def start(self) -> None:
-        external_exists = await allocator_exists(
-            iface_name=self._iface_name,
-            timeout=self._check_timeout,
-        )
-        if external_exists:
-            logger.info("External allocator detected on %s (node-ID %d)", self._iface_name, AllocatorApp.NODE_ID)
-        else:
-            logger.warning("No allocator detected on %s; starting local allocator", self._iface_name)
-            self._start_local_allocator()
-
-        self._task = asyncio.create_task(self._monitor_loop())
-
-    def _start_local_allocator(self) -> None:
-        # NOTE: This must run on the asyncio main thread, not a worker.
-        # AllocatorApp -> CANTransport -> PythonCANMedia.start() calls
-        # asyncio.get_event_loop() in its calling thread (to capture the loop
-        # for its background reader). On Python 3.10+ get_event_loop() raises
-        # in a worker thread that has no associated loop, so wrapping this in
-        # asyncio.to_thread breaks /api/can/connect for the local-allocator
-        # path. Constructor latency is bounded (subprocess thread spawn) so
-        # the brief loop occupancy is acceptable here.
-        if self._allocator is None:
-            self._allocator = AllocatorApp(iface_name=self._iface_name, register_file=self._register_file)
-
-    async def _monitor_loop(self) -> None:
-        try:
-            while True:
-                await asyncio.sleep(self._check_interval)
-                if self._allocator is not None:
-                    continue
-
-                external_exists = await allocator_exists(
-                    iface_name=self._iface_name,
-                    timeout=self._check_timeout,
-                )
-                if not external_exists:
-                    logger.warning("External allocator disappeared; starting local allocator")
-                    self._start_local_allocator()
-        except asyncio.CancelledError:
-            raise
-
-    async def stop(self) -> None:
-        if self._task is not None and not self._task.done():
-            self._task.cancel()
-            try:
-                await self._task
-            except asyncio.CancelledError:
-                pass
-        self._task = None
-
-        if self._allocator is not None:
-            self._allocator.close()
-            self._allocator = None
-
-
-async def main() -> None:
-    logging.root.setLevel(logging.INFO)
-    manager = AllocatorManager(check_interval=10.0, check_timeout=3.0)
-    try:
-        await manager.start()
-        await asyncio.Event().wait()
-    except KeyboardInterrupt:
-        pass
-    finally:
-        await manager.stop()
-
-
-if __name__ == "__main__":
-    asyncio.run(main())
+    @staticmethod
+    def _answer(answers, transfer, message) -> None:
+        answers.priority = transfer.priority
+        answers.publish_soon(message)

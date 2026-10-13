@@ -1,7 +1,7 @@
-# The pythoncan extra pulls python-can, which allocator.py needs at import
-# time via pycyphal.transport.can.media.pythoncan. pycyphal declares it only
-# as an optional extra, so a plain `pycyphal` install fails on connect with
-# "No module named 'can'" — on a fresh checkout as well as in a frozen build.
+# The pythoncan extra pulls python-can, which the CAN hub needs (can_hub.py,
+# and pycyphal.transport.can.media.pythoncan for its channel). pycyphal
+# declares it only as an optional extra, so a plain `pycyphal` install fails
+# with "No module named 'can'" — on a fresh checkout as well as in a frozen build.
 pycyphal[transport-can-pythoncan]>=1.27,<2.0
 # That extra takes any python-can 4. slcan adapters run CAN FD from 4.6 on;
 # an older one ignores the data bitrate, and the bitrate with it.

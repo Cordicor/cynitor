@@ -215,7 +215,6 @@ class TestTestNodes:
 
     def test_node_ids_in_use_are_cynitors_own_and_those_online(self, tmp_path):
         from types import SimpleNamespace
-        from can_config import ALLOCATOR_NODE_ID
         from main import CANSession
         s = CANSession(data_dir=tmp_path)
 
@@ -223,7 +222,7 @@ class TestTestNodes:
             return SimpleNamespace(has_appeared=appeared, has_disappeared=disappeared)
         s.scanner = SimpleNamespace(node=SimpleNamespace(id=10),
                                     all_nodes={20: node(True, False), 21: node(True, True), 22: node(False, False)})
-        assert s._node_ids_in_use() == {ALLOCATOR_NODE_ID, 10, 20}
+        assert s._node_ids_in_use() == {10, 20}
 
     @pytest.mark.parametrize("bitrate, mtu, payload", [("1000000 1000000", "8", 7), ("1000000 4000000", "64", 63)])
     async def test_behind_the_hub_they_share_its_channel(self, tmp_path, monkeypatch, bitrate, mtu, payload):
@@ -238,6 +237,95 @@ class TestTestNodes:
             assert transport.local_node_id == 60 and transport.protocol_parameters.mtu == payload
         finally:
             transport.close()
+
+
+class TestAllocator:
+    """Cynitor gives plug-and-play nodes their node-IDs only when asked to (see allocator)."""
+
+    @pytest.fixture
+    def asked(self, monkeypatch, hubs, tmp_path):
+        """connect() up to the allocator's turn; lists each time it was started."""
+        import main
+        import scanner_node
+        import telemetry_manager
+        starts = []
+
+        def stop_after_the_scanner(scanner):
+            raise RuntimeError("stop after the scanner")
+
+        monkeypatch.setattr(main, "prepare_runtime", lambda *args: None)
+        monkeypatch.setattr(scanner_node, "ScannerNode", lambda register_file: MagicMock())
+        monkeypatch.setattr(main, "FirmwareServer", MagicMock())  # the real one needs compiled DSDL
+        monkeypatch.setattr(telemetry_manager, "TelemetryManager", stop_after_the_scanner)
+        monkeypatch.setattr(main.CANSession, "_start_allocator", lambda self: starts.append(True))
+        return starts
+
+    @pytest.mark.parametrize("default, given, starts", [
+        (False, None, False),   # off unless asked for
+        (False, True, True),    # for this session
+        (True, None, True),     # --allocator
+        (True, False, False),   # this session without it
+    ])
+    async def test_it_starts_only_when_asked_for(self, asked, tmp_path, default, given, starts):
+        from main import CANSession
+        s = CANSession(data_dir=tmp_path, default_allocator=default)
+        with pytest.raises(RuntimeError, match="stop after the scanner"):
+            await s.connect("gs_usb:0", bitrate=500_000, allocator=given)
+        assert bool(asked) == starts
+
+    async def test_never_while_a_raw_log_plays(self, asked, tmp_path):
+        from main import CANSession
+        s = CANSession(data_dir=tmp_path, default_allocator=True)
+        with pytest.raises(RuntimeError, match="stop after the scanner"):
+            await s.connect("rawlog:bus.log", bitrate=500_000, allocator=True, offline={})
+        assert asked == []
+
+    def test_it_answers_from_the_scanners_node_with_no_node_id_seen_on_the_bus(self, monkeypatch, tmp_path):
+        from types import SimpleNamespace
+        import allocator
+        from main import CANSession
+        made = []
+        monkeypatch.setattr(allocator, "NodeIdAllocator",
+                            lambda node, node_ids_taken: made.append((node, node_ids_taken)) or "the allocator")
+
+        def node(appeared, disappeared):
+            return SimpleNamespace(has_appeared=appeared, has_disappeared=disappeared)
+        s = CANSession(data_dir=tmp_path)
+        s.scanner = SimpleNamespace(node=SimpleNamespace(id=10),
+                                    all_nodes={20: node(True, False), 21: node(True, True), 22: node(False, False)})
+        s._start_allocator()
+        (on_node, node_ids_taken), = made
+        assert s.allocator == "the allocator" and on_node is s.scanner.node
+        # Node 21 is off now, and comes back on the node-ID it had.
+        assert node_ids_taken() == {10, 20, 21}
+
+    def test_not_without_a_node_id_to_answer_from(self, monkeypatch, tmp_path):
+        from types import SimpleNamespace
+        import allocator
+        from main import CANSession
+        monkeypatch.setattr(allocator, "NodeIdAllocator", lambda *args: pytest.fail("should not start"))
+        s = CANSession(data_dir=tmp_path)
+        s.scanner = SimpleNamespace(node=SimpleNamespace(id=None), all_nodes={})
+        s._start_allocator()
+        assert s.allocator is None and s.allocator_status() is None
+
+    async def test_it_stops_with_the_session(self, tmp_path):
+        from main import CANSession
+        s = CANSession(data_dir=tmp_path)
+        s.allocator = running = MagicMock()
+        running.status.return_value = {"other_allocator": None, "allocated": 3}
+        assert s.allocator_status() == {"other_allocator": None, "allocated": 3}
+        await s._teardown()
+        running.close.assert_called_once_with()
+        assert s.allocator is None and s.allocator_status() is None
+
+    def test_cynitor_uses_one_node_id(self, tmp_path):
+        from types import SimpleNamespace
+        from main import CANSession
+        s = CANSession(data_dir=tmp_path)
+        assert s._own_node_ids() == set()  # not connected
+        s.scanner = SimpleNamespace(node=SimpleNamespace(id=10))
+        assert s._own_node_ids() == {10}
 
 
 class TestConnectCanFd:
@@ -315,7 +403,7 @@ class TestConnectThroughHub:
         monkeypatch.delenv("UAVCAN__NODE__ID")
         with pytest.raises(RuntimeError, match="stop"):
             await main.CANSession().connect("gs_usb:0", bitrate=500_000)
-        assert picks == [("virtual:fake-hub", frozenset({1}))]  # never the allocator's
+        assert picks == [("virtual:fake-hub", frozenset())]
         assert os.environ["UAVCAN__NODE__ID"] == "42"
 
     async def test_preset_node_id_is_kept(self, captured, hubs, monkeypatch):
@@ -340,7 +428,7 @@ class TestNodeIdOnSocketcan:
         monkeypatch.delenv("UAVCAN__NODE__ID")
         with pytest.raises(RuntimeError, match="stop"):
             await main.CANSession().connect("vcan0")
-        assert picks == [("socketcan:vcan0", frozenset({1}), None, fd)]
+        assert picks == [("socketcan:vcan0", frozenset(), None, fd)]
         assert os.environ["UAVCAN__NODE__ID"] == "42"
 
     async def test_preset_node_id_is_kept(self, captured, hubs, monkeypatch):
@@ -555,21 +643,125 @@ class TestRegisterNodesRetry:
         scanner.add_subscriptions.assert_awaited_once_with(42, {1620: "t.T_1_0"})
 
 
+class TestDecodeOnDemand:
+    """With the switch on, only what a dashboard watches or a recording takes is decoded; the rest is counted."""
+
+    @pytest.fixture
+    def session(self, tmp_path, monkeypatch):
+        from main import CANSession
+        s = CANSession(data_dir=tmp_path)
+        s.scanner = MagicMock(subject_types={1620: "ns.T_1_0", 1621: "uavcan.si.unit.velocity.Scalar_1_0"},
+                              active_publishers={1620: {42}, 1621: {43, 44}}, queue_rates=AsyncMock())
+        s.taps = []   # (what the frames go to, the kernel's filter, whether it is stopped)
+
+        def open_tap(on_frame, can_filters=None):
+            tap = [on_frame, can_filters, False]
+            s.taps.append(tap)
+            return lambda: tap.__setitem__(2, True)
+
+        monkeypatch.setattr(s, "_open_capture_tap", open_tap)
+        return s
+
+    def test_off_unless_asked_for(self, tmp_path):
+        from main import CANSession
+        assert CANSession(data_dir=tmp_path).decode_on_demand is False
+        assert CANSession(data_dir=tmp_path, decode_on_demand=True).decode_on_demand is True
+
+    async def test_switched_on_it_counts_message_frames_and_decodes_what_is_watched(self, session):
+        session.set_watched("a dashboard", [1620])
+        session.scanner.set_decoding.assert_not_called()   # off: every subject is decoded
+        await session.set_decode_on_demand(True)
+        try:
+            (on_frame, can_filters, _), = session.taps
+            assert on_frame == session._rates.on_frame
+            assert can_filters == [{"can_id": 0, "can_mask": 1 << 25, "extended": True}]   # no service frames
+            session.scanner.set_decoding.assert_called_with({1620})
+            session.set_watched("another", [1621, 1700])
+            session.scanner.set_decoding.assert_called_with({1620, 1621, 1700})
+            session.set_watched("a dashboard", None)    # it has gone
+            session.scanner.set_decoding.assert_called_with({1621, 1700})
+        finally:
+            await session.set_decode_on_demand(False)
+        session.scanner.set_decoding.assert_called_with(None)
+        assert session.taps[0][2] and session._rates is None and session._on_demand_task is None
+        assert session.decode_on_demand is False
+
+    async def test_a_recording_keeps_what_it_takes_decoded(self, session):
+        asked = []
+
+        def records_subject(subject_id, node_ids, message_type):
+            asked.append((subject_id, set(node_ids), message_type))
+            return subject_id == 1621
+        session.event_logger = MagicMock(records_subject=records_subject)
+        await session.set_decode_on_demand(True)
+        try:
+            session.scanner.set_decoding.assert_called_with({1621})
+            assert (1621, {43, 44}, "Scalar_1_0") in asked and (1620, {42}, "T_1_0") in asked
+        finally:
+            session._stop_on_demand()
+
+    async def test_every_second_the_counted_rates_go_to_the_scanner(self, session, monkeypatch):
+        import main
+        slept = []
+
+        async def no_wait(seconds):
+            slept.append(seconds)
+            if len(slept) > 2:
+                raise asyncio.CancelledError
+        monkeypatch.setattr(main.asyncio, "sleep", no_wait)
+        session._rates = MagicMock(sample=MagicMock(return_value={(1621, 43): (250.0, 1000.0)}))
+        with pytest.raises(asyncio.CancelledError):
+            await session._on_demand_loop()
+        assert session.scanner.queue_rates.await_count == 2
+        session.scanner.queue_rates.assert_awaited_with({(1621, 43): (250.0, 1000.0)})
+        session._rates = None
+
+    async def test_not_connected_the_choice_waits_for_the_next_session(self, tmp_path):
+        from main import CANSession
+        s = CANSession(data_dir=tmp_path)
+        await s.set_decode_on_demand(True)
+        assert s.decode_on_demand is True and s._rates is None
+
+    async def test_a_session_that_ends_does_not_start_decoding_everything_first(self, session):
+        await session.set_decode_on_demand(True)
+        scanner = session.scanner
+        scanner.set_decoding.reset_mock()
+        await session._teardown()
+        scanner.set_decoding.assert_not_called()
+        assert session.taps[0][2] and session._rates is None
+        assert session.decode_on_demand is True   # the next session decodes on demand too
+
+    async def test_counted_rates_are_not_written_to_history(self):
+        from main import _event_logger_loop
+        queue: asyncio.Queue = asyncio.Queue()
+        queue.put_nowait({"subject_id": 1621, "undecoded": True, "attributes": []})
+        queue.put_nowait({"subject_id": 1620, "attributes": [{"attribute": "x", "value": 1}]})
+        logger = MagicMock(log_event=AsyncMock())
+        task = asyncio.create_task(_event_logger_loop(logger, queue))
+        for _ in range(20):
+            await asyncio.sleep(0)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        logger.log_event.assert_awaited_once_with({"subject_id": 1620, "attributes": [{"attribute": "x", "value": 1}]})
+
+
 class TestDroppedEvents:
 
     def test_none_when_not_connected(self):
         from main import CANSession
         assert CANSession().dropped_events() is None
 
-    def test_sums_logger_drops_from_both_queues(self):
+    def test_sums_what_each_stage_dropped(self):
         from collections import defaultdict
         from main import CANSession
         s = CANSession()
-        s.scanner = MagicMock(dropped_events=1)
+        # The scanner: an event its queue had no room for, and ten frames never decoded.
+        s.scanner = MagicMock(dropped_events=1, dropped_frames=MagicMock(return_value=10))
         s.telemetry = MagicMock(dropped=defaultdict(int, {"logger": 2, "client": 7}))
         s.event_logger = MagicMock(dropped_events=3)
         with patch.object(CANSession, "is_running", new_callable=PropertyMock, return_value=True):
-            assert s.dropped_events() == {"scanner": 1, "logger": 5, "clients": 7}
+            assert s.dropped_events() == {"scanner": 11, "logger": 5, "clients": 7}
 
 
 class TestEventLogger:

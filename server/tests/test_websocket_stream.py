@@ -47,6 +47,8 @@ def _make_session_with_telemetry():
     session.bus_load = None
     session.last_error = None
     session.dropped_events.return_value = None
+    session.allocator_status.return_value = None
+    session.decode_on_demand = False
     session.default_data_bitrate = None
     session.can_data_bitrate = None
     session.can_fd = False
@@ -98,6 +100,47 @@ async def _recv_event(ws, timeout=2.0):
         if msg.get("type") in ("filter_updated", "pong", "metrics"):
             continue
         return msg
+
+
+class TestMetrics:
+
+    @pytest.mark.asyncio
+    async def test_every_second_the_bus_load_and_the_servers_cpu_use(self, client, server, session):
+        session.bus_load = None
+        server.cpu.read = lambda: 37.5
+        async with client.ws_connect("/ws") as ws:
+            deadline = asyncio.get_event_loop().time() + 3.0
+            while True:
+                msg = await asyncio.wait_for(ws.receive_json(), timeout=deadline - asyncio.get_event_loop().time())
+                if msg.get("type") == "metrics":
+                    break
+        assert msg == {"type": "metrics", "bus_utilization": None, "server_cpu": 37.5}
+
+
+class TestWatch:
+    """A dashboard says which subjects it shows the values of: what is decoded for it on demand."""
+
+    @pytest.mark.asyncio
+    async def test_the_subjects_reach_the_session_and_leave_with_the_dashboard(self, client, session):
+        async with client.ws_connect("/ws") as ws:
+            await ws.send_json({"type": "watch", "subject_ids": [1620, 1621]})
+            await ws.send_json({"type": "ping"})
+            while (await ws.receive_json()).get("type") != "pong":   # the watch was handled before it
+                pass
+            (dashboard, subject_ids), = [call.args for call in session.set_watched.call_args_list]
+            assert subject_ids == [1620, 1621]
+        await asyncio.sleep(0.1)
+        assert session.set_watched.call_args_list[-1].args == (dashboard, None)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("subject_ids", [None, "1620", [1620, "x"], [8192], [-1], [True]])
+    async def test_anything_but_a_list_of_subject_ids_is_refused(self, client, session, subject_ids):
+        async with client.ws_connect("/ws") as ws:
+            await ws.send_json({"type": "watch", "subject_ids": subject_ids})
+            while "error" not in (msg := await asyncio.wait_for(ws.receive_json(), timeout=3.0)):
+                pass
+            assert "subject_ids" in msg["error"]
+            assert not [c for c in session.set_watched.call_args_list if c.args[1] is not None]
 
 
 class TestSubscribeBroadcast:

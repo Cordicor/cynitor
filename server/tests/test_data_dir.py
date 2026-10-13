@@ -62,11 +62,10 @@ class TestPrepareDataDir:
         # Committed transactions can still be in the -wal file; leaving it
         # behind would lose them.
         old, new = folders
-        for name in ("telemetry_events.db", "telemetry_events.db-wal", "telemetry_events.db-shm",
-                     "allocator_2app.db"):
+        for name in ("telemetry_events.db", "telemetry_events.db-wal", "telemetry_events.db-shm"):
             (old / name).write_text(name)
         moved = prepare_data_dir(new, legacy_dir=old)
-        assert moved == ["telemetry_events.db", "allocator_2app.db"]
+        assert moved == ["telemetry_events.db"]
         assert (new / "telemetry_events.db-wal").read_text() == "telemetry_events.db-wal"
         assert not any(old.iterdir())
 

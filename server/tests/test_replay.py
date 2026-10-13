@@ -356,6 +356,8 @@ def _make_session_for_rest(replay_db, is_running: bool = False):
     s.bus_load = None
     s.last_error = None
     s.dropped_events.return_value = None
+    s.allocator_status.return_value = None
+    s.decode_on_demand = False
     s.default_data_bitrate = None
     s.can_data_bitrate = None
     s.can_fd = False
@@ -501,10 +503,10 @@ class TestReplayRestRoutes:
     @pytest.mark.asyncio
     async def test_nodes_read_from_the_recording_once_per_replay(self, rest_client, monkeypatch):
         # The dashboard asks every second; reading them takes seconds for a big recording.
-        import websocket_server
+        import api_nodes
         reads = []
-        read = websocket_server._synthesize_nodes_from_recording
-        monkeypatch.setattr(websocket_server, "_synthesize_nodes_from_recording",
+        read = api_nodes._synthesize_nodes_from_recording
+        monkeypatch.setattr(api_nodes, "_synthesize_nodes_from_recording",
                             lambda *args: reads.append(args) or read(*args))
         c, session = rest_client
         try:

@@ -5,7 +5,29 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Cynitor</title>
   <link rel="stylesheet" href="./vendor/tabulator_midnight.min.css" />
+  <!-- The stylesheet, in parts by view; their order is the cascade's: keep it. -->
   <link rel="stylesheet" href="./styles.css" />
+  <link rel="stylesheet" href="./sidebar.css" />
+  <link rel="stylesheet" href="./log-panel.css" />
+  <link rel="stylesheet" href="./common.css" />
+  <link rel="stylesheet" href="./detail-panel.css" />
+  <link rel="stylesheet" href="./compare-view.css" />
+  <link rel="stylesheet" href="./tables-and-cards.css" />
+  <link rel="stylesheet" href="./services-panel.css" />
+  <link rel="stylesheet" href="./connection-states.css" />
+  <link rel="stylesheet" href="./replay-strip.css" />
+  <link rel="stylesheet" href="./service-states.css" />
+  <link rel="stylesheet" href="./registers-panel.css" />
+  <link rel="stylesheet" href="./responsive.css" />
+  <link rel="stylesheet" href="./overlays.css" />
+  <link rel="stylesheet" href="./history-panel.css" />
+  <link rel="stylesheet" href="./graph-view.css" />
+  <link rel="stylesheet" href="./dsdl-view.css" />
+  <link rel="stylesheet" href="./dsdl-editor.css" />
+  <link rel="stylesheet" href="./record-view.css" />
+  <link rel="stylesheet" href="./debug-view.css" />
+  <link rel="stylesheet" href="./subject-types.css" />
+  <link rel="stylesheet" href="./testnodes-view.css" />
 </head>
 <body>
   <div class="app-shell restoring">
@@ -27,12 +49,20 @@
             <span class="semaphore" id="serverSemaphore"></span>
             Server
           </div>
-          <span class="throughput-value hidden" id="serverThroughput"></span>
+          <div class="server-readings">
+            <span class="throughput-value hidden" id="serverThroughput"></span>
+            <span class="throughput-value hidden" id="serverCpu"></span>
+          </div>
         </div>
         <div class="sidebar-connect">
           <input id="apiBase" type="text" value="http://localhost:8080" placeholder="http://localhost:8080"
                  aria-label="Backend URL" />
           <button id="connectDashboardBtn" class="sidebar-action btn-primary">Connect</button>
+          <label id="decodeOnDemandRow" class="sidebar-toggle"
+                 title="Decode only the subjects whose values are on screen or being recorded. The rest are counted, so their rates still show. For a bus that carries more than the server can decode (see its CPU use). History and 'save the last N seconds' then hold only what was decoded.">
+            <input id="decodeOnDemandToggle" type="checkbox" />
+            <span>Decode on demand</span>
+          </label>
         </div>
       </div>
 
@@ -46,6 +76,7 @@
         </div>
         <div class="can-v11-notice hidden" id="canV11Notice" role="status"></div>
         <div class="can-bus-notice hidden" id="canBusNotice" role="status"></div>
+        <div class="can-allocator-notice hidden" id="canAllocatorNotice" role="status"></div>
         <div class="sidebar-connect">
           <div class="sparkline-wrap">
             <select id="interfacesSelect" aria-label="CAN interface"></select>
@@ -86,6 +117,10 @@
               <option value="8000000">CAN FD · 8 Mbit/s data</option>
             </select>
           </div>
+          <label id="canAllocatorRow" class="sidebar-toggle">
+            <input id="canAllocatorToggle" type="checkbox" />
+            <span>Node-ID allocator</span>
+          </label>
           <button id="connectCanBtn" class="sidebar-action btn-primary">Connect</button>
           <div id="canError" class="can-error hidden"></div>
         </div>

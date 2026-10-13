@@ -1,0 +1,953 @@
+/* ── Log panel (right sidebar) ── */
+.log-panel {
+  width: var(--log-w-fit);
+  min-width: var(--log-w-fit);
+  background: var(--surface);
+  border-left: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  overflow: hidden;
+  position: relative;
+  transition: width 0.2s, min-width 0.2s, opacity 0.2s;
+}
+
+.log-panel.no-transition {
+  transition: none;
+}
+
+/* While the page loads and puts the saved layout back (app.js), the panel is
+   simply where it was left: it slides only when its toggle is used. */
+.app-shell.restoring .log-panel,
+.app-shell.restoring .log-panel-collapse-btn {
+  transition: none;
+}
+
+.log-panel.collapsed {
+  width: 0;
+  min-width: 0;
+  overflow: hidden;
+  opacity: 0;
+  border-left: none;
+  /* Hidden once the collapse has played, so its controls leave the Tab order. */
+  visibility: hidden;
+  transition: width 0.2s, min-width 0.2s, opacity 0.2s, visibility 0s 0.2s;
+}
+
+.log-panel-resize-handle {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 0.375rem;
+  height: 100%;
+  cursor: col-resize;
+  z-index: 5;
+  background: transparent;
+  transition: background 0.12s;
+}
+
+.log-panel-resize-handle:hover,
+.log-panel-resize-handle.dragging {
+  background: var(--accent);
+  opacity: 0.4;
+}
+
+.log-panel-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem 0.5rem 1.125rem;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+
+.log-panel-sources {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.log-source-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3125rem;
+  background: var(--surface-2);
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.1875rem 0.5rem;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  cursor: pointer;
+  position: relative;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+
+.log-source-pill:hover {
+  background: var(--surface-3);
+  color: var(--text);
+}
+
+.log-source-pill[aria-pressed="true"] {
+  background: var(--accent-muted);
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.log-source-count {
+  font-family: var(--mono);
+  font-size: 0.625rem;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-transform: none;
+  background: var(--surface-3);
+  color: var(--muted);
+  border-radius: 999px;
+  padding: 0 0.3125rem;
+  min-width: 1rem;
+  text-align: center;
+  line-height: 1.1;
+}
+
+.log-source-pill[aria-pressed="true"] .log-source-count {
+  background: var(--surface);
+  color: var(--accent);
+}
+
+.log-source-count.hidden {
+  display: none;
+}
+
+.log-source-pill.disconnected[aria-pressed="true"] {
+  border-color: var(--warn);
+  color: var(--warn);
+  background: var(--warn-muted);
+}
+
+.log-source-pill.disconnected[aria-pressed="true"] .log-source-count {
+  color: var(--warn);
+}
+
+.log-source-pill.disconnected::before {
+  content: '';
+  position: absolute;
+  top: -0.1875rem;
+  right: -0.1875rem;
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  background: var(--warn);
+  border: 1px solid var(--surface);
+}
+
+.log-panel-controls {
+  flex: 1 1 100%;
+  /* Short of room, the filter box narrows: no button is pushed out of view. */
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+}
+
+.log-filter-input {
+  flex: 1;
+  min-width: 0;
+  width: auto;
+  background: var(--surface-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 0.25rem;
+  font-size: 0.75rem;
+  padding: 0.1875rem 0.5rem;
+}
+
+.log-severity-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: 0.6875rem;
+}
+
+.log-severity-label {
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.log-severity-select {
+  background: var(--surface-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 0.25rem;
+  font-family: var(--mono);
+  font-size: 0.6875rem;
+  padding: 0.125rem 0.25rem;
+  cursor: pointer;
+}
+
+.log-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.625rem;
+  height: 1.625rem;
+  padding: 0;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 0.25rem;
+  color: var(--muted);
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+
+.log-icon-btn:hover {
+  background: var(--surface-3);
+  color: var(--text);
+}
+
+.log-icon-btn.active {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+/* Beside the sources, at the header's right: it takes the whole log away. */
+.log-save-btn {
+  margin-left: auto;
+}
+
+.log-panel-body {
+  flex: 1;
+  overflow-y: auto;
+  position: relative;
+  /* A reader scrolled up keeps their place as rows come and go above: the
+     list sees to it (_pushEntry), in Safari too, which does no anchoring of
+     its own. Browsers that do must not do it twice. */
+  overflow-anchor: none;
+}
+
+.log-empty {
+  color: var(--muted);
+  font-size: 0.8125rem;
+  text-align: center;
+  padding: 1.5rem 0.75rem;
+}
+
+.log-empty.hidden {
+  display: none;
+}
+
+.log-list {
+  display: flex;
+  flex-direction: column;
+}
+
+/* time · severity · message; the left inset clears the collapse button. */
+.log-row {
+  display: grid;
+  grid-template-columns: 5.5rem 3rem minmax(0, 1fr);
+  gap: 0.5rem;
+  align-items: baseline;
+  padding: 0.1875rem 0.875rem 0.1875rem 1.375rem;
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  line-height: 1.4;
+  border-top: 1px solid transparent;
+  border-bottom: 1px solid var(--border);
+}
+
+.log-row.hidden {
+  display: none;
+}
+
+.log-row-time {
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.log-row-sev {
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  font-size: 0.6875rem;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+/* Who said it, leading the message: a node (its ID, then its name) or a
+   backend logger. */
+.log-row-src {
+  margin-right: 0.25rem;
+  color: var(--muted);
+}
+
+.log-row-src-cyphal .log-row-src {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.log-row-nid {
+  color: var(--muted);
+  font-weight: 400;
+}
+
+.log-row-tag {
+  margin-right: 0.125rem;
+  padding: 0 0.25rem;
+  border: 1px solid var(--border);
+  border-radius: 0.1875rem;
+  color: var(--muted);
+  font-size: 0.6875rem;
+}
+
+.log-row-text {
+  color: var(--text);
+  word-break: break-word;
+  white-space: pre-wrap;
+}
+
+/* Colour is kept for what needs a look. TRACE and DEBUG are the message's own
+   colour in a light weight, INFO and NOTICE bold; from WARNING up the label
+   takes the severity's colour, which CRITICAL and ALERT fill in: their rows
+   are tinted, and red on that tint would read poorly. */
+.log-row-sev-trace    .log-row-sev,
+.log-row-sev-debug    .log-row-sev { color: var(--text); font-weight: 400; }
+.log-row-sev-info     .log-row-sev { color: var(--text); }
+.log-row-sev-notice   .log-row-sev { color: var(--text-bright); }
+.log-row-sev-warning  .log-row-sev { color: var(--warn); }
+.log-row-sev-error    .log-row-sev { color: var(--error); }
+.log-row-sev-critical .log-row-sev,
+.log-row-sev-alert    .log-row-sev {
+  justify-self: start;
+  padding: 0 0.1875rem;
+  border-radius: 0.1875rem;
+  background: var(--error);
+  color: var(--surface);
+  font-weight: 800;
+}
+.log-row-sev-none     .log-row-sev { color: var(--muted); }
+
+/* A bar on the left edge marks what needs a look when scanning. */
+.log-row-sev-warning  { box-shadow: inset 0.1875rem 0 0 var(--warn); }
+.log-row-sev-error    { box-shadow: inset 0.1875rem 0 0 var(--error); }
+.log-row-sev-critical,
+.log-row-sev-alert    { box-shadow: inset 0.1875rem 0 0 var(--error); background: var(--error-muted); }
+
+/* Over the list's foot while its end is out of view: the messages that came
+   meanwhile. Centred by its margins: buttons lose their transform on hover. */
+.log-new-btn {
+  position: absolute;
+  bottom: 0.625rem;
+  left: 0;
+  right: 0;
+  width: fit-content;
+  margin: 0 auto;
+  z-index: 4;
+  padding: 0.125rem 0.625rem;
+  border: 1px solid currentColor;
+  border-radius: 1rem;
+  background: var(--surface-2);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 0.6875rem;
+}
+
+.log-new-btn:hover {
+  border-color: currentColor;
+}
+
+.log-new-btn--warn {
+  color: var(--warn);
+}
+
+.log-new-btn--error {
+  color: var(--error);
+}
+
+.log-subject-popover {
+  min-width: 15rem;
+  max-height: 24rem;
+  overflow-y: auto;
+}
+
+.log-subject-popover .hidden-popover-list {
+  max-height: none;
+  overflow: visible;
+}
+
+.log-subject-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.1875rem 0.75rem;
+  font-size: 0.75rem;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+}
+
+.log-subject-row:last-child {
+  border-bottom: none;
+}
+
+.log-subject-row:hover {
+  background: var(--surface-2);
+}
+
+.log-subject-type {
+  flex: 1;
+  min-width: 0;
+  color: var(--muted);
+  font-family: var(--mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.log-subject-checkbox {
+  flex-shrink: 0;
+  width: 0.875rem;
+  height: 0.875rem;
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.log-subject-empty {
+  padding: 0.875rem 0.75rem;
+  font-size: 0.75rem;
+  color: var(--muted);
+  text-align: center;
+}
+
+.log-panel-collapse-btn {
+  position: absolute;
+  top: 50%;
+  right: calc(var(--log-w-fit) - 1.25rem);
+  transform: translateY(-50%);
+  z-index: 10;
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  color: var(--muted);
+  cursor: pointer;
+  transition: right 0.2s, opacity 0.2s, background 0.12s;
+}
+
+.log-panel-collapse-btn:hover {
+  background: var(--surface-3);
+  color: var(--text);
+  transform: translateY(-50%);
+}
+
+.log-panel-collapse-btn svg {
+  transition: transform 0.2s;
+}
+
+.log-panel.collapsed ~ .log-panel-collapse-btn {
+  right: -0.5rem;
+  opacity: 0.7;
+}
+
+.log-panel.collapsed ~ .log-panel-collapse-btn svg {
+  transform: rotate(180deg);
+}
+
+/* On the shut panel's toggle: the warnings and errors that came since it was
+   shut. The toggle is half out of the window, so the count sits on its inner
+   half, and brings it out of its dimness. */
+.log-unread {
+  position: absolute;
+  top: -0.625rem;
+  right: 0.875rem;
+  min-width: 1.25rem;
+  padding: 0 0.25rem;
+  border: 1px solid currentColor;
+  border-radius: 1rem;
+  background: var(--surface);
+  color: var(--warn);
+  font-family: var(--mono);
+  font-size: 0.6875rem;
+  font-weight: 700;
+  line-height: 1.5;
+  text-align: center;
+}
+
+.log-unread--error {
+  color: var(--error);
+}
+
+/* For screen readers only: in the page and read out, but not drawn. */
+.visually-hidden {
+  position: absolute;
+  width: 0.0625rem;
+  height: 0.0625rem;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.log-panel.collapsed ~ .log-panel-collapse-btn.has-unread {
+  opacity: 1;
+}
+
+.theme-label {
+  margin-left: auto;
+}
+
+.theme-toggle {
+  position: relative;
+  width: 2rem;
+  height: 1rem;
+  background: var(--border);
+  border-radius: 0.5rem;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.2s;
+  border: none;
+  padding: 0;
+}
+
+.theme-toggle::after {
+  content: '';
+  position: absolute;
+  top: 0.125rem;
+  left: 0.125rem;
+  width: 0.75rem;
+  height: 0.75rem;
+  border-radius: 50%;
+  background: var(--text-bright);
+  transition: transform 0.2s;
+}
+
+[data-theme="dark"] .theme-toggle::after {
+  transform: translateX(1rem);
+}
+
+.sidebar-section {
+  padding: 0.875rem 0.875rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.sidebar-section-label {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-bottom: 0.5rem;
+}
+
+.sidebar-group-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.5rem;
+}
+
+.sidebar-group-label {
+  display: flex;
+  align-items: center;
+  gap: 0.4375rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.throughput-value {
+  font-family: var(--mono);
+  font-size: 0.6875rem;
+  font-weight: 500;
+  color: var(--muted);
+  transition: color 0.2s;
+}
+
+/* The server's readings, one under the other: its data rate, its CPU use. */
+.server-readings {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+}
+
+.throughput-value.load-ok { color: var(--ok); }
+.throughput-value.load-warn { color: var(--warn); }
+.throughput-value.load-err { color: var(--error); }
+.throughput-value.load-crit { color: var(--error); animation: load-flash 0.5s infinite; }
+
+@keyframes load-flash {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
+.semaphore {
+  display: inline-block;
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  background: var(--error);
+  flex-shrink: 0;
+  transition: background 0.2s;
+}
+
+.semaphore.ok { background: var(--ok); }
+.semaphore.warn { background: var(--warn); }
+.semaphore.error { background: var(--error); }
+.semaphore.connecting { animation: semaphore-connecting 0.8s ease-in-out infinite; }
+.semaphore.disconnecting { animation: semaphore-disconnecting 0.8s ease-in-out infinite; }
+
+@keyframes semaphore-connecting {
+  0%, 100% { background: var(--warn); }
+  50% { background: var(--ok); }
+}
+
+@keyframes semaphore-disconnecting {
+  0%, 100% { background: var(--warn); }
+  50% { background: var(--error); }
+}
+
+.sparkline-wrap {
+  position: relative;
+}
+
+.bus-load-sparkline {
+  position: absolute;
+  top: 0;
+  right: 1rem;
+  width: 55%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.bus-full-easter {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  background: var(--surface);
+  border-radius: var(--radius);
+  padding: 0 0.5rem;
+  overflow: hidden;
+}
+
+.bus-full-easter img {
+  height: 100%;
+  object-fit: contain;
+}
+
+.bus-full-easter span {
+  font-size: 0.625rem;
+  font-family: var(--mono);
+  color: var(--muted);
+  line-height: 1.3;
+}
+
+.sidebar-view-tabs {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  padding: 0.5rem 0.875rem;
+  border-bottom: 1px solid var(--border);
+}
+
+/* Segmented control (Nodes / Subjects) */
+.view-segmented {
+  position: relative;
+  display: flex;
+  background: var(--surface-3);
+  border-radius: 0.375rem;
+  padding: 0.125rem;
+}
+
+.view-seg-btn {
+  flex: 1;
+  position: relative;
+  z-index: 1;
+  padding: 0.3125rem 0;
+  font-family: var(--sans);
+  font-size: 0.6875rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  background: transparent;
+  border: none;
+  border-radius: 0.25rem;
+  cursor: pointer;
+  transition: color 0.18s;
+}
+
+.view-seg-btn:hover {
+  color: var(--text);
+}
+
+.view-seg-btn.active {
+  color: var(--text-bright);
+}
+
+.view-seg-indicator {
+  position: absolute;
+  top: 0.125rem;
+  left: 0.125rem;
+  width: calc(50% - 0.125rem);
+  height: calc(100% - 0.25rem);
+  background: var(--surface);
+  border-radius: 0.25rem;
+  box-shadow: 0 0.0625rem 0.1875rem rgba(0, 0, 0, 0.08);
+  transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  pointer-events: none;
+}
+
+[data-theme="dark"] .view-seg-indicator {
+  box-shadow: 0 0.0625rem 0.25rem rgba(0, 0, 0, 0.25);
+}
+
+.view-seg-btn:nth-child(2).active ~ .view-seg-indicator {
+  transform: translateX(100%);
+}
+
+/* Graph button */
+.view-graph-btn {
+  display: grid;
+  grid-template-columns: 1fr auto auto 1fr;
+  align-items: center;
+  width: 100%;
+  padding: 0.3125rem 0;
+  font-family: var(--sans);
+  font-size: 0.6875rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid var(--border-subtle);
+  border-radius: 0.375rem;
+  cursor: pointer;
+  transition: color 0.15s, background 0.15s, border-color 0.15s;
+}
+
+.view-graph-btn svg {
+  grid-column: 2;
+  opacity: 0.6;
+  transition: opacity 0.15s;
+}
+
+.view-graph-btn > span {
+  grid-column: 3;
+  min-width: 3.5rem;
+  margin-left: 0.375rem;
+  text-align: left;
+}
+
+.view-graph-btn:hover {
+  color: var(--text);
+  background: var(--surface-2);
+  border-color: var(--border);
+}
+
+.view-graph-btn:hover svg {
+  opacity: 1;
+}
+
+.view-graph-btn.active {
+  color: var(--accent);
+  background: var(--accent-muted);
+  border-color: var(--accent);
+}
+
+.view-graph-btn.active svg {
+  opacity: 1;
+}
+
+.sidebar-footer {
+  margin-top: auto;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  padding: 0.375rem 0.875rem 0.75rem;
+  border-top: 1px solid var(--border);
+}
+
+.sidebar-built-by {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  text-decoration: none;
+  transition: opacity 0.15s;
+}
+
+.sidebar-built-by:hover {
+  opacity: 0.85;
+}
+
+.sidebar-built-by,
+.sidebar-built-by:visited {
+  color: var(--fg);
+}
+
+.cordicor-logo {
+  height: 3.7rem;
+  width: auto;
+  transform: rotate(-60deg);
+  margin-left: 0.5rem;
+  opacity: 0.8;
+  margin-top: 0.7rem;
+}
+
+.built-by-label {
+  font-size: 0.4rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+  line-height: 1.2;
+  margin-top: -1.4rem;
+}
+
+.built-by-name {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--fg);
+  letter-spacing: 0.03em;
+  line-height: 1.2;
+}
+
+/* The image's lower third is transparent: cut off the box (2.8rem of its
+   4rem shown, at the same scale), it no longer hangs below the sidebar, which
+   then took a scrollbar. The wordmark stays where it was. */
+.cyphal-logo {
+  width: 8rem;
+  height: 2.8rem;
+  object-fit: cover;
+  object-position: top;
+  margin-left: 1.0rem;
+  margin-bottom: -0.5rem;
+  opacity: 0.6;
+  align-self: flex-end;
+}
+
+.footer-left {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+.footer-right {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  align-self: flex-end;
+}
+
+/* Big enough to read off for a bug report, clear of the hammer; it takes no
+   width of the column, over whose free space it reads. */
+.version-tag {
+  width: 0;
+  white-space: nowrap;
+  font-family: var(--mono);
+  font-size: 0.5625rem;
+  font-weight: 600;
+  margin-bottom: -2.1rem;
+  margin-left: 2.4rem;
+  color: var(--muted);
+  letter-spacing: 0.1em;
+}
+
+/* The wordmark is dark blue, invisible on the dark sidebar: invert it and turn
+   the hue back, which keeps the orange stroke orange. */
+[data-theme="dark"] .cyphal-logo {
+  filter: invert(1) hue-rotate(180deg);
+  opacity: 0.85;
+}
+
+/* The hammer is black, lost on the dark sidebar too: white there. */
+[data-theme="dark"] .cordicor-logo {
+  filter: invert(1);
+}
+
+.powered-by-label {
+  font-size: 0.4rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  margin-bottom: -1.4rem;
+  color: var(--muted);
+}
+
+.sidebar-connect {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+}
+
+.sidebar-connect input[type="text"] {
+  width: 100%;
+  font-family: var(--mono);
+  font-size: 0.8125rem;
+}
+
+/* Bitrate for adapters Cynitor opens itself; a custom value sits beside the list. */
+.can-bitrate-row {
+  display: flex;
+  gap: 0.375rem;
+}
+
+.can-bitrate-row input[type="number"] {
+  font-family: var(--mono);
+  font-size: 0.8125rem;
+}
+
+/* A switch in the sidebar: whether Cynitor gives plug-and-play nodes their
+   node-IDs (CAN section), whether the server decodes on demand (Server section). */
+.sidebar-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  font-size: 0.75rem;
+  color: var(--text);
+  cursor: pointer;
+  user-select: none;
+}
+
+.sidebar-toggle input[type="checkbox"] {
+  accent-color: var(--accent);
+  /* Not the global inputs' 100 % */
+  width: auto;
+}
+
+/* Not to be changed now: the server is off, or CAN is connecting or connected. */
+.sidebar-toggle.is-locked {
+  cursor: default;
+}
+
+.sidebar-action {
+  width: 100%;
+}
+
+.sidebar-status-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+}
+
+.sidebar-status-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.substatus {
+  font-size: 0.75rem;
+  font-family: var(--mono);
+  color: var(--muted);
+  padding: 0 0.125rem;
+}
+

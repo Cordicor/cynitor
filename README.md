@@ -129,9 +129,11 @@ Then connect Cynitor to `vcan0`. There the demo takes options:
 | **Debug** | The bus's health, transport diagnostics, and a raw CAN frame monitor |
 | **Log panel** | One timeline of `uavcan.diagnostic.Record` messages, any text subject you add, and Cynitor's own log, timed to the millisecond and filtered by severity and text. Shut, it counts the warnings and errors that came since; what it lists saves to a file |
 
-Cynitor also gives plug-and-play nodes their node-IDs when no other allocator
-is on the bus, has a dark and a light theme, reconnects by itself, keeps your
-layout in the browser, and needs no internet access.
+Cynitor also gives plug-and-play nodes their node-IDs if you ask it to, for a
+bus with no allocator of its own: tick **Node-ID allocator** before connecting,
+or start it with `--allocator`. It is off otherwise, as a bus may have one
+allocator only. It has a dark and a light theme, reconnects by itself, keeps
+your layout in the browser, and needs no internet access.
 [website/README.md](website/README.md) describes every view in full.
 
 ## CAN adapters
@@ -212,6 +214,8 @@ topics to v1.0 subject-IDs on the device (`name#1234`).
 | `--can <name>` | Connect at startup. Without it, or if the name does not exist, you pick the interface in the dashboard. `sim:classic` and `sim:fd` are the [simulated bus](#try-it-without-hardware) |
 | `--bitrate <n>` | Bus speed in bit/s. Required with `--can` for every adapter but SocketCAN and the simulated bus |
 | `--data-bitrate <n>` | CAN FD data-phase speed in bit/s; leave it out for Classic CAN. Ignored for SocketCAN |
+| `--decode-on-demand` | Decode only the subjects a dashboard shows or a recording takes, and count the rest: for a bus that carries more than the server can decode. The dashboard's **Decode on demand** box does the same at any time |
+| `--allocator` | Give plug-and-play nodes their node-IDs. Off by default: only for a bus with no allocator of its own. The dashboard's **Node-ID allocator** box does the same for one session |
 | `--bind <host>` | Listen on `<host>`. Default `127.0.0.1`; `0.0.0.0` for the whole network |
 | `--port <n>` | Listen on `<n>`. Default 8080 |
 | `--data-dir <dir>` | Keep the data in `<dir>` |
@@ -239,9 +243,9 @@ which:
 | macOS | `~/Library/Application Support/Cynitor` |
 
 It holds bus history (24 h), node history (30 days), service-call history,
-recordings, device names, the types you set for subjects, the test nodes you
-make, and the allocator's table of which device got which node-ID. Raw CAN
-logs are in `raw/`, firmware files in `firmware/`, your DSDL types in `dsdl/`.
+recordings, device names, the types you set for subjects, and the test nodes
+you make. Raw CAN logs are in `raw/`, firmware files in `firmware/`, your DSDL
+types in `dsdl/`.
 
 Earlier versions wrote next to where Cynitor was started. Data found there is
 moved in once, on the first start, and never overwrites what the data folder
@@ -282,9 +286,14 @@ comments show how to narrow that to a dedicated user.
 
 ## Troubleshooting
 
+This section is written for Linux, where the bus is a SocketCAN interface: the
+commands it names (`ip link`, `yakut` on a `vcan` or `can0`, `can-utils`) are
+Linux tools. The rows that name none of them hold on every system.
+
 | What you see | What to do |
 |---|---|
-| No nodes, or only node 1, Cynitor's own allocator | Check that something publishes: `yakut sub uavcan.node.Heartbeat.1.0`. A `vcan` is empty until something publishes on it, such as the [demo nodes](#try-it-without-hardware), which the simulated bus has of its own |
+| No nodes | Check that something publishes: `yakut sub uavcan.node.Heartbeat.1.0`. A `vcan` is empty until something publishes on it, such as the [demo nodes](#try-it-without-hardware), which the simulated bus has of its own |
+| The server's CPU reading is near 100 %, or messages are counted as dropped | The bus carries more than one core can decode. Tick **Decode on demand** under the server's Connect button: only the subjects whose values are on screen or being recorded are then decoded, and the rest are counted, so their rates still show. History and "save the last N seconds" then hold only what was decoded |
 | A node with no name and no registers | Its heartbeats reach Cynitor, but Cynitor's requests do not reach it. On a CAN FD bus the usual cause is a node running Classic CAN: run every node in CAN FD, or set the interface to Classic CAN |
 | CAN will not connect | Check that the interface exists (`ip link show can0`) and that you may open it. The log panel's Server source and stderr have the full error |
 | Bus load stays at 0 % on SocketCAN | Install `can-utils` |

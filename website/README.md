@@ -7,7 +7,7 @@ The current UI is network-centric: it emphasizes topology, live traffic, and sel
 ## Files
 
 - `index.html` – main UI layout
-- `styles.css` – theme and component styling
+- `styles.css` – fonts, the theme's colour tokens and the page; the rest of the styling is in a file a view, named after the view's script where it has one (`graph-view.css`, `log-panel.css`, `record-view.css`, ...). `index.html` links them in the order of the cascade, which must be kept: together, in that order, they are the one stylesheet there was
 - `state.js` – global state, settings persistence, API helpers
 - `cache.js` – telemetry cache and per-node accessors
 - `plot.js` – multi-panel D3 time-series plot with crosshair, interactive legend, zoom/pan, markers, freehand drawing
@@ -61,8 +61,8 @@ Open in browser:
 ## Dashboard Layout
 
 - Sidebar:
-  - Server connection (API base URL + Connect button). A backend that stops answering is tried again until it answers: the dot pulses and the section says `reconnecting…`; Disconnect stops trying
-  - CAN interface dropdown + Connect button, off until the server is connected (its tooltip says so). Adapters other than SocketCAN take a bitrate, and CAN FD ones a data bitrate (one of its presets for an adapter that has them, such as slcan's), remembered per adapter; the pick is kept while an adapter is missing from the list for a moment. Why the last connect failed, or why the backend ended the session (`last_error`), stays under the form until the next try
+  - Server connection (API base URL + Connect button). A backend that stops answering is tried again until it answers: the dot pulses and the section says `reconnecting…`; Disconnect stops trying. Connected, the section shows the data rate from the server and, under it, the server's CPU use in percent of one core, amber from 70 % and red from 90 %: it takes the bus's traffic on one core, and near 100 % cannot keep up. A **Decode on demand** box under the button switches the server (`POST /api/decoding`) to decoding only the subjects whose values are on screen or being recorded, for a bus that carries more than it can decode; the rest are counted, so rates still show. The dashboard tells the server what is on screen with a `watch` message whenever it changes: the selected node's subjects, those plotted or in Compare graphs, and the log panel's
+  - CAN interface dropdown + Connect button, off until the server is connected (its tooltip says so). Adapters other than SocketCAN take a bitrate, and CAN FD ones a data bitrate (one of its presets for an adapter that has them, such as slcan's), remembered per adapter; the pick is kept while an adapter is missing from the list for a moment. A **Node-ID allocator** box, unticked unless you tick it and remembered, has Cynitor give plug-and-play nodes their node-IDs in that session, for a bus with no allocator of its own; connected with it, the box stays, ticked and locked, and if another allocator answers on the bus a notice names its node (Cynitor's is then silent). Why the last connect failed, or why the backend ended the session (`last_error`), stays under the form until the next try
   - Load reading: messages per second, bus load and dropped messages, with a curve of the last minute over the interface list
   - Theme toggle (dark/light)
   - Collapsible (half-hidden toggle button); collapsed, its controls leave the Tab order
