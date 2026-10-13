@@ -1,0 +1,819 @@
+/* ── Record view ──────────────────────────────────────────────── */
+.view-graph-btn.recording-active {
+  position: relative;
+}
+.view-graph-btn.recording-active::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  right: 0.5rem;
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  background: var(--error);
+  transform: translateY(-50%);
+  animation: record-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes record-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+#recordContainer {
+  height: 100%;
+  overflow: auto;
+  /* The room for the scrollbar is kept from the start: the tab's width, and
+     so its layout, must not change as the scrollbar comes, once the
+     pickers have taken their columns' widths from it. */
+  scrollbar-gutter: stable;
+}
+
+/* The tab lays itself out by the room it has (see the @container rules
+   below), which the log panel and the sidebar take from the window's. */
+.record-view {
+  container: record-view / inline-size;
+  padding: 1rem 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.875rem;
+  min-height: 100%;
+  box-sizing: border-box;
+}
+
+.record-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+}
+
+.record-header-text {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.75rem;
+  min-width: 0;
+  flex: 1;
+}
+
+.record-header h2 {
+  margin: 0;
+  font-size: 0.9375rem;
+  color: var(--text-bright);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.record-hint {
+  margin: 0;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+.record-buffer-chip {
+  font-size: 0.6875rem;
+  font-family: var(--mono, ui-monospace, monospace);
+  color: var(--muted);
+  background: var(--surface-2);
+  border: 1px solid var(--border-subtle);
+  border-radius: 0.25rem;
+  padding: 0.25rem 0.5rem;
+  white-space: nowrap;
+  align-self: flex-start;
+}
+
+.record-buffer-chip:empty {
+  display: none;  /* the history not known yet */
+}
+
+/* Two-pane layout: cards on left, builder on right. The builder, with its
+   two pickers side by side, takes two thirds. */
+.record-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 2fr);
+  gap: 1rem;
+  align-items: start;
+}
+
+.record-pickers-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 0.875rem;
+  align-items: end;  /* the tables line up when a heading takes two lines */
+}
+
+/* A clicked node's subjects; the node itself is a selected-row, as in Nodes. */
+.record-view .tabulator .tabulator-row.rec-row-highlighted {
+  background: var(--accent-muted);
+}
+
+.record-view .tabulator-row {
+  cursor: pointer;
+}
+
+.record-list-pane {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.record-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+/* The recordings' search, above them once there are some. */
+.record-search {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.record-search input {
+  flex: 1;
+  min-width: 0;
+  padding: 0.375rem 0.5rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 0.25rem;
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 0.8125rem;
+}
+
+.record-search input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 0.125rem var(--accent-muted);
+}
+
+/* "3 of 57", while a search is typed. */
+.record-search-count {
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.record-list-error {
+  padding: 0.5rem 0.75rem;
+  font-size: 0.75rem;
+  color: var(--error);
+  background: var(--error-muted);
+  border-radius: 0.375rem;
+}
+
+.record-empty {
+  padding: 1.5rem;
+  text-align: center;
+  color: var(--muted);
+  font-size: 0.8125rem;
+  background: var(--surface-2);
+  border: 1px dashed var(--border);
+  border-radius: 0.375rem;
+}
+
+/* Recording cards. */
+/* Raw CAN log panel at the top of the Record view. */
+.rawlog-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.75rem 0.875rem;
+  background: var(--surface);
+  border: 0.0625rem solid var(--border);
+  border-radius: 0.375rem;
+}
+
+.rawlog-panel:empty {
+  display: none;
+}
+
+.rawlog-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.rawlog-head .record-builder-h {
+  margin: 0;
+}
+
+.rawlog-active,
+.rawlog-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.rawlog-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.rawlog-item .record-meta {
+  margin-right: auto;
+}
+
+/* "Saved logs", and the speed their Play buttons play at. */
+.rawlog-saved-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.rawlog-speed {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  font-size: 0.75rem;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.rawlog-speed select {
+  width: auto;
+  font-size: 0.75rem;
+  padding: 0.1875rem 0.375rem;
+}
+
+.record-view a.btn-mini {
+  text-decoration: none;
+}
+
+.record-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.75rem 0.875rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 0.375rem;
+  transition: border-color 0.15s;
+}
+
+.record-card:hover {
+  border-color: var(--border-hover);
+}
+
+.record-card.live {
+  border-left: 0.1875rem solid var(--error);
+}
+
+.record-card.auto-stopped {
+  border-left: 0.1875rem solid var(--warn);
+}
+
+.record-card.replaying {
+  border-left: 0.1875rem solid var(--accent);
+}
+
+.record-card-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.record-dot {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.record-dot.rec {
+  background: var(--error);
+  animation: record-pulse 1.4s ease-in-out infinite;
+}
+
+.record-dot.done {
+  background: var(--muted);
+}
+
+/* Running, but waiting for CAN: hollow and still. */
+.record-dot.waiting {
+  border: 1px solid var(--error);
+  box-sizing: border-box;
+}
+
+/* After the rules it overrides. */
+@media (prefers-reduced-motion: reduce) {
+  .view-graph-btn.recording-active::after,
+  .record-dot.rec {
+    animation: none;
+  }
+}
+
+.record-name {
+  font-weight: 600;
+  color: var(--text-bright);
+  font-size: 0.8125rem;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.record-meta {
+  font-size: 0.6875rem;
+  color: var(--muted);
+  font-family: var(--mono, ui-monospace, monospace);
+}
+
+/* A card's name is shown whole, wrapping if need be; its times go under it. */
+.record-card .record-name {
+  white-space: normal;
+  overflow-wrap: break-word;
+}
+
+.record-card-head .record-meta {
+  flex-basis: 100%;
+}
+
+.record-badge {
+  font-size: 0.625rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  background: var(--surface-3);
+  color: var(--muted);
+  padding: 0.125rem 0.375rem;
+  border-radius: 0.25rem;
+  font-weight: 600;
+}
+
+.record-badge.record-badge-warn {
+  background: var(--warn-muted);
+  color: var(--warn);
+}
+
+.record-badge.record-badge-accent {
+  background: var(--accent-muted);
+  color: var(--accent);
+}
+
+.record-card-bars {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.rec-bar {
+  display: grid;
+  grid-template-columns: 3.25rem 1fr auto;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.6875rem;
+}
+
+.rec-bar-label {
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-weight: 600;
+}
+
+.rec-bar-track {
+  height: 0.5rem;
+  background: var(--surface-3);
+  border-radius: 0.25rem;
+  overflow: hidden;
+  position: relative;
+}
+
+.rec-bar-fill {
+  width: var(--fill, 0%);  /* set per bar, as --fill */
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.3s ease-out;
+}
+
+.rec-bar.overflow .rec-bar-fill {
+  background: var(--warn);
+}
+
+.rec-bar.no-limit .rec-bar-track {
+  background: transparent;
+  border: 1px dashed var(--border);
+}
+
+.rec-bar.no-limit .rec-bar-right {
+  color: var(--muted);
+}
+
+.rec-bar-right {
+  font-family: var(--mono, ui-monospace, monospace);
+  color: var(--text);
+  white-space: nowrap;
+}
+
+.record-card-filter,
+.record-card-notes {
+  font-size: 0.75rem;
+  color: var(--text);
+  font-family: var(--mono, ui-monospace, monospace);
+  word-break: break-word;
+}
+
+.record-card-filter.muted,
+.record-card-notes {
+  color: var(--muted);
+}
+
+.record-card-notes {
+  font-style: italic;
+  font-family: var(--sans);
+}
+
+.record-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.375rem;
+}
+
+/* A card's menu of more actions, at the end of its buttons. */
+.record-card-more {
+  position: relative;
+  margin-left: auto;
+}
+
+.record-card-more > summary {
+  display: inline-block;
+  list-style: none;
+}
+
+.record-card-more > summary::-webkit-details-marker {
+  display: none;
+}
+
+.record-card-menu {
+  position: absolute;
+  top: calc(100% + 0.25rem);
+  right: 0;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-width: 8rem;
+  padding: 0.375rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 0.25rem 0.75rem rgba(0, 0, 0, 0.15);
+}
+
+.record-card-menu .btn-mini {
+  text-align: left;
+}
+
+.record-view .btn-mini {
+  font-size: 0.6875rem;
+  padding: 0.25rem 0.5rem;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text);
+  border-radius: 0.25rem;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+  font-family: var(--sans);
+  line-height: 1;
+}
+
+.record-view .btn-mini:hover {
+  background: var(--surface-3);
+  border-color: var(--border-hover);
+}
+
+.record-view .btn-mini.btn-danger {
+  color: var(--error);
+  border-color: var(--error-muted);
+}
+
+.record-view .btn-mini.btn-danger:hover {
+  background: var(--error-muted);
+  border-color: var(--error);
+}
+
+.record-view .btn-secondary {
+  font-size: 0.75rem;
+  padding: 0.3125rem 0.625rem;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text);
+  border-radius: 0.25rem;
+  cursor: pointer;
+  font-family: var(--sans);
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.record-view .btn-secondary:hover {
+  background: var(--surface-3);
+  border-color: var(--border-hover);
+}
+
+/* Builder pane: stacked sections. */
+.record-builder-pane {
+  display: flex;
+  flex-direction: column;
+  gap: 0.875rem;
+  padding: 0.875rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 0.375rem;
+}
+
+.record-builder-block {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+}
+
+.record-builder-h {
+  margin: 0;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.record-builder-sub {
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--muted);
+  font-size: 0.6875rem;
+  margin-left: 0.5rem;
+}
+
+.record-picker {
+  width: 100%;
+  background: var(--surface-2);
+  border-radius: 0.25rem;
+}
+
+/* Denser than the main tables: two pickers share the pane, and a type
+   should show whole beside its ID, owner and rate. */
+.record-picker.tabulator .tabulator-row .tabulator-cell {
+  padding-left: 0.5rem;
+  padding-right: 0.5rem;
+}
+
+/* An empty picker's words: the tab's muted text, not Tabulator's 20 px bold. */
+.record-picker.tabulator .tabulator-tableholder .tabulator-placeholder .tabulator-placeholder-contents {
+  color: var(--muted);
+  font-size: 0.8125rem;
+  font-weight: 400;
+}
+
+/* The record bar: what starts a recording, at the top of the tab. */
+.record-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  padding: 0.625rem 0.875rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 0.375rem;
+}
+
+.record-bar-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 0.5rem 0.75rem;
+}
+
+.record-bar-name {
+  flex: 1 1 14rem;
+}
+
+.record-bar .record-stop-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  min-height: 2rem;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+.record-bar .record-stop-toggle input[type="checkbox"] {
+  width: auto;  /* not the full width inputs take */
+}
+
+.record-bar .btn-primary,
+.record-bar .btn-secondary {
+  min-height: 2rem;
+}
+
+/* Save the last: kept apart from Start, at the bar's far end. */
+.record-bar-save {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.5rem;
+  margin-left: auto;
+}
+
+.record-limit-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr auto;
+  gap: 0.75rem;
+  align-items: end;
+}
+
+.record-limit-row > label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.6875rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.record-limit-row select,
+.record-field select {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 0.25rem;
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 0.8125rem;
+  padding: 0.3125rem 0.5rem;
+}
+
+.record-limit-row select:focus,
+.record-field select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.record-stop-toggle {
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+/* In the Edit limits dialog, a row where the limits' labels are columns. */
+.record-limit-row > .record-stop-toggle {
+  flex-direction: row;
+  align-items: center;
+  gap: 0.375rem;
+}
+
+.record-stop-toggle input[type="checkbox"] {
+  cursor: pointer;
+}
+
+.record-disk-hint {
+  font-size: 0.75rem;
+  color: var(--muted);
+  font-family: var(--mono, ui-monospace, monospace);
+}
+
+.record-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.75rem;
+  color: var(--muted);
+  border: none;
+  padding: 0;
+  margin: 0;
+}
+
+.record-field > span {
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 0.6875rem;
+}
+
+.record-field input[type="text"],
+.record-field textarea {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 0.25rem;
+  padding: 0.375rem 0.5rem;
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 0.8125rem;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.record-field input[type="text"]:focus,
+.record-field textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.record-start-why {
+  margin: 0;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+.record-start-why:empty {
+  display: none;
+}
+
+/* Edit-limits modal. Singleton appended to body. */
+.rec-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+
+.rec-modal-backdrop.hidden {
+  display: none;
+}
+
+.rec-modal {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 0.375rem;
+  padding: 1rem 1.125rem;
+  min-width: 22rem;
+  max-width: 32rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  box-shadow: 0 0.5rem 1.5rem rgba(0, 0, 0, 0.25);
+}
+
+.rec-modal-title {
+  margin: 0;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--text-bright);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.rec-modal-hint {
+  margin: 0;
+  font-size: 0.6875rem;
+  color: var(--muted);
+}
+
+.rec-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
+
+.rec-modal .btn-mini,
+.rec-modal .btn-primary {
+  font-size: 0.75rem;
+  padding: 0.375rem 0.875rem;
+  border-radius: 0.25rem;
+  cursor: pointer;
+  font-family: var(--sans);
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.rec-modal .btn-primary {
+  background: var(--accent);
+  color: white;
+  border-color: var(--accent);
+}
+
+/* One column below what a 1336 px window leaves the tab beside an open
+   sidebar: narrower, the recordings and the pickers would be cramped. */
+@container record-view (max-width: 64rem) {
+  .record-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* The pickers one above the other, as in a phone-wide window. */
+@container record-view (max-width: 45rem) {
+  .record-pickers-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 36rem) {
+  .record-limit-row {
+    grid-template-columns: 1fr;
+  }
+}
+

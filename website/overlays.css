@@ -1,0 +1,264 @@
+/* ── Server down overlay ── */
+
+.server-down-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.85);
+  backdrop-filter: blur(0.25rem);
+}
+
+.server-down-overlay.hidden {
+  display: none;
+}
+
+.auth-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 9998;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.75);
+  backdrop-filter: blur(0.25rem);
+}
+
+.auth-modal.hidden {
+  display: none;
+}
+
+.auth-modal-card {
+  width: min(28rem, 90vw);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  padding: 1.75rem 2rem;
+  font-family: var(--sans);
+  color: var(--text);
+}
+
+.auth-modal-card h2 {
+  margin: 0 0 0.75rem;
+  font-size: 1.125rem;
+}
+
+.auth-modal-card p {
+  font-size: 0.8125rem;
+  color: var(--muted);
+  line-height: 1.5;
+  margin: 0 0 1rem;
+}
+
+.auth-modal-card code {
+  background: var(--surface-2);
+  padding: 0.0625rem 0.25rem;
+  border-radius: var(--radius);
+  font-family: var(--mono);
+  font-size: 0.75rem;
+}
+
+.auth-modal-label {
+  display: block;
+  font-size: 0.6875rem;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 0.25rem;
+}
+
+.auth-modal-input {
+  width: 100%;
+  box-sizing: border-box;
+  font-family: var(--mono);
+  font-size: 0.875rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.auth-modal-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.auth-modal-error {
+  margin-top: 0.5rem;
+  font-size: 0.75rem;
+  color: var(--error);
+}
+
+.auth-modal-error.hidden {
+  display: none;
+}
+
+.auth-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  margin-top: 1rem;
+}
+
+/* Leaves the dashboard disconnected: a plain button beside the accent one. */
+.auth-modal-cancel {
+  font-weight: 600;
+  padding: 0.5rem 1rem;
+}
+
+.auth-modal-btn {
+  background: var(--accent);
+  color: var(--bg);
+  border: none;
+  border-radius: var(--radius);
+  font-family: var(--sans);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  padding: 0.5rem 1rem;
+  cursor: pointer;
+}
+
+.auth-modal-btn:hover {
+  filter: brightness(1.1);
+}
+
+.easter-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.8);
+  cursor: pointer;
+}
+
+.easter-overlay img {
+  max-width: 80vw;
+  max-height: 80vh;
+  border-radius: var(--radius);
+}
+
+.server-down-card {
+  text-align: center;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  padding: 2.5rem 3rem;
+  max-width: 28rem;
+}
+
+.server-down-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 3rem;
+  height: 3rem;
+  border-radius: 50%;
+  background: var(--error-muted);
+  color: var(--error);
+  font-family: var(--sans);
+  font-size: 1.5rem;
+  font-weight: 700;
+  margin-bottom: 1rem;
+}
+
+.server-down-card h2 {
+  margin: 0 0 0.5rem;
+  font-family: var(--sans);
+  font-size: 1.125rem;
+  font-weight: 700;
+  color: var(--text-bright);
+}
+
+.server-down-card p {
+  margin: 0 0 0.375rem;
+  font-family: var(--sans);
+  font-size: 0.875rem;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.server-down-card code {
+  font-family: var(--mono);
+  font-size: 0.8125rem;
+  background: var(--surface-3);
+  padding: 0.125rem 0.375rem;
+  border-radius: 0.25rem;
+  color: var(--text);
+}
+
+.server-down-card .server-down-hint {
+  margin-top: 0.75rem;
+}
+
+.server-down-status {
+  margin-top: 1.25rem;
+  font-family: var(--sans);
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+@keyframes server-down-dots {
+  0%   { content: ''; }
+  25%  { content: '.'; }
+  50%  { content: '..'; }
+  75%  { content: '...'; }
+}
+
+.server-down-dots::after {
+  content: '';
+  animation: server-down-dots 1.5s steps(1) infinite;
+}
+
+/* ── Toast notifications ── */
+
+.toast-container {
+  position: fixed;
+  top: 0.75rem;
+  right: 0.75rem;
+  z-index: 9000;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  pointer-events: none;
+}
+
+.toast {
+  pointer-events: auto;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.625rem 1rem;
+  font-family: var(--sans);
+  font-size: 0.8125rem;
+  color: var(--text);
+  box-shadow: 0 0.25rem 1rem rgba(0, 0, 0, 0.3);
+  opacity: 1;
+  transition: opacity 0.3s, transform 0.3s;
+  transform: translateX(0);
+}
+
+.toast-error {
+  border-color: var(--error);
+  background: var(--error-muted);
+  color: var(--error);
+}
+
+.toast-exit {
+  opacity: 0;
+  transform: translateX(1rem);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .semaphore.connecting,
+  .semaphore.disconnecting,
+  .live-dot,
+  .server-down-dots::after {
+    animation: none;
+  }
+}
+

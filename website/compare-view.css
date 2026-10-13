@@ -1,0 +1,646 @@
+/* ── Compare view ── */
+
+#compareContainer {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.compare-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.375rem 0.625rem;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+/* Everyday buttons are plain, as the Graph tab's: colour is for the unusual. */
+.compare-add-btn {
+  font-family: var(--mono);
+  font-size: 0.6875rem;
+  height: 1.625rem;
+  line-height: 1;
+  padding: 0 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  color: var(--text);
+  cursor: pointer;
+  transition: background 0.12s;
+}
+
+.compare-add-btn:hover {
+  background: var(--surface-3);
+}
+
+.compare-pause-all {
+  min-width: 5.5rem;
+  text-align: center;
+}
+
+.compare-toolbar-sep {
+  flex: 1;
+}
+
+.compare-saved-wrap {
+  position: relative;
+}
+
+.compare-saved-btn {
+  font-family: var(--mono);
+  font-size: 0.6875rem;
+  height: 1.625rem;
+  line-height: 1;
+  padding: 0 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  color: var(--text);
+  cursor: pointer;
+  transition: background 0.12s;
+}
+
+.compare-saved-btn:hover {
+  background: var(--surface-3);
+}
+
+.compare-saved-menu {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  margin-top: 0.25rem;
+  min-width: 12rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 0.25rem 0.75rem rgba(0, 0, 0, 0.15);
+  z-index: 20;
+  overflow: hidden;
+}
+
+.compare-saved-empty {
+  padding: 0.5rem 0.625rem;
+  font-family: var(--mono);
+  font-size: 0.625rem;
+  color: var(--muted);
+}
+
+.compare-saved-item {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.375rem 0.625rem;
+  font-family: var(--mono);
+  font-size: 0.625rem;
+  cursor: pointer;
+  transition: background 0.1s;
+}
+
+.compare-saved-item:hover {
+  background: var(--surface-2);
+}
+
+.compare-saved-name {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+}
+
+.compare-saved-delete {
+  background: none;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 0.75rem;
+  padding: 0;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.compare-saved-delete:hover {
+  color: var(--error);
+}
+
+.compare-cards {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 0.25rem;
+  min-height: 0;
+}
+
+/* No graph yet: how to start, in the middle of the tab. */
+.compare-empty {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Graphs share the view and never get shorter than their content: with more
+   than fit, the list scrolls. */
+.compare-graph-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+}
+
+.compare-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.compare-graph-name {
+  font-family: var(--mono);
+  font-size: 0.6875rem;
+  padding: 0.1875rem 0.375rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  color: var(--text);
+  width: 10rem;
+  min-width: 0;
+}
+
+.compare-graph-name:focus {
+  border-color: var(--accent);
+  background: var(--surface);
+  outline: none;
+}
+
+.compare-graph-save {
+  font-family: var(--mono);
+  font-size: 0.625rem;
+  padding: 0.125rem 0.375rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+  transition: background 0.12s;
+  flex-shrink: 0;
+}
+
+.compare-graph-save:hover {
+  background: var(--surface-2);
+}
+
+.compare-graph-clone {
+  background: none;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 0.75rem;
+  padding: 0 0.125rem;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.compare-graph-clone:hover {
+  color: var(--accent);
+}
+
+.compare-graph-delete {
+  background: none;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 0.875rem;
+  padding: 0 0.125rem;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.compare-graph-delete:hover {
+  color: var(--error);
+}
+
+/* A card's header: Edit, its name and time window, its actions at the end. */
+.compare-card-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.375rem 0.5rem;
+  padding: 0.25rem 0.5rem;
+  border-bottom: 1px solid var(--border-subtle);
+  flex-shrink: 0;
+}
+
+.compare-time-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+/* A window longer than the history kept (_syncKept): dashed, and said. */
+.compare-time-controls .plot-window-btn--beyond {
+  border-style: dashed;
+}
+
+.compare-kept {
+  margin-left: 0.25rem;
+  font-family: var(--mono);
+  font-size: 0.625rem;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+/* Its editing rows, folded away under Edit: a row each, their names aligned. */
+.compare-card-editor {
+  display: flex;
+  flex-direction: column;
+  border-bottom: 1px solid var(--border-subtle);
+  flex-shrink: 0;
+}
+
+.compare-card-editor > .plot-compare-panel {
+  display: flex;
+  flex-direction: column;
+}
+
+.plot-series-section,
+.compare-visual-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.25rem 0.5rem;
+}
+
+.compare-visual-controls {
+  border-top: 1px solid var(--border-subtle);
+}
+
+.compare-card-editor .plot-compare-hdr,
+.compare-card-editor .plot-threshold-hdr {
+  width: 5rem;
+  flex-shrink: 0;
+}
+
+/* The series row: its name beside a filter over a list of every series heard. */
+.plot-series-section {
+  align-items: flex-start;
+}
+
+.plot-series-section > .plot-compare-hdr {
+  padding-top: 0.25rem;
+}
+
+.plot-series-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  flex: 1;
+  min-width: 0;
+  max-width: 40rem;
+}
+
+.plot-series-filter {
+  font-family: var(--mono);
+  font-size: 0.625rem;
+  padding: 0.25rem 0.375rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+}
+
+.plot-series-filter:focus {
+  border-color: var(--accent);
+  outline: none;
+}
+
+.plot-series-list {
+  max-height: 9rem;
+  overflow-y: auto;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius);
+}
+
+.plot-series-option {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.125rem 0.375rem;
+  font-family: var(--mono);
+  font-size: 0.625rem;
+  cursor: pointer;
+}
+
+.plot-series-option:hover {
+  background: var(--surface-hover);
+}
+
+.plot-series-option input[type="checkbox"] {
+  width: 0.75rem;
+  height: 0.75rem;
+  margin: 0;
+  padding: 0;
+  flex-shrink: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.plot-series-key {
+  color: var(--text);
+  white-space: nowrap;
+}
+
+.plot-series-about {
+  min-width: 0;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plot-series-none {
+  padding: 0.375rem;
+  font-family: var(--sans);
+  font-size: 0.6875rem;
+  color: var(--muted);
+}
+
+/* A card's plot, and the column of controls beside it when collapsed. Room to
+   draw under a full legend (5.5rem); the plot sized by the card alone, so a
+   drawing never holds the card at an old size. */
+.compare-card-body {
+  flex: 1;
+  display: flex;
+  min-height: 11rem;
+}
+
+.compare-card-body > .detail-plot-area {
+  flex: 1;
+  min-width: 0;
+  contain: size;
+}
+
+/* Collapsed, a graph is its plot: no header, no editing rows; its pause, time
+   window and Sync in a column at its right; its legend a line of names. */
+.compare-side {
+  display: none;
+}
+
+.compare-graph-card.collapsed .compare-card-header,
+.compare-graph-card.collapsed .compare-card-editor {
+  display: none;
+}
+
+.compare-graph-card.collapsed .compare-side {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.25rem;
+  border-left: 1px solid var(--border-subtle);
+}
+
+.compare-collapse-btn {
+  background: none;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 0.75rem;
+  padding: 0 0.125rem;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.compare-collapse-btn:hover {
+  color: var(--text);
+}
+
+.compare-side .compare-collapse-btn {
+  width: 1.5rem;
+  height: 1.5rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.compare-window-select {
+  width: 2.75rem;
+  font-family: var(--mono);
+  font-size: 0.625rem;
+  padding: 0.125rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+}
+
+.compare-graph-card.collapsed .plot-legend--table {
+  flex-direction: row;
+  gap: 0.75rem;
+  max-height: none;
+  overflow: hidden;
+}
+
+.compare-graph-card.collapsed .plot-legend--table .plot-legend-item {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+.compare-graph-card.collapsed .plot-legend-head,
+.compare-graph-card.collapsed .plot-legend-value,
+.compare-graph-card.collapsed .plot-legend-style,
+.compare-graph-card.collapsed .plot-legend-remove,
+.compare-graph-card.collapsed .plot-legend-unit {
+  display: none;
+}
+
+/* A Compare plot is named on itself, by its graph's name: no title over it. */
+.compare-graph-card .plot-title {
+  display: none;
+}
+
+.compare-card-editor .plot-compare-hdr {
+  font-family: var(--mono);
+  font-size: 0.6875rem;
+  font-weight: 500;
+  color: var(--muted);
+  border-bottom: none;
+  padding: 0;
+}
+
+.compare-card-editor .plot-compare-picker {
+  display: flex;
+  flex-direction: row;
+  gap: 0.25rem;
+  padding: 0;
+  border-bottom: none;
+  align-items: center;
+}
+
+.compare-card-editor .plot-compare-picker select {
+  font-family: var(--mono);
+  font-size: 0.625rem;
+  padding: 0.25rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  width: auto;
+  min-width: 6rem;
+}
+
+.plot-compare-add {
+  font-family: var(--mono);
+  font-size: 0.625rem;
+  padding: 0.25rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+  transition: background 0.12s;
+}
+
+.plot-compare-add:hover {
+  background: var(--surface-2);
+}
+
+.plot-derived-section {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.25rem 0.5rem;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.plot-threshold-section {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.25rem 0.5rem;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.plot-threshold-hdr {
+  font-family: var(--mono);
+  font-size: 0.6875rem;
+  font-weight: 500;
+  color: var(--muted);
+}
+
+.plot-threshold-picker {
+  display: flex;
+  gap: 0.25rem;
+  align-items: center;
+}
+
+.plot-threshold-input,
+.plot-threshold-name-input,
+.plot-derived-window {
+  font-family: var(--mono);
+  font-size: 0.625rem;
+  padding: 0.1875rem 0.25rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  width: 8rem;
+}
+
+.plot-threshold-name-input {
+  width: 10rem;
+}
+
+.plot-threshold-label {
+  font-family: var(--mono);
+  font-size: 0.5625rem;
+}
+
+/* A graph's Markers row: a marker each (its time and label, × to delete), the
+   drawings' count, and, while there are none, how to add them. */
+.compare-marks {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.25rem 0.5rem;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.compare-marks-list {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem;
+  flex: 1;
+  min-width: 0;
+}
+
+.compare-mark {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.compare-mark-go,
+.compare-mark-delete {
+  margin: 0;
+  padding: 0.125rem 0.375rem;
+  border: none;
+  background: none;
+  font-family: var(--mono);
+  font-size: 0.625rem;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.compare-mark-delete {
+  padding: 0.125rem 0.25rem;
+  color: var(--muted);
+}
+
+.compare-mark-go:hover,
+.compare-mark-delete:hover {
+  background: var(--surface-hover);
+}
+
+.compare-mark button:focus-visible {
+  outline: 0.125rem solid var(--accent);
+  outline-offset: -0.125rem;
+}
+
+.compare-marks-drawings {
+  font-family: var(--mono);
+  font-size: 0.625rem;
+  color: var(--muted);
+}
+
+.compare-marks .compare-marks-clear {
+  padding: 0.125rem 0.375rem;  /* as tall as a marker beside it */
+}
+
+.compare-marks-hint {
+  font-size: 0.6875rem;
+  color: var(--muted);
+}
+
+

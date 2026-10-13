@@ -314,7 +314,8 @@ cynitor/
     app.js                  Boot, bindings, heartbeat, view switching
     config.js               Empty placeholder; the backend serves its own
     vendor/                 D3 and Tabulator, copied unmodified from npm (see its README)
-    styles.css              Theme and layout
+    styles.css              Fonts, theme tokens, the page
+    <view>.css              The styling of each view (graph-view.css, log-panel.css, ...), linked in order by index.html
   dsdl_messages/
     public_regulated_data_types/   git submodule (uavcan/, reg/)
     custom/                        user-created DSDL types (gitignored content)

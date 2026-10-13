@@ -1,0 +1,150 @@
+/* ── Responsive ── */
+@media (max-width: 80rem) {
+  .sidebar {
+    width: 13rem;
+    min-width: 13rem;
+  }
+
+  .sidebar-collapse-btn {
+    left: 11.75rem;
+  }
+
+  .sidebar.collapsed ~ .sidebar-collapse-btn {
+    left: -0.5rem;
+  }
+
+  .app-shell {
+    --log-w: 20rem;
+  }
+
+  .log-panel.collapsed ~ .log-panel-collapse-btn {
+    right: -0.5rem;
+  }
+
+  /* The narrower sidebar takes a smaller Cyphal logo, beside Cordicor's. */
+  .cyphal-logo {
+    width: 7rem;
+    height: 2.45rem;
+    margin-bottom: -0.4375rem;
+  }
+}
+
+@media (max-width: 60rem) {
+  /* Stacked, the page is taller than the window, the log panel last: the
+     page scrolls, which side by side it never needs to. */
+  body {
+    height: auto;
+    overflow-x: hidden;
+    overflow-y: auto;
+  }
+
+  .app-shell {
+    flex-direction: column;
+    height: auto;
+    min-height: 100dvh;
+  }
+
+  .sidebar:not(.collapsed) {
+    width: 100%;
+    min-width: 0;
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .sidebar-collapse-btn {
+    position: static;
+    width: 100%;
+    border-radius: 0;
+    height: 1.75rem;
+    border-left: none;
+    border-right: none;
+    transform: none;
+    opacity: 1;
+  }
+
+  /* Under the pointer it stays in its row: side by side, the same shift centres it. */
+  .sidebar-collapse-btn:hover {
+    transform: none;
+  }
+
+  .sidebar-collapse-btn svg {
+    transform: rotate(-90deg);
+  }
+
+  /* Collapsed, it gives up its height too, or a blank as tall as itself stays above the page. */
+  .sidebar.collapsed {
+    height: 0;
+  }
+
+  .sidebar.collapsed ~ .sidebar-collapse-btn {
+    left: auto;
+    opacity: 1;
+  }
+
+  .sidebar.collapsed ~ .sidebar-collapse-btn svg {
+    transform: rotate(90deg);
+  }
+
+  .main-area {
+    overflow: visible;
+    flex-direction: column;
+  }
+
+  .detail-panel {
+    flex: none;
+    max-height: 16rem;
+  }
+
+  .log-panel:not(.collapsed) {
+    width: 100%;
+    min-width: 0;
+    border-left: none;
+    border-top: 1px solid var(--border);
+    max-height: 12rem;
+  }
+
+  /* Shut, it gives up its height too: its rows would leave a blank to scroll past. */
+  .log-panel.collapsed {
+    height: 0;
+  }
+
+  .log-panel-resize-handle {
+    display: none;
+  }
+
+  .log-panel-collapse-btn {
+    position: static;
+    width: 100%;
+    border-radius: 0;
+    height: 1.75rem;
+    border-left: none;
+    border-right: none;
+    transform: none;
+    opacity: 1;
+  }
+
+  /* Under the pointer it stays in its row: side by side, the same shift centres it. */
+  .log-panel-collapse-btn:hover {
+    transform: none;
+  }
+
+  /* In the toggle's bar the count stands beside the arrow. */
+  .log-unread {
+    position: static;
+    margin-left: 0.5rem;
+  }
+
+  .log-panel-collapse-btn svg {
+    transform: rotate(90deg);
+  }
+
+  .log-panel.collapsed ~ .log-panel-collapse-btn {
+    right: auto;
+    opacity: 1;
+  }
+
+  .log-panel.collapsed ~ .log-panel-collapse-btn svg {
+    transform: rotate(-90deg);
+  }
+}
+

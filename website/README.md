@@ -7,7 +7,7 @@ The current UI is network-centric: it emphasizes topology, live traffic, and sel
 ## Files
 
 - `index.html` – main UI layout
-- `styles.css` – theme and component styling
+- `styles.css` – fonts, the theme's colour tokens and the page; the rest of the styling is in a file a view, named after the view's script where it has one (`graph-view.css`, `log-panel.css`, `record-view.css`, ...). `index.html` links them in the order of the cascade, which must be kept: together, in that order, they are the one stylesheet there was
 - `state.js` – global state, settings persistence, API helpers
 - `cache.js` – telemetry cache and per-node accessors
 - `plot.js` – multi-panel D3 time-series plot with crosshair, interactive legend, zoom/pan, markers, freehand drawing

@@ -1,0 +1,246 @@
+/* ── Form elements ── */
+input,
+select,
+button,
+fieldset {
+  font-family: var(--sans);
+  font-size: 0.8125rem;
+}
+
+input,
+select {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: var(--radius);
+  padding: 0.4375rem 0.625rem;
+  min-width: 0;
+  width: 100%;
+  transition: border-color 0.12s;
+}
+
+input:focus,
+select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+input::placeholder {
+  color: var(--muted);
+  opacity: 0.6;
+}
+
+input:disabled,
+select:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  border-color: var(--border-subtle);
+}
+
+select {
+  cursor: pointer;
+}
+
+button {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: var(--radius);
+  padding: 0.4375rem 0.75rem;
+  cursor: pointer;
+  font-weight: 500;
+  white-space: nowrap;
+  transition: background 0.12s, border-color 0.12s;
+}
+
+button:hover {
+  background: var(--surface-3);
+  border-color: var(--border-hover, var(--border));
+  transform: none;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+button:focus-visible,
+.detail-tab:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Icon buttons sit in narrow cells — keep the outline inset to avoid clipping */
+.fav-star:focus-visible,
+.action-hide:focus-visible {
+  outline-offset: 0;
+}
+
+.btn-primary {
+  background: var(--accent-muted);
+  border-color: rgba(88, 166, 255, 0.25);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.btn-primary:hover {
+  background: rgba(88, 166, 255, 0.22);
+  border-color: rgba(88, 166, 255, 0.4);
+}
+
+.label {
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--muted);
+}
+
+/* ── Main area ── */
+.main-area {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ── Hidden nodes chip (overlays table header) ── */
+.hidden-chip-wrap {
+  display: none;
+}
+
+.hidden-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-family: var(--mono);
+  font-size: 0.6875rem;
+  font-weight: 600;
+  color: var(--muted);
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  transition: color 0.12s;
+  white-space: nowrap;
+}
+
+.hidden-chip svg {
+  flex-shrink: 0;
+}
+
+.hidden-chip:hover {
+  color: var(--text);
+}
+
+.hidden-popover {
+  position: fixed;
+  z-index: 9999;
+  min-width: 14rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 0.25rem 1rem rgba(0, 0, 0, 0.15);
+  overflow: hidden;
+}
+
+[data-theme="dark"] .hidden-popover {
+  box-shadow: 0 0.25rem 1rem rgba(0, 0, 0, 0.4);
+}
+
+.hidden-popover-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.hidden-unhide-all {
+  font-size: 0.6875rem;
+  color: var(--accent);
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+}
+
+.hidden-unhide-all:hover {
+  text-decoration: underline;
+}
+
+.hidden-popover-list {
+  max-height: 12rem;
+  overflow-y: auto;
+}
+
+.hidden-popover-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.375rem 0.75rem;
+  font-size: 0.75rem;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.hidden-popover-row:last-child {
+  border-bottom: none;
+}
+
+.hidden-popover-dot {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  background: var(--error);
+  flex-shrink: 0;
+}
+
+.hidden-popover-dot.ok {
+  background: var(--ok);
+}
+
+.hidden-popover-id {
+  font-family: var(--mono);
+  font-weight: 600;
+  color: var(--text-bright);
+  min-width: 2rem;
+}
+
+.hidden-popover-name {
+  flex: 1;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hidden-popover-state {
+  font-size: 0.6875rem;
+  color: var(--muted);
+  flex-shrink: 0;
+}
+
+.hidden-unhide-btn {
+  font-size: 0.6875rem;
+  color: var(--accent);
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+  flex-shrink: 0;
+}
+
+.hidden-unhide-btn:hover {
+  text-decoration: underline;
+}
+
+/* ── Tabulator theme overrides ── */
+#nodesTable,
+#subjectsTable {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+}
+

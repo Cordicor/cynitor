@@ -1,0 +1,78 @@
+/* ── Sidebar ── */
+.sidebar {
+  width: 16rem;
+  min-width: 16rem;
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  overflow-y: auto;
+  transition: width 0.2s, min-width 0.2s, opacity 0.2s;
+}
+
+.sidebar-brand {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 1rem 1.125rem;
+  color: var(--text-bright);
+  font-weight: 700;
+  font-size: 0.9375rem;
+  letter-spacing: 0.02em;
+  border-bottom: 1px solid var(--border);
+}
+
+.sidebar-brand svg {
+  color: var(--accent);
+  flex-shrink: 0;
+}
+
+/* ── Sidebar collapse ── */
+.sidebar-collapse-btn {
+  position: absolute;
+  top: 50%;
+  left: 14.75rem;
+  transform: translateY(-50%);
+  z-index: 10;
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  color: var(--muted);
+  cursor: pointer;
+  transition: left 0.2s, opacity 0.2s, background 0.12s;
+}
+
+.sidebar-collapse-btn:hover {
+  background: var(--surface-3);
+  color: var(--text);
+  transform: translateY(-50%);
+}
+
+.sidebar.collapsed {
+  width: 0;
+  min-width: 0;
+  overflow: hidden;
+  opacity: 0;
+  border-right: none;
+  padding: 0;
+  /* Hidden once the collapse has played, so its controls leave the Tab order. */
+  visibility: hidden;
+  transition: width 0.2s, min-width 0.2s, opacity 0.2s, visibility 0s 0.2s;
+}
+
+.sidebar.collapsed ~ .sidebar-collapse-btn {
+  left: -0.5rem;
+  opacity: 0.7;
+}
+
+.sidebar.collapsed ~ .sidebar-collapse-btn svg {
+  transform: rotate(180deg);
+}
+
