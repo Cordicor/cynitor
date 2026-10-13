@@ -64,6 +64,8 @@ EventLogger.start()        SQLite persistence
 |------|------|
 | `main.py` | Entry point, lifecycle orchestration, two startup modes (direct vs selection) |
 | `scanner_node.py` | CAN network discovery: heartbeat + port list subscriptions, a permanent `uavcan.diagnostic.Record` subscription (fixed subject 8184, which no register names), dynamic per-subject subscribers (one decoded type per subject; a publisher advertising another is a `type_conflict`), per-service clients, service schema introspection with STANDARD_SERVICES fallback (including ExecuteCommand), restart vs. node-ID conflict detection from heartbeat uptimes |
+| `scanner_registers.py` | The scanner's register part (`ScannerRegisters`, which `ScannerNode` inherits): the ports a node names in its registers, read when it is registered; all its registers listed; one written |
+| `scanner_services.py` | The scanner's service part (`ScannerServices`, likewise): a client for every service a node serves, the request schemas for the Services tab, the calls, and the reading of calls heard on the bus |
 | `node_info.py` | Per-node lifecycle state: appearance, last-heartbeat timestamp, disappearance threshold (>1.1s), port lists, GetInfo response |
 | `telemetry_manager.py` | Event router: maintains `latest_by_subject` and `latest_by_node` caches, broadcasts to subscriber queues |
 | `websocket_server.py` | aiohttp HTTP+WS server, REST endpoints, per-client WebSocket filtering, periodic metrics broadcast, node history and service call history endpoints; also serves `website/` so one binary hosts both the API and the dashboard; refuses API and event-stream requests from browser pages of other sites (`_browser_request_allowed`) |
@@ -264,6 +266,8 @@ cynitor/
   server/
     main.py                 Entry point, lifecycle orchestration
     scanner_node.py         CAN network discovery and subscriptions
+    scanner_registers.py    ... its register reads and writes
+    scanner_services.py     ... its service clients and calls
     node_info.py            Per-node state tracking
     node_identity_map.py    Stable unique_id ↔ node_id mapping
     telemetry_manager.py    Event routing and caching

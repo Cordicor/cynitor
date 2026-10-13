@@ -19,6 +19,8 @@ DSDL_SOURCES = PROJECT_ROOT / "dsdl_messages"
 server_modules = [
     "websocket_server",
     "scanner_node",
+    "scanner_registers",
+    "scanner_services",
     "node_info",
     "telemetry_manager",
     "event_logger",

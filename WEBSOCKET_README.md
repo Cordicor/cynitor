@@ -1562,6 +1562,8 @@ asyncio.run(main())
 | File | Purpose |
 |---|---|
 | `scanner_node.py` | UAVCAN network scanner |
+| `scanner_registers.py` | The scanner's register reads and writes |
+| `scanner_services.py` | The scanner's service clients and calls |
 | `telemetry_manager.py` | Event pub-sub router |
 | `node_info.py` | Per-node state (lifecycle, ports, getInfo) |
 | `node_identity_map.py` | Bidirectional unique_id ↔ node_id mapping with migration detection |

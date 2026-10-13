@@ -20,6 +20,7 @@ import pytest
 
 from node_info import NodeInfo
 import scanner_node
+import scanner_services
 from scanner_node import ScannerNode  # uavcan.* is stubbed in conftest.py
 
 
@@ -607,7 +608,7 @@ class TestServiceCallFields:
         # patch.object: from Python 3.11, patch("scanner_node.x") finds the module
         # through importlib.import_module, which the first patch replaces.
         with patch.object(scanner_node.importlib, "import_module", return_value=module), \
-             patch.object(scanner_node, "to_builtin", return_value={"status": 0}):
+             patch.object(scanner_services, "to_builtin", return_value={"status": 0}):
             yield node, client
 
     async def call(self, node, value):
