@@ -13,7 +13,12 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  tests:
+    # Every suite must pass before a binary is built, let alone published.
+    uses: ./.github/workflows/test.yml
+
   linux:
+    needs: tests
     name: Linux binary
     # Built on the oldest supported release on purpose: glibc is forward
     # compatible, so a binary built here runs on newer distributions, but not
@@ -145,6 +150,7 @@ jobs:
           gh release upload "$GITHUB_REF_NAME" packaging/out/* --clobber
 
   windows:
+    needs: tests
     name: Windows executable
     # The older of the two runner images. The executable does not depend on
     # the build machine's Windows version, and runs on Windows 10 and 11.
