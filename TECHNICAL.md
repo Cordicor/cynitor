@@ -421,7 +421,10 @@ The result is `packaging\dist\cynitor-server.exe`.
 The version lives in exactly one place, `server/version.py`, and the binary
 reports it with `--version`.
 
-To cut a release, bump that version first, then tag to match:
+Between releases it carries a `.dev0` suffix (`1.4.0.dev0` after 1.3.0), so a
+build from `dev` never reads as the release before it; the update check sorts
+it just below its release. To cut a release, drop the suffix first, then tag
+to match, and after the release set the next `.dev0`:
 
 ```bash
 # edit server/version.py -> __version__ = "0.8.0"

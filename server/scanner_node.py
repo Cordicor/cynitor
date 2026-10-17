@@ -24,6 +24,8 @@ import uavcan.diagnostic
 import uavcan.pnp
 
 from node_info import NodeInfo
+from update_check import parse_version
+from version import __version__
 from node_identity_map import NodeIdentityMap
 from scanner_registers import ScannerRegisters
 from scanner_services import ScannerServices
@@ -32,6 +34,8 @@ from scanner_services import ScannerServices
 # lines a second from a bus that outruns the decoding. They are counted
 # instead (ScannerNode.dropped_frames).
 logging.getLogger("pycyphal.transport.can._session._input").setLevel(logging.WARNING)
+
+NODE_NAME = "org.opencyphal.cynitor"  # Cynitor's name on the bus (uavcan.node.GetInfo)
 
 # Linux's getsockopt(SOL_SOCKET, SO_MEMINFO): unsigned ints, of which the
 # ninth (SK_MEMINFO_DROPS) counts what the socket's full receive queue let go.
@@ -123,9 +127,12 @@ class ScannerNode(ScannerRegisters, ScannerServices):
     def __init__(self, register_file: Optional[str] = None) -> None:
         """``register_file`` is where the node's registers persist; the session
         puts it in the data folder (see data_dir). Defaults to REGISTER_FILE."""
+        # Cynitor's own name and version, as another tool on the bus sees them
+        # (it named itself after the pycyphal example it began as).
+        major, minor = (parse_version(__version__) or (0, 0))[:2]
         node_information = uavcan.node.GetInfo_1.Response(
-            software_version=uavcan.node.Version_1(major=1, minor=0),
-            name="org.dontpanic.pycyphal.utility.monitor_app",
+            software_version=uavcan.node.Version_1(major=major, minor=minor),
+            name=NODE_NAME,
         )
 
         self._node = pycyphal.application.make_node(node_information, register_file or ScannerNode.REGISTER_FILE)

@@ -20,7 +20,7 @@ def answering(release):
 
 class TestParseVersion:
     @pytest.mark.parametrize("text, version", [
-        ("v1.3.0", (1, 3, 0)), ("1.10.0", (1, 10, 0)), ("v2", (2,)),
+        ("v1.3.0", (1, 3, 0, 0)), ("1.10.0", (1, 10, 0, 0)), ("v2", (2, 0, 0, 0)), ("1.4.0.dev0", (1, 4, 0, -1)),
         ("v1.4.0-rc1", None), ("latest", None), (None, None),
     ])
     def test_tags(self, text, version):
@@ -28,6 +28,15 @@ class TestParseVersion:
 
     def test_numbers_compare_as_numbers(self):
         assert parse_version("v1.10.0") > parse_version("1.9.0")
+
+    def test_a_development_version_sorts_below_its_release(self):
+        assert parse_version("1.3.0") < parse_version("1.4.0.dev0") < parse_version("v1.4.0")
+
+    @pytest.mark.asyncio
+    async def test_a_development_version_is_offered_its_release(self):
+        check = UpdateCheck("1.4.0.dev0", answering({"tag_name": "v1.4.0", "html_url": PAGE + "1.4.0"}))
+        await check.check()
+        assert check.available == {"version": "1.4.0", "url": PAGE + "1.4.0"}
 
 
 class TestUpdateCheck:

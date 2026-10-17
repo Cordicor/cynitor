@@ -20,9 +20,13 @@ DISABLE_ENV = "CYNITOR_NO_UPDATE_CHECK"
 
 
 def parse_version(text: object) -> Optional[tuple[int, ...]]:
-    """ "v1.10.0" -> (1, 10, 0); None for anything else, a pre-release ("1.4.0-rc1") among them."""
-    match = re.fullmatch(r"v?(\d+(?:\.\d+)*)", str(text or "").strip())
-    return tuple(int(part) for part in match.group(1).split(".")) if match else None
+    """ "v1.10.0" -> (1, 10, 0, 0); a development version, "1.4.0.dev0", sorts just
+    below its release: (1, 4, 0, -1). None for anything else, a tagged
+    pre-release ("1.4.0-rc1") among them."""
+    match = re.fullmatch(r"v?(\d+)(?:\.(\d+))?(?:\.(\d+))?(\.dev\d*)?", str(text or "").strip())
+    if not match:
+        return None
+    return int(match.group(1)), int(match.group(2) or 0), int(match.group(3) or 0), -1 if match.group(4) else 0
 
 
 def fetch_latest_release(user_agent: str, timeout: float = 5.0) -> dict:
@@ -56,7 +60,7 @@ class UpdateCheck:
                 or not isinstance(url, str) or not url.startswith(RELEASE_PAGE_PREFIX):
             self.available = None
             return
-        version = ".".join(map(str, latest))
+        version = ".".join(map(str, latest[:3]))
         if (self.available or {}).get("version") != version:
             logger.info("Cynitor %s is available (this is %s): %s", version, self.current, url)
         self.available = {"version": version, "url": url}
