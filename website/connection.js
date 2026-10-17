@@ -123,7 +123,11 @@ const renderBusNotice = () => {
   // The counters, which change with every poll, only in the title: a screen
   // reader is told again when the state changes, not every few seconds.
   const what = ['Bus errors', errors.state].filter(Boolean).join(' · ');
-  const html = `${escapeHtml(what)}<span class="can-bus-notice-hint">Check 120 Ω termination and bitrate</span>`;
+  // Transmit errors alone: Cynitor's frames go unacknowledged, as when it is alone on the bus.
+  const hint = errors.tx_errors >= 128 && errors.rx_errors === 0
+    ? 'No other node acknowledges: check the bus is connected and a node is powered'
+    : 'Check 120 Ω termination and bitrate';
+  const html = `${escapeHtml(what)}<span class="can-bus-notice-hint">${escapeHtml(hint)}</span>`;
   if (notice.innerHTML !== html) notice.innerHTML = html;
   const counted = errors.tx_errors != null && errors.rx_errors != null
     ? ` The controller's error counters: TX ${errors.tx_errors}, RX ${errors.rx_errors} (128 or more is error-passive).`
@@ -884,6 +888,9 @@ const pollStatus = async () => {
       showToast(`CAN disconnected: ${data.last_error}`, 'error');
       setCanError(`Disconnected: ${data.last_error}`);
     }
+  } else if (backendCanRunning && (data.last_error || null) !== state.canError) {
+    // A problem the session goes on with, as another node using Cynitor's node-ID.
+    setCanError(data.last_error || null);
   }
 
   updateSemaphores();

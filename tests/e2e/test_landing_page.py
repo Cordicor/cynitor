@@ -217,6 +217,25 @@ INGEST_DIAGNOSTIC = """([ago, severity, text]) => ingestLogEvent({
     attributes: [{attribute: 'severity', value: severity}, {attribute: 'text', value: text}]})"""
 
 
+@test("Cards: a diagnostic's severity by name, as the log panel names it, and a zero timestamp as unknown")
+async def _(page):
+    card = await page.evaluate("""() => {
+        const div = document.createElement('div');
+        div.innerHTML = renderSubjectTable('Publishers', [{subjectId: 8184, messageType: 'uavcan.diagnostic.Record.1.1',
+            rate: 0.3, attributes: [{attribute: 'timestamp', value: 0, unit: 'microsecond'},
+                                    {attribute: 'severity', value: 3}, {attribute: 'text', value: 'hi'}]}]);
+        const other = document.createElement('div');
+        other.innerHTML = renderSubjectTable('Publishers', [{subjectId: 1300, messageType: 'ns.Status.1.0', rate: 1,
+            attributes: [{attribute: 'severity', value: 3}, {attribute: 'timestamp', value: 5, unit: 'microsecond'}]}]);
+        const text = (d) => [...d.querySelectorAll('.metric')].map((m) =>
+            [m.querySelector('.metric-key').textContent, m.querySelector('.metric-val-text').textContent,
+             m.querySelector('.metric-val').title]);
+        return [text(div), text(other)];
+    }""")
+    assert card == [[["timestamp", "unknown", "0"], ["severity", "NOTICE", "3"], ["text", "hi", "hi"]],
+                    [["severity", "3", "3"], ["timestamp", "5", "5"]]], f"Cards: {card}"
+
+
 @test("Log panel shows diagnostics' severity, in time order")
 async def _(page):
     await open_log_panel(page)
@@ -5798,6 +5817,48 @@ async def _(page):
         assert "120 Ω at each end" in title and "TX 0, RX 128" in title, f"Its title: {title}"
         assert (during, after) == ("semaphore warn", "semaphore ok"), f"The dot with errors, then without: {during}, {after}"
     finally:
+        await sidebar_close(page, server)
+
+
+@test("Sidebar: transmit errors alone say no other node acknowledges, not to check termination")
+async def _(page):
+    server = _SidebarServer()
+    await sidebar_open(page, server)
+    try:
+        await page.locator("#connectDashboardBtn").click()
+        await page.wait_for_function("state.dashboardConnected", timeout=WAIT_MS)
+        await page.locator("#connectCanBtn").click()
+        await page.wait_for_function("state.canState === 'connected'", timeout=WAIT_MS)
+        # The node unplugged: Cynitor alone, its frames unacknowledged (audit E8-18).
+        server.bus_errors = {"state": "ERROR-PASSIVE", "tx_errors": 128, "rx_errors": 0, "since_unix": time.time()}
+        await page.evaluate("pollStatus()")
+        hint = page.locator("#canBusNotice .can-bus-notice-hint")
+        await hint.wait_for(state="visible", timeout=WAIT_MS)
+        text = await hint.inner_text()
+        assert text == "No other node acknowledges: check the bus is connected and a node is powered", f"Hint: {text}"
+    finally:
+        server.bus_errors = None
+        await sidebar_close(page, server)
+
+
+@test("Sidebar: a problem the backend reports while connected shows under the CAN form, and goes with it")
+async def _(page):
+    server = _SidebarServer()
+    await sidebar_open(page, server)
+    try:
+        await page.locator("#connectDashboardBtn").click()
+        await page.wait_for_function("state.dashboardConnected", timeout=WAIT_MS)
+        await page.locator("#connectCanBtn").click()
+        await page.wait_for_function("state.canState === 'connected'", timeout=WAIT_MS)
+        server.last_error = "Another node uses Cynitor's own node-ID 127"
+        await page.evaluate("pollStatus()")
+        shown = await page.evaluate(SIDEBAR_CAN_ERROR)
+        server.last_error = None
+        await page.evaluate("pollStatus()")
+        gone = await page.evaluate(SIDEBAR_CAN_ERROR)
+        assert (shown, gone) == ("Another node uses Cynitor's own node-ID 127", None), f"Shown: {shown!r}; then: {gone!r}"
+    finally:
+        server.last_error = None
         await sidebar_close(page, server)
 
 
