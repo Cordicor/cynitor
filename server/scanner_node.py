@@ -599,7 +599,7 @@ class ScannerNode(ScannerRegisters, ScannerServices):
         rate, subject_rate = self._track_rate(subject_id, publisher_node_id, monotonic)
         event = {
             "subject_id": subject_id,
-            "timestamp": datetime.datetime.fromtimestamp(timestamp).isoformat(timespec="seconds"),
+            "timestamp": datetime.datetime.fromtimestamp(timestamp).astimezone().isoformat(timespec="seconds"),
             "timestamp_unix": timestamp,
             "rate": rate,
             "subject_rate": subject_rate,
@@ -638,7 +638,7 @@ class ScannerNode(ScannerRegisters, ScannerServices):
         for (subject_id, node_id), (rate, last_seen) in reported.items():
             await self._enqueue({
                 "subject_id": subject_id,
-                "timestamp": datetime.datetime.fromtimestamp(last_seen).isoformat(timespec="seconds"),
+                "timestamp": datetime.datetime.fromtimestamp(last_seen).astimezone().isoformat(timespec="seconds"),
                 "timestamp_unix": last_seen,
                 "rate": round(rate, 1),
                 "subject_rate": round(subject_rates[subject_id], 1),
@@ -930,7 +930,7 @@ class ScannerNode(ScannerRegisters, ScannerServices):
                 "servers": _ids("server_ServiceIDs") if getattr(node, 'has_servers', False) else [],
                 "clients": _ids("client_ServiceIDs") if getattr(node, 'has_clients', False) else [],
                 "uptime": self._make_json_serializable(node.uptime) if getattr(node, 'uptime', None) else None,
-                "last_seen": node.last_seen[-1].isoformat() if getattr(node, 'last_seen', None) and len(node.last_seen) else None,
+                "last_seen": node.last_seen[-1].astimezone().isoformat() if getattr(node, 'last_seen', None) and len(node.last_seen) else None,
             }
             self.identity_map.save_node_snapshot(uid, snapshot)
             if self.on_node_data_save:

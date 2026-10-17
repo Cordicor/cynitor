@@ -252,7 +252,9 @@ class TelemetryManager:
         result: list[str] = []
         for item in values:
             if isinstance(item, datetime.datetime):
-                result.append(item.isoformat())
+                # With the server's UTC offset: a viewer in another timezone
+                # read a naive one as its own local time, hours off.
+                result.append(item.astimezone().isoformat())
             else:
                 result.append(str(item))
         return result

@@ -229,7 +229,7 @@ Telemetry events (filtered per client):
 ```json
 {
     "subject_id": 7509,
-    "timestamp": "2026-03-13T10:30:45",
+    "timestamp": "2026-03-13T10:30:45+01:00",
     "timestamp_unix": 1741949445.123,
     "rate": 1.0,
     "subject_rate": 5.0,
@@ -251,7 +251,7 @@ A service-ID mask, as `uavcan.node.port.List`'s `servers` and `clients` carry (5
 
 A float that is NaN or infinite (sensors often send NaN for "not available") is `null` in `attributes`, in an array element by element: JSON has no NaN, and a browser cannot read a message that holds one. The same `null` reaches the REST API, history, recordings and their exports; replaying a recording made before this sends `null` too.
 
-`timestamp_unix` is when the transfer was received as stamped by the transport (for SocketCAN, the kernel's receive timestamp), not when the backend got round to processing it.
+`timestamp`, and a node's `last_seen` in `/api/nodes`, are the server's local time with its UTC offset, so a viewer in another timezone reads the same instant. `timestamp_unix` is when the transfer was received as stamped by the transport (for SocketCAN, the kernel's receive timestamp), not when the backend got round to processing it.
 
 `payload_bytes` is the size, in bytes, of the received transfer's serialized payload (sum of `transfer.fragmented_payload` fragment lengths). It is `null` if the transport did not expose the fragmented payload (best-effort field).
 
