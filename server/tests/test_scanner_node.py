@@ -423,6 +423,7 @@ class TestKernelDroppedFrames:
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
             assert scanner_on_socket(sock).kernel_dropped_frames() == 0
 
+    @pytest.mark.skipif(not sys.platform.startswith("linux"), reason="pycyphal's SocketCAN media is Linux's")
     def test_pycyphal_still_keeps_the_socket_where_it_is_read(self):
         # kernel_dropped_frames goes through two private attributes of
         # pycyphal's: a release that renames them must fail here, not count 0.
