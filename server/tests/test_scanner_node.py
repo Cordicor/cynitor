@@ -832,3 +832,28 @@ class TestArrayAttributes:
         assert results == [{"attribute": "publishers.sparse_list", "value": [7509, 7510]},
                            {"attribute": "pairs", "value": [{"a": 1, "b": 2}]}]
         json.dumps(results)
+
+    def test_a_service_mask_is_the_ids_it_sets(self):
+        """port.List's ServiceIDList is 512 bits: a card showed them as [false, false, …] (audit F-046)."""
+        import numpy as np
+        node = ScannerNode.__new__(ScannerNode)
+        mask = np.zeros(512, dtype=bool)
+        mask[[430, 435]] = True
+        service_ids = types.SimpleNamespace(mask=mask)
+        model = types.SimpleNamespace(attributes=[types.SimpleNamespace(name="mask")])
+        results = []
+        with patch.object(scanner_node, "get_model", return_value=model), \
+             patch.object(scanner_node, "Field", types.SimpleNamespace):
+            node._extract_value("servers", service_ids, results)
+        assert results == [{"attribute": "servers", "value": [430, 435]}]
+
+    def test_a_subject_mask_is_the_ids_it_sets(self):
+        import numpy as np
+        node = ScannerNode.__new__(ScannerNode)
+        mask = np.zeros(8192, dtype=bool)
+        mask[[7509, 7510]] = True
+        results = []
+        node._extract_value("publishers.mask", mask, results)
+        node._extract_value("flags", np.array([True, False]), results)  # other bools stay as they are
+        assert results == [{"attribute": "publishers.mask", "value": [7509, 7510]},
+                           {"attribute": "flags", "value": [True, False]}]

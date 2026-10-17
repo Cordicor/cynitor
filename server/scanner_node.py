@@ -475,6 +475,9 @@ class ScannerNode(ScannerRegisters, ScannerServices):
             results.append({"attribute": name, "value": [
                 next(iter(item.values())) if isinstance(item, dict) and len(item) == 1 else item for item in items
             ]})
+        # A port list's SubjectIDList as a mask (8192 bits): the IDs it sets.
+        elif isinstance(val, np.ndarray) and val.dtype == bool and name.endswith(".mask"):
+            results.append({"attribute": name, "value": np.flatnonzero(val).tolist()})
         elif isinstance(val, np.ndarray):
             results.append({"attribute": name, "value": val.tolist()})
         # Primitives
@@ -489,7 +492,10 @@ class ScannerNode(ScannerRegisters, ScannerServices):
                 if len(nested_fields) == 1:
                     field_name = nested_fields[0]
                     sub_val = getattr(val, field_name, None)
-                    if sub_val is not None:
+                    # A mask (port.ServiceIDList's 512 bits): the IDs it sets, not 512 booleans.
+                    if field_name == "mask" and isinstance(sub_val, np.ndarray) and sub_val.dtype == bool:
+                        results.append({"attribute": name, "value": np.flatnonzero(sub_val).tolist()})
+                    elif sub_val is not None:
                         self._extract_value(name, sub_val, results)
                         # Add unit hint from field name (skip generic "value")
                         if field_name != "value" and results and results[-1]["attribute"] == name:
