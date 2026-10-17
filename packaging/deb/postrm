@@ -1,0 +1,11 @@
+#!/bin/sh
+# After removal: systemd forgets the unit. A purge also deletes the service's
+# data (history, recordings, raw logs), which a plain remove keeps.
+set -e
+if [ -d /run/systemd/system ]; then
+    systemctl daemon-reload >/dev/null 2>&1 || true
+fi
+if [ "$1" = "purge" ]; then
+    rm -rf /var/lib/cynitor /var/lib/private/cynitor
+fi
+exit 0

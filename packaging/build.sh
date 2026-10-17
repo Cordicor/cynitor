@@ -53,6 +53,9 @@ install -m 0644 ../README.md               "${ROOT}/usr/share/doc/cynitor-server
 # The env file carries the auth token, so keep it out of world-readable view.
 chmod 0640 "${ROOT}/etc/default/cynitor-server"
 echo "/etc/default/cynitor-server" > "${ROOT}/DEBIAN/conffiles"
+for script in postinst prerm postrm; do  # systemd learns of the unit, and stops it on removal
+    install -m 0755 "deb/${script}" "${ROOT}/DEBIAN/${script}"
+done
 fakeroot dpkg-deb --build "${ROOT}" >/dev/null
 mv "${ROOT}.deb" "out/cynitor-server_${VERSION}_amd64.deb"
 echo "Package: out/cynitor-server_${VERSION}_amd64.deb"
