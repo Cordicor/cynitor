@@ -259,6 +259,8 @@ Telemetry events (filtered per client):
 
 `rate` is this publisher's message rate on the subject, in Hz (one decimal, over the last 10 s). `subject_rate` is the subject's total over its publishers still sending: with five nodes publishing Heartbeat at 1 Hz, each event carries `rate` 1.0 and `subject_rate` 5.0. A publisher whose last message is older than three of its periods (two seconds at least) no longer counts in it, the rule by which the dashboard calls a subject silent. Both are computed when a message arrives, so a subject that stops altogether sends no new value: the dashboard tells that from the time of its last message. Events recorded before `subject_rate` existed lack it, and there `rate` was the subject total.
 
+A float that is NaN or infinite (sensors often send NaN for "not available") is `null` in `attributes`, in an array element by element: JSON has no NaN, and a browser cannot read a message that holds one. The same `null` reaches the REST API, history, recordings and their exports; replaying a recording made before this sends `null` too.
+
 `timestamp_unix` is when the transfer was received as stamped by the transport (for SocketCAN, the kernel's receive timestamp), not when the backend got round to processing it.
 
 `payload_bytes` is the size, in bytes, of the received transfer's serialized payload (sum of `transfer.fragmented_payload` fragment lengths). It is `null` if the transport did not expose the fragmented payload (best-effort field).
@@ -1015,7 +1017,10 @@ Response:
 }
 ```
 
-Returns `503` if CAN is not connected.
+Returns `503` if CAN is not connected, and `504` with `{"error": "Node 37 does
+not answer register requests"}` if the node answers none of the first two list
+indexes (asked twice each, a few seconds). The list ends at the first two indexes
+in a row that go unanswered.
 
 **Get node lifecycle history:**
 ```bash
@@ -1044,7 +1049,7 @@ Response:
 }
 ```
 
-Event types: `first_seen`, `reappeared`, `disappeared`, `restart_suspected` (the uptime dropped, then counted on), `health_change`, `mode_change`, `port_change`, `service_call`, `got_node_id`, `lost_node_id`, `node_id_migration`, `node_id_conflict` (heartbeats on this node-ID alternate between two uptimes: two nodes share it; reported at most once a minute) and `type_conflict` (the node publishes a subject with another type than the one it is decoded as, which an earlier publisher advertised).
+Event types: `first_seen`, `reappeared`, `disappeared`, `restart_suspected` (the uptime dropped, then counted on), `health_change`, `mode_change`, `port_change`, `service_call`, `got_node_id`, `lost_node_id`, `node_id_migration`, `node_id_conflict` (heartbeats on this node-ID alternate between two uptimes: two nodes share it; or, with `"own_node_id": true` in its detail, another node uses Cynitor's own node-ID, which `/api/status`'s `last_error` then says too; reported at most once a minute) and `type_conflict` (the node publishes a subject with another type than the one it is decoded as, which an earlier publisher advertised).
 
 Returns `400` for invalid node_id or limit, `503` if the event logger is not available.
 

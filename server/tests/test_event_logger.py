@@ -2,6 +2,7 @@
 
 import asyncio
 import os
+import time
 import tempfile
 import pytest
 from event_logger import EventLogger, FilterMatcher
@@ -802,6 +803,30 @@ class TestLoggerThroughput:
             await el.log_event(_sample_event())
             assert len(warnings()) == 2 and "(50 so far)" in warnings()[1]
         assert el.dropped_events == 50
+
+    @pytest.mark.asyncio
+    async def test_a_steady_stream_is_written_in_few_batches(self, db_path):
+        # Events written as soon as they came made a commit every few events,
+        # and the write lock was never free for the other writers on the file.
+        el = EventLogger(db_path=db_path)
+        el.init_db_sync()
+        batches = []
+        async def record(events):
+            batches.append(len(events))
+        el._write_events = record
+        el._running = True
+        loop = asyncio.ensure_future(el._log_loop())
+        started = time.monotonic()
+        for i in range(100):  # 500 events a second for 0.2 s
+            await el.log_event(_sample_event(subject_id=i))
+            await asyncio.sleep(0.002)
+        # Windows sleeps a timer tick (about 15 ms) at least, so the stream may
+        # take 1.5 s there: one batch is allowed per window it lasted.
+        windows = (time.monotonic() - started) / EventLogger.BATCH_WINDOW_S
+        await asyncio.sleep(EventLogger.BATCH_WINDOW_S * 2)
+        el._running = False
+        await asyncio.wait_for(loop, 3)
+        assert sum(batches) == 100 and len(batches) <= windows + 2, (batches, windows)
 
     @pytest.mark.asyncio
     async def test_queued_events_are_written_in_large_batches(self, db_path):

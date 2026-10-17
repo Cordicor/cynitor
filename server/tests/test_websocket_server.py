@@ -744,6 +744,16 @@ class TestGetRegisters:
         resp = await client.get("/api/registers/42")
         assert resp.status == 500
 
+    @pytest.mark.asyncio
+    async def test_registers_node_does_not_answer(self, client, session):
+        session.is_running = True
+        scanner = MagicMock()
+        scanner.get_registers = AsyncMock(side_effect=TimeoutError("Node 42 does not answer register requests"))
+        session.scanner = scanner
+        resp = await client.get("/api/registers/42")
+        assert resp.status == 504
+        assert (await resp.json())["error"] == "Node 42 does not answer register requests"
+
 
 class TestSetRegister:
 

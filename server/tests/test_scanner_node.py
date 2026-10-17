@@ -677,6 +677,44 @@ class TestGetInfoNoAnswer:
         assert "NoneType" not in caplog.text
 
 
+class TestOwnNodeIdTaken:
+    """Cynitor never hears its own heartbeats: one from its node-ID comes from another node."""
+
+    def make(self, own_id=42):
+        node = make_event_node()
+        node._node = types.SimpleNamespace(id=own_id)
+        node.all_nodes = {n: NodeInfo(node_id=n) for n in (42, 43)}
+        node._prev_health, node._prev_mode, node._prev_ports = {}, {}, {}
+        node._schedule_info_refresh = MagicMock(return_value=True)
+        node._queue_event = AsyncMock()
+        node.said = []
+        node.on_own_node_id_conflict = node.said.append
+        return node
+
+    async def heartbeat(self, node, source, uptime=10):
+        msg = types.SimpleNamespace(uptime=uptime, health=types.SimpleNamespace(value=0),
+                                    mode=types.SimpleNamespace(value=0), vendor_specific_status_code=0)
+        await node.heartbeat_callback(msg, types.SimpleNamespace(source_node_id=source))
+
+    async def test_is_reported_once_a_while(self, caplog):
+        node = self.make()
+        for uptime in (10, 11, 12):
+            await self.heartbeat(node, 42, uptime)
+        assert node.events.count(("node_id_conflict", {"own_node_id": True, "uptime": 10})) == 1
+        assert len(node.said) == 1 and "Cynitor's own node-ID 42" in node.said[0]
+        assert "Cynitor's own node-ID 42" in caplog.text
+
+    async def test_other_node_ids_are_not_a_conflict(self):
+        node = self.make()
+        await self.heartbeat(node, 43)
+        assert node.said == [] and "node_id_conflict" not in [e[0] for e in node.events]
+
+    async def test_anonymous_scanner_has_no_node_id_to_share(self):
+        node = self.make(own_id=None)
+        await self.heartbeat(node, 42)
+        assert node.said == []
+
+
 class TestLeavingSoftwareUpdate:
     async def test_new_firmware_is_asked_for_its_info_at_once(self):
         node = make_event_node()

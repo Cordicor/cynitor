@@ -130,6 +130,20 @@ class TestGetRegisters:
     async def test_a_node_with_no_registers_gives_an_empty_list(self, uavcan_types):
         assert await scanner_for(Node({})).get_registers(7) == []
 
+    async def test_a_node_that_does_not_answer_is_given_up_on_at_once(self, uavcan_types):
+        # A node that cannot hear Cynitor used to be asked for all 256 indexes,
+        # two tries each: 8.5 minutes, then an empty list.
+        node = Node({"a": ("bit", np.array([True]), True)}, silent={i: 2 for i in range(ScannerNode.MAX_REGISTERS)})
+        with pytest.raises(TimeoutError, match="Node 7 does not answer register requests"):
+            await scanner_for(node).get_registers(7)
+        assert node.list.call.await_count == 4
+        node.list.close.assert_called_once_with()
+
+    async def test_the_list_ends_where_the_node_stops_answering(self, uavcan_types):
+        node = Node({f"r{i}": ("bit", np.array([True]), True) for i in range(5)}, silent={2: 2, 3: 2})
+        assert [r["register_name"] for r in await scanner_for(node).get_registers(7)] == ["r0", "r1"]
+        assert node.list.call.await_count == 2 + 4
+
 
 class TestSetRegister:
     async def write(self, node, name, value, reg_type):

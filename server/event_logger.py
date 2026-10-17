@@ -68,6 +68,11 @@ class EventLogger:
     # many rows it holds, so throughput scales with the batch: ~1k events/s at
     # 10 per commit, ~20k at 500.
     BATCH_SIZE = 500
+    # How long a batch gathers events after its first. Written as soon as they
+    # came, a steady bus made batches of a few events back to back, and the
+    # write lock was held nearly all the time: the other writers on the file
+    # (node data, recorded service calls) timed out and were lost.
+    BATCH_WINDOW_S = 0.2
     # A warning for every dropped event buried the log and slowed an overloaded
     # server further: thousands of lines a second. One says it, then one every so long.
     DROP_WARNING_INTERVAL_S = 5.0
@@ -331,6 +336,8 @@ class EventLogger:
                     # Get first event
                     event = await asyncio.wait_for(self._queue.get(), timeout=1.0)
                     events.append(event)
+                    if self._running and self._queue.qsize() < self.BATCH_SIZE:
+                        await asyncio.sleep(self.BATCH_WINDOW_S)  # let the batch fill; draining at stop does not wait
                     
                     # Try to get more events without blocking
                     while len(events) < self.BATCH_SIZE:

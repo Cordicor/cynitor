@@ -96,6 +96,16 @@ class TestRowToEvent:
         assert ev["replay"] is True
         assert ev["attributes"] == [{"name": "uptime", "value": 12}]
 
+    def test_nan_in_an_older_recording_plays_as_null(self):
+        row = {
+            "id": 1, "timestamp_unix": 0.0, "timestamp_iso": None,
+            "subject_or_service_id": 1, "publisher_node_id": 1, "unique_id": None,
+            "message_type": "X", "rate": 0, "attributes_json": '[{"attribute": "value", "value": NaN}]',
+        }
+        ev = _row_to_event(row)
+        assert ev["attributes"] == [{"attribute": "value", "value": None}]
+        json.dumps(ev, allow_nan=False)
+
     def test_malformed_attributes_json_becomes_empty_list(self):
         row = {
             "id": 1, "timestamp_unix": 0.0, "timestamp_iso": None,

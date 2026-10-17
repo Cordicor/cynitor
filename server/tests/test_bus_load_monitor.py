@@ -125,6 +125,37 @@ class TestBusLoadMonitor:
         assert not monitor.is_alive
 
     @pytest.mark.asyncio
+    async def test_stop_after_canbusload_exited(self):
+        # canbusload ends by itself when its interface goes away (a USB adapter
+        # unplugged). terminate() on a finished process raises
+        # ProcessLookupError, which used to abort the session's teardown and
+        # leave it "running" for good.
+        monitor = make_monitor()
+        mock_proc = AsyncMock()
+        mock_proc.returncode = 1
+        mock_proc.terminate = MagicMock(side_effect=ProcessLookupError())
+        mock_proc.wait = AsyncMock()
+        monitor._proc = mock_proc
+
+        await monitor.stop()
+
+        mock_proc.terminate.assert_not_called()
+        assert monitor._proc is None
+
+    @pytest.mark.asyncio
+    async def test_stop_when_process_ends_during_stop(self):
+        monitor = make_monitor()
+        mock_proc = AsyncMock()
+        mock_proc.returncode = None
+        mock_proc.terminate = MagicMock(side_effect=ProcessLookupError())
+        mock_proc.wait = AsyncMock()
+        monitor._proc = mock_proc
+
+        await monitor.stop()
+
+        assert monitor._proc is None
+
+    @pytest.mark.asyncio
     async def test_stop_when_not_started(self):
         monitor = make_monitor()
         await monitor.stop()

@@ -140,6 +140,8 @@ class NodesApi:
         try:
             registers = await self.session.scanner.get_registers(node_id)
             return web.json_response({"node_id": node_id, "registers": registers})
+        except TimeoutError as e:
+            return web.json_response({"error": str(e)}, status=504)
         except ValueError as e:
             return web.json_response({"error": str(e)}, status=500)
         except Exception as e:
