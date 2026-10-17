@@ -55,6 +55,18 @@ No Python needed. Take the file for your system from the
   `--no-update-check` (or `CYNITOR_NO_UPDATE_CHECK=1`) turns it off; without
   internet access it fails quietly.
 
+### Tested on
+
+What each release was checked on, updated with every release (v1.3.0):
+
+| System | Result | How |
+|---|---|---|
+| Ubuntu 22.04 | ✅ Passing | On real hardware: a gs_usb CAN FD adapter and an STM32 Cyphal node; release binaries are built here |
+| Ubuntu 24.04 | ✅ Passing | CI: unit tests (Python 3.10, 3.11, 3.12), integration, browser end-to-end |
+| Windows Server 2022, 2025 | ✅ Passing | CI: unit tests and integration on a virtual bus; the release build's smoke test (2022) |
+| Windows 10, 11 | ⏳ Not tested yet | Neither the release build nor any adapter has been run on a desktop Windows yet |
+| macOS | ❌ Not tested | From source only: no build, no CI run |
+
 ### From source
 
 ```bash
@@ -142,11 +154,13 @@ your layout in the browser, and needs no internet access.
 
 ## CAN adapters
 
-| System | Status | Adapters the dashboard finds |
-|---|---|---|
-| **Linux** | The primary platform: release builds, tested in CI | SocketCAN interfaces: `can0`, `vcan0`, `slcan0`, … |
-| **Windows** | Release build, tested in CI | PEAK, Kvaser, Vector and IXXAT through their vendor drivers; CANable with candleLight firmware over USB, or with slcan firmware by its serial port |
-| **macOS** | From source only, and not tested: no build, no CI run | Takes the same path as Windows, but `requirements.txt` installs the USB packages for candleLight adapters on Windows only |
+What each system was tested on is under [Tested on](#tested-on).
+
+| System | Adapters the dashboard finds |
+|---|---|
+| **Linux** | SocketCAN interfaces: `can0`, `vcan0`, `slcan0`, … |
+| **Windows** | PEAK, Kvaser, Vector and IXXAT through their vendor drivers; CANable with candleLight firmware over USB, or with slcan firmware by its serial port |
+| **macOS** | Takes the same path as Windows, but `requirements.txt` installs the USB packages for candleLight adapters on Windows only |
 
 An adapter that is not found can be named, with `--can` or under **Other…**:
 
