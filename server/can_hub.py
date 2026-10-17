@@ -71,6 +71,9 @@ HEARTBEAT_SUBJECT_ID = 7509
 HEARTBEAT_MAX_PUBLICATION_PERIOD = 1.0
 _MODE_INITIALIZATION = 1
 _MAX_NODE_ID = 127
+# Cyphal leaves the top two node-IDs to diagnostic tools: taken first, so that
+# Cynitor stays clear of the IDs devices use.
+_TOOL_NODE_IDS = (127, 126)
 
 
 def open_adapter(spec: str, bitrate: int, data_bitrate: Optional[int] = None) -> can.BusABC:
@@ -448,7 +451,7 @@ def _heartbeat_source(msg: can.Message) -> Optional[tuple[int, Optional[int]]]:
 
 def pick_free_node_id(local_spec: str, exclude: frozenset[int] = frozenset(),
                       rng: Optional[random.Random] = None, fd: bool = False) -> Optional[int]:
-    """Listen to heartbeats on ``local_spec`` and pick an unused node-ID at random.
+    """Listen to heartbeats on ``local_spec`` and pick an unused node-ID: 127 or 126, else one at random.
 
     Same procedure as `yakut accommodate`: listen for two heartbeat periods,
     extending the wait whenever a new node shows up (three periods if it is
@@ -477,6 +480,8 @@ def pick_free_node_id(local_spec: str, exclude: frozenset[int] = frozenset(),
         bus.shutdown()
     if not candidates:
         return None
-    pick = (rng or random).choice(sorted(candidates))
+    pick = next((node_id for node_id in _TOOL_NODE_IDS if node_id in candidates), None)
+    if pick is None:
+        pick = (rng or random).choice(sorted(candidates))
     logger.info("Node-ID %d chosen; %d of %d unused", pick, len(candidates), _MAX_NODE_ID + 1)
     return pick

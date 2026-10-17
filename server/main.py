@@ -293,6 +293,9 @@ class CANSession:
         self._event_logger_lock = asyncio.Lock()
         self._disconnect_task: Optional[asyncio.Task] = None
         self.last_error: Optional[str] = None
+        # Whether UAVCAN__NODE__ID is one this session picked, and so is
+        # forgotten when it ends: the next bus may have a node on it.
+        self._picked_node_id = False
         # Recording-replay engine. None unless a replay session is in progress.
         # Mutually exclusive with scanner — the WS handler chooses telemetry
         # vs replay based on which is non-None, and connect()/start_replay()
@@ -377,6 +380,7 @@ class CANSession:
                 logger.info("Initializing ScannerNode...")
                 self.scanner = ScannerNode(register_file=str(self.data_dir / SCANNER_DB))
                 self.scanner.offline = offline
+                self.scanner.on_own_node_id_conflict = self._own_node_id_taken
                 self._apply_saved_subject_types()
                 if offline is None and self.scanner.node.id is not None:
                     self.firmware = FirmwareServer(self.firmware_folder)
@@ -485,6 +489,10 @@ class CANSession:
         tap = SocketcanTap(socketcan_device(self.can_interface), self.can_fd, on_frame,
                            can_filters=can_filters, name="capture")
         return lambda: threading.Thread(target=tap.stop, name="capture-stop", daemon=True).start()
+
+    def _own_node_id_taken(self, message: str) -> None:
+        """Another node uses Cynitor's node-ID (see ScannerNode): said in /api/status."""
+        self.last_error = message
 
     def _own_node_ids(self) -> set[int]:
         """The node-ID Cynitor's own frames come from, its scanner's; none if it runs anonymously."""
@@ -633,6 +641,7 @@ class CANSession:
             logger.warning("Every node-ID is in use; the scanner will run anonymously")
         else:
             os.environ["UAVCAN__NODE__ID"] = str(node_id)
+            self._picked_node_id = True
 
     async def _open_hub(self, spec: str, bitrate: int, force_compile: bool,
                         data_bitrate: Optional[int] = None, open_bus=None) -> CANHub:
@@ -997,6 +1006,9 @@ class CANSession:
             await asyncio.to_thread(self.hub.stop)
             self.hub = None
         self.registered_nodes.clear()
+        if self._picked_node_id:  # one the user set stays
+            os.environ.pop("UAVCAN__NODE__ID", None)
+            self._picked_node_id = False
         self.can_interface = None
         self.can_bitrate = None
         self.can_data_bitrate = None

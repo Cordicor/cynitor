@@ -363,9 +363,24 @@ class TestPickFreeNodeId:
         pick_free_node_id(f"virtual:{channel}", rng=random.Random(0), fd=True)
         assert opened[0]["fd"] is True
 
-    def test_any_node_id_on_a_quiet_bus(self, channel):
-        pick = pick_free_node_id(f"virtual:{channel}", rng=random.Random(0))
-        assert 0 <= pick <= 127
+    def test_127_on_a_quiet_bus(self, channel):
+        # Cyphal leaves 126 and 127 to diagnostic tools: clear of the IDs devices take.
+        assert pick_free_node_id(f"virtual:{channel}", rng=random.Random(0)) == 127
+
+    def test_tool_node_ids_are_those_no_allocator_gives_out(self):
+        # A plug-and-play allocator on the bus (pycyphal's, or Cynitor's own)
+        # keeps the top two node-IDs back: Cynitor on one of them cannot meet
+        # a node that gets its node-ID later.
+        from allocator import RESERVED_TOP_NODE_IDS
+        assert set(can_hub._TOOL_NODE_IDS) == set(range(128 - RESERVED_TOP_NODE_IDS, 128))
+
+    def test_126_when_127_is_taken(self, channel):
+        assert self._pick_while_publishing(channel, [127]) == 126
+
+    def test_another_free_one_when_both_tool_ids_are_taken(self, channel):
+        pick = self._pick_while_publishing(channel, [126, 127, 5], rng=random.Random(0))
+        assert pick not in {126, 127, 5}
+        assert 0 <= pick <= 125
 
 
 class TestFrameBits:

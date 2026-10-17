@@ -79,6 +79,8 @@ class ScannerNode(ScannerRegisters, ScannerServices):
     # arrive would leave no transfer of several frames whole.
     MAX_DECODING_LAG_S = 1.0
     offline: Optional[dict] = None    # set per session while a raw log plays (see __init__)
+    # Called with a message when another node uses Cynitor's own node-ID (the session's last_error).
+    on_own_node_id_conflict: Optional[Callable[[str], None]] = None
     _dropped_frames_closed = 0        # frames dropped on subjects no longer decoded (see dropped_frames)
     # While Cynitor decodes on demand: the only subjects decoded, of those
     # whose type is known (see set_decoding). None: all of them.
@@ -746,6 +748,10 @@ class ScannerNode(ScannerRegisters, ScannerServices):
         node    = self.all_nodes[node_id]
         now     = datetime.datetime.now()
 
+        # Cynitor never hears its own heartbeats: one from its node-ID is another node's.
+        if node_id == getattr(getattr(self, "_node", None), "id", None):
+            self._report_own_node_id_taken(node_id, self._make_json_serializable(msg.uptime))
+
         if not node.has_appeared:
             node.mark_appeared(first_seen=now)
             logging.debug(f"Node {node_id} has appeared for the first time.")
@@ -959,6 +965,21 @@ class ScannerNode(ScannerRegisters, ScannerServices):
             f"alternate between uptimes {uptime_a}s and {uptime_b}s"
         )
         self._emit_node_event(node_id, "node_id_conflict", {"uptimes": [uptime_a, uptime_b]})
+
+    def _report_own_node_id_taken(self, node_id: int, uptime: int) -> None:
+        """Another node sends heartbeats from Cynitor's own node-ID: calls to it reach either of the two."""
+        now = time.monotonic()
+        last = self._node_id_conflict_reported.get(node_id)
+        if last is not None and now - last < self.NODE_ID_CONFLICT_REPORT_S:
+            return
+        self._node_id_conflict_reported[node_id] = now
+        message = (f"Another node uses Cynitor's own node-ID {node_id} (its uptime {uptime} s): "
+                   f"what other nodes send to node {node_id} may reach Cynitor instead. "
+                   f"Disconnect and connect again for a free node-ID")
+        logging.warning(message)
+        self._emit_node_event(node_id, "node_id_conflict", {"own_node_id": True, "uptime": uptime})
+        if self.on_own_node_id_conflict is not None:
+            self.on_own_node_id_conflict(message)
 
     def _info_due(self, node: NodeInfo, now: datetime.datetime) -> bool:
         """Whether a node's GetInfo should be sent again: periodically once it

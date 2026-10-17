@@ -194,8 +194,7 @@ async def run() -> None:
         await session.connect(f"virtual:{WIRE}", bitrate=BITRATE, data_bitrate=DATA_BITRATE, allocator=True)
         check(session.is_running and session.hub is not None, "connected through the CAN hub")
         own_id = os.environ.get("UAVCAN__NODE__ID")
-        check(own_id is not None and int(own_id) != DEVICE_NODE_ID,
-              f"picked its own node-ID ({own_id}), clear of the device")
+        check(own_id == "127", f"picked its own node-ID ({own_id}): 127, the first of the two Cyphal leaves to tools")
         check(session.can_fd == FD, f"session runs {'CAN FD' if FD else 'Classic CAN'}")
         own_frame = await first_frame_from(tap, int(own_id))
         check(own_frame is not None and own_frame.is_fd == FD,
@@ -390,7 +389,7 @@ async def run() -> None:
         check(decoded, f"and its subject {TEMPERATURE_SUBJECT_ID} decodes")
 
         # A test node, defined as the dashboard defines one, counting up. It sets
-        # no node-ID: Cynitor, whose own was drawn at random, gives it a free one.
+        # no node-ID: Cynitor gives it a free one.
         from testnodes import normalize_definition, value_schema
         dsdl = DsdlManager(ROOT, data_dir=data)
         definition = normalize_definition({
@@ -427,6 +426,25 @@ async def run() -> None:
         check(not session.is_running and session.simulation is None, "disconnecting stops the simulated bus")
         check(session.test_nodes.running_node_ids() == set() and not session.test_nodes.view(test_id)["running"],
               "and the test node")
+
+        # Cynitor's node-ID is the free one of the bus it was picked on: forgotten
+        # with the session, picked again on the next bus, where 127 is now taken.
+        check("UAVCAN__NODE__ID" not in os.environ, "the node-ID Cynitor picked is forgotten when it disconnects")
+        on_127 = pycyphal.application.make_node(uavcan.node.GetInfo_1_0.Response(name="integration.on127"),
+                                                transport=on_wire(127))
+        on_127.start()
+        await asyncio.sleep(1.5)  # heartbeating before Cynitor comes
+        await session.connect(f"virtual:{WIRE}", bitrate=BITRATE, data_bitrate=DATA_BITRATE)
+        check(session.scanner.node.id == 126, f"connected again, it takes 126, not 127: {session.scanner.node.id}")
+        # A node that comes up later on Cynitor's own node-ID is said, not left unnoticed.
+        on_126 = pycyphal.application.make_node(uavcan.node.GetInfo_1_0.Response(name="integration.on126"),
+                                                transport=on_wire(126))
+        on_126.start()
+        said = await wait_for(lambda: "own node-ID 126" in (session.last_error or ""), timeout=10)
+        check(said, f"another node on Cynitor's own node-ID is reported: {session.last_error!r}")
+        await session.disconnect()
+        on_126.close()
+        on_127.close()
     finally:
         temperature_task.cancel()
         velocity_task.cancel()

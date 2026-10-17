@@ -440,6 +440,34 @@ class TestNodeIdOnSocketcan:
         assert os.environ["UAVCAN__NODE__ID"] == "7"
 
 
+class TestNodeIdIsPickedForEachBus:
+    """A node-ID Cynitor picked is the free one of the bus it was picked on, not of the next."""
+
+    async def test_picked_node_id_is_forgotten_when_the_session_ends(self, hubs, monkeypatch):
+        import os
+        import main
+        monkeypatch.delenv("UAVCAN__NODE__ID")
+        session = main.CANSession()
+        await session._pick_node_id("socketcan:vcan0")
+        assert os.environ["UAVCAN__NODE__ID"] == "42"
+        await session.disconnect()
+        assert "UAVCAN__NODE__ID" not in os.environ
+
+    async def test_node_id_the_user_set_is_kept(self, hubs, monkeypatch):
+        import os
+        import main
+        session = main.CANSession()
+        await session._pick_node_id("socketcan:vcan0")
+        await session.disconnect()
+        assert os.environ["UAVCAN__NODE__ID"] == "7"
+
+    def test_another_node_on_cynitors_node_id_is_said_in_last_error(self):
+        import main
+        session = main.CANSession()
+        session._own_node_id_taken("Another node uses Cynitor's own node-ID 42")
+        assert session.last_error == "Another node uses Cynitor's own node-ID 42"
+
+
 class TestSessionHealth:
     """What the register loop's watchdog asks every few seconds."""
 

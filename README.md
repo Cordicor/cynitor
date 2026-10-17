@@ -229,7 +229,7 @@ And from the environment:
 |---|---|
 | `CYNITOR_AUTH_TOKEN` | The token the API and the event stream then ask for |
 | `CYNITOR_DATA_DIR` | The same as `--data-dir` |
-| `UAVCAN__NODE__ID` | Cynitor's own node-ID. Without it, Cynitor listens to heartbeats and takes a free one |
+| `UAVCAN__NODE__ID` | Cynitor's own node-ID. Without it, Cynitor listens to heartbeats on each connect and takes 127, else 126 (the two Cyphal leaves to tools, which allocators never give out), else another free one |
 
 ## Where data is kept
 
