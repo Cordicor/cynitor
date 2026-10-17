@@ -252,12 +252,18 @@ class ScannerRegisters:
             register_access_client = self._node.make_client(uavcan.register.Access_1_0, node_id, "register_access")
 
             # A register that is not named or not read, asked for twice, is
-            # passed over: the rest of the list is still worth showing.
+            # passed over: the rest of the list is still worth showing. Two
+            # in a row unanswered means the node has stopped answering.
+            misses = 0
             for index in range(self.MAX_REGISTERS):
+                if misses == self.MAX_UNANSWERED_INDEXES:
+                    break
                 try:
                     register_name = await self._register_name_at(register_list_client, node_id, index)
                     if register_name is None:
+                        misses += 1
                         continue
+                    misses = 0
                     if not register_name:
                         logging.debug(f"No more registers found for node_id={node_id} at index={index}")
                         break
@@ -266,13 +272,18 @@ class ScannerRegisters:
                     if register_data is not None:
                         registers.append(register_data)
                 except asyncio.TimeoutError:
+                    misses += 1
                     logging.error(f"Timeout on List_1_0 request for node_id={node_id}, index={index}")
                 except Exception as e:
                     logging.error(f"Error fetching register list for node_id={node_id} at index={index}: {str(e)}")
+            if misses == self.MAX_UNANSWERED_INDEXES and not registers:
+                raise TimeoutError(f"Node {node_id} does not answer register requests")
             if not registers:
                 logging.warning(f"No registers found for node_id={node_id}")
             return registers
 
+        except TimeoutError:
+            raise
         except Exception as e:
             logging.error(f"Critical error fetching registers for node_id={node_id}: {str(e)}")
             raise ValueError(f"Failed to fetch registers for node {node_id}: {str(e)}")

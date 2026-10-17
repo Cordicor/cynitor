@@ -204,7 +204,7 @@ const renderRegistersTab = async (force) => {
   if (!node || node.has_disappeared) {
     const regLabel = getNodeAlias(node?.unique_id) || node?.name || `Node ${nodeId}`;
     const cached = REG_CACHE.get(nodeId);
-    if (cached && cached !== 'error' && cached.length) {
+    if (Array.isArray(cached) && cached.length) {
       renderRegisterList(content, cached, nodeId);
       const panel = content.querySelector('.reg-panel');
       if (panel) {
@@ -220,10 +220,10 @@ const renderRegistersTab = async (force) => {
 
   if (!force && REG_CACHE.has(nodeId)) {
     const cached = REG_CACHE.get(nodeId);
-    if (cached === 'error') {
+    if (!Array.isArray(cached)) {
       content.innerHTML = svcStateMsg(
         '✕', `Failed to load registers for node ${nodeId}`,
-        'Could not reach the backend. Check your connection and try again.',
+        cached.error,
         '<button class="svc-btn svc-state-action reg-refresh-btn">Retry</button>'
       );
       content.querySelector('.reg-refresh-btn')?.addEventListener('click', () => {
@@ -239,7 +239,8 @@ const renderRegistersTab = async (force) => {
   content.innerHTML = svcStateMsg(
     '<span class="svc-spinner"></span>',
     `Fetching registers from node ${nodeId}…`,
-    '<span class="reg-progress-text">Reading all registers. This may take a moment.</span>'
+    '',
+    '<p class="svc-state-helper reg-progress-text">Reading all registers. This may take a moment.</p>'
   ) + svcSkeleton();
 
   const progressEl = content.querySelector('.reg-progress-text');
@@ -255,10 +256,16 @@ const renderRegistersTab = async (force) => {
     clearInterval(progressTimer);
     if (state.selectedNodeId !== nodeId || state.selectedDetailTab !== 'registers') return;
     REG_CACHE.set(nodeId, data.registers || []);
-  } catch {
+  } catch (e) {
     clearInterval(progressTimer);
     if (state.selectedNodeId !== nodeId || state.selectedDetailTab !== 'registers') return;
-    REG_CACHE.set(nodeId, 'error');
+    // A backend that answered says why (504: the node does not answer);
+    // otherwise the backend itself was not reached.
+    REG_CACHE.set(nodeId, {
+      error: e.data?.error
+        ? `${e.data.error}. Check that the node is powered and on this bus, then try again.`
+        : 'Could not reach the backend. Check your connection and try again.',
+    });
     renderRegistersTab();
     return;
   }

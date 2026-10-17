@@ -67,6 +67,7 @@ class ScannerNode(ScannerRegisters, ScannerServices):
     # A port-ID register's "unset" (register/384.Access): the port is inactive.
     UNSET_PORT_ID = 65535
     MAX_REGISTERS = 256
+    MAX_UNANSWERED_INDEXES = 2  # register list indexes in a row a node may not answer
     INFO_REFRESH_S = 60.0   # GetInfo refresh period once a node has answered
     INFO_RETRY_S = 10.0     # retry period while it has not
     NODE_ID_CONFLICT_REPORT_S = 60.0  # report a shared node-ID at most this often

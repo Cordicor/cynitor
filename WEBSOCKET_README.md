@@ -1017,7 +1017,10 @@ Response:
 }
 ```
 
-Returns `503` if CAN is not connected.
+Returns `503` if CAN is not connected, and `504` with `{"error": "Node 37 does
+not answer register requests"}` if the node answers none of the first two list
+indexes (asked twice each, a few seconds). The list ends at the first two indexes
+in a row that go unanswered.
 
 **Get node lifecycle history:**
 ```bash

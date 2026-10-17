@@ -785,6 +785,26 @@ async def _(page):
         await page.evaluate("e2eFeeds.rate1200 = 10")
 
 
+@test("Registers: a node that does not answer says so, not that the backend is unreachable")
+async def _(page):
+    async def silent_node(route):
+        await route.fulfill(status=504, json={"error": "Node 20 does not answer register requests"},
+                            headers={"Access-Control-Allow-Origin": "*"})
+    await page.route("**/api/registers/20", silent_node)
+    await page.evaluate("setSelectedNode(20)")
+    await page.locator('.detail-tab[data-tab="registers"]').click()
+    try:
+        await page.locator("#selectedNodeContent .reg-refresh-btn").wait_for(timeout=3000)
+        helper = page.locator("#selectedNodeContent .svc-state-helper")
+        text = await helper.inner_text()
+        assert text.startswith("Node 20 does not answer register requests."), f"Registers tab says: {text!r}"
+        assert "backend" not in text, f"Registers tab blames the backend: {text!r}"
+    finally:
+        await page.unroute("**/api/registers/20", silent_node)
+        await page.evaluate("REG_CACHE.clear()")
+        await page.locator('.detail-tab[data-tab="publishers"]').click()
+
+
 @test("Tables: offline nodes that lost their node-ID stay last; health sorts by severity")
 async def _(page):
     ids = "nodesTabulator.getRows('active').map(r => r.getData().id)"
