@@ -5,6 +5,8 @@ import math
 from collections import defaultdict
 from typing import Any, Optional
 
+from local_time import local_isoformat
+
 logger = logging.getLogger(__name__)
 
 
@@ -254,7 +256,7 @@ class TelemetryManager:
             if isinstance(item, datetime.datetime):
                 # With the server's UTC offset: a viewer in another timezone
                 # read a naive one as its own local time, hours off.
-                result.append(item.astimezone().isoformat())
+                result.append(local_isoformat(item))
             else:
                 result.append(str(item))
         return result
