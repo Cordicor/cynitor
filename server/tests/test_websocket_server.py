@@ -646,6 +646,20 @@ class TestWebSocket:
             assert "error" in resp
 
 
+class TestSecurityHeaders:
+    """No page may frame the dashboard, nor run a script it did not serve; no version banner (F-019)."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("path", ["/api/health", "/api"])
+    async def test_every_response_carries_them(self, client, path):
+        resp = await client.get(path)
+        csp = resp.headers.get("Content-Security-Policy", "")
+        assert "frame-ancestors 'none'" in csp and "script-src 'self';" in csp
+        assert resp.headers.get("X-Frame-Options") == "DENY"
+        assert resp.headers.get("X-Content-Type-Options") == "nosniff"
+        assert resp.headers.get("Server") == "Cynitor"
+
+
 class TestCORS:
 
     @pytest.mark.asyncio

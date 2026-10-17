@@ -89,10 +89,29 @@ class WebSocketServer(CanApi, RawLogsApi, TestNodesApi, FirmwareApi, NodesApi, R
         self.app = web.Application(middlewares=[
             self._auth_middleware, self._cors_middleware, self._dashboard_cache_middleware,
         ])
+        self.app.on_response_prepare.append(self._add_security_headers)
         self.runner: Optional[web.AppRunner] = None
         self._running = False
 
         self._setup_routes()
+
+    # What a page from this server may load and do. The dashboard has no inline
+    # script and no eval; its cards and Tabulator set style attributes; the
+    # graph exports through a blob: image; and its Backend URL may name another
+    # server, so it may connect anywhere. No page may frame it (click-jacking).
+    _CONTENT_SECURITY_POLICY = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
+                                "img-src 'self' data: blob:; font-src 'self' data:; "
+                                "connect-src 'self' http: https: ws: wss:; object-src 'none'; base-uri 'none'; "
+                                "form-action 'self'; frame-ancestors 'none'")
+
+    @classmethod
+    async def _add_security_headers(cls, request: web.Request, response: web.StreamResponse) -> None:
+        """Hardening on every response, before its headers go out; and no version banner."""
+        response.headers["Content-Security-Policy"] = cls._CONTENT_SECURITY_POLICY
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["Referrer-Policy"] = "no-referrer"
+        response.headers["Server"] = "Cynitor"
 
     @staticmethod
     def _is_protected_path(path: str) -> bool:
