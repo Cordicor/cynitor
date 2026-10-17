@@ -346,12 +346,10 @@ class WebSocketServer(CanApi, RawLogsApi, TestNodesApi, FirmwareApi, NodesApi, R
             capture_task = asyncio.create_task(self._capture_loop(ws))
 
             while not ws.closed:
-                telemetry = self.session.telemetry
-                replay = self.session.replay
-                source = telemetry if telemetry is not None else replay
+                source = self._event_source()
                 if source is not None:
                     queue = source.subscribe(max_queue=100)
-                    consume_task = asyncio.create_task(self._consume_and_send(ws, queue))
+                    consume_task = asyncio.create_task(self._consume_and_send(ws, queue, source))
                     done, pending = await asyncio.wait(
                         [consume_task, recv_task, metrics_task, capture_task],
                         return_when=asyncio.FIRST_COMPLETED
@@ -363,6 +361,12 @@ class WebSocketServer(CanApi, RawLogsApi, TestNodesApi, FirmwareApi, NodesApi, R
                                 "WebSocket subtask finished with exception",
                                 exc_info=(type(exc), exc, exc.__traceback__),
                             )
+                    if done == {consume_task} and consume_task.exception() is None and consume_task.result():
+                        # The session changed (CAN disconnected or connected
+                        # again): follow it on the same socket.
+                        source.unsubscribe(queue)
+                        queue = None
+                        continue
                     for task in pending:
                         task.cancel()
                         try:
@@ -425,12 +429,19 @@ class WebSocketServer(CanApi, RawLogsApi, TestNodesApi, FirmwareApi, NodesApi, R
     # any healthy peer's worst-case latency.
     _WS_SEND_TIMEOUT = 10.0
 
-    async def _consume_and_send(self, ws: web.WebSocketResponse, queue: asyncio.Queue) -> None:
+    def _event_source(self):
+        """What the stream comes from now: the CAN session's telemetry, else a replay, else nothing."""
+        return self.session.telemetry if self.session.telemetry is not None else self.session.replay
+
+    async def _consume_and_send(self, ws: web.WebSocketResponse, queue: asyncio.Queue, source=None) -> bool:
+        """Send ``queue``'s events to ``ws``. True once ``source`` is no longer the session's, to subscribe anew."""
         while self._running and not ws.closed:
             try:
-                event = await asyncio.wait_for(queue.get(), timeout=5.0)
+                event = await asyncio.wait_for(queue.get(), timeout=1.0)
             except asyncio.TimeoutError:
-                continue  # no events in the last 5s; loop back and re-check ws.closed
+                if source is not None and self._event_source() is not source:
+                    return True
+                continue  # no events in the last second; loop back and re-check ws.closed
             except asyncio.CancelledError:
                 break
 

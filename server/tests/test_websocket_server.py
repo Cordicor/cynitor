@@ -543,6 +543,47 @@ class TestWebSocket:
             assert resp["filter"]["subject_ids"] == [100]
 
     @pytest.mark.asyncio
+    async def test_the_stream_follows_a_new_can_session(self, client, session):
+        # A dashboard whose socket stayed open across a CAN disconnect and
+        # connect got nothing more: it stayed on the old session's telemetry (F-028).
+        class Source:
+            def __init__(self):
+                self.queues, self.gone = [], []
+
+            def subscribe(self, max_queue=100):
+                self.queues.append(asyncio.Queue())
+                return self.queues[-1]
+
+            def unsubscribe(self, queue):
+                self.gone.append(queue)
+
+        async def subscribed(source):
+            for _ in range(100):
+                if source.queues:
+                    return source.queues[-1]
+                await asyncio.sleep(0.05)
+            raise AssertionError("the stream never subscribed to the new session")
+
+        async def next_event(ws):
+            while True:
+                message = await asyncio.wait_for(ws.receive_json(), timeout=5)
+                if "subject_id" in message:
+                    return message
+
+        first, second = Source(), Source()
+        session.replay, session.telemetry = None, first
+        async with client.ws_connect("/ws") as ws:
+            (await subscribed(first)).put_nowait({"subject_id": 100, "publisher_node_id": 42})
+            got_first = await next_event(ws)
+            session.telemetry = None   # disconnected ...
+            await asyncio.sleep(1.5)
+            session.telemetry = second  # ... and connected again, within one status poll
+            (await subscribed(second)).put_nowait({"subject_id": 200, "publisher_node_id": 43})
+            got_second = await next_event(ws)
+        assert (got_first["subject_id"], got_second["subject_id"]) == (100, 200)
+        assert first.gone == first.queues
+
+    @pytest.mark.asyncio
     async def test_ws_invalid_json(self, client, session):
         session.telemetry = None
         async with client.ws_connect("/ws") as ws:
