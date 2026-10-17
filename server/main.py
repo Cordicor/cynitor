@@ -179,13 +179,18 @@ class BusLoadMonitor:
                 await self._task
             except asyncio.CancelledError:
                 pass
-        if self._proc:
-            self._proc.terminate()
+        # canbusload ends by itself when its interface goes (a USB adapter
+        # unplugged): terminating it then raises, and the session's teardown
+        # must not stop here.
+        if self._proc and self._proc.returncode is None:
             try:
+                self._proc.terminate()
                 await asyncio.wait_for(self._proc.wait(), timeout=2.0)
+            except ProcessLookupError:
+                pass
             except asyncio.TimeoutError:
                 self._proc.kill()
-            self._proc = None
+        self._proc = None
         self.utilization = None if self._disabled else 0.0
         logger.info("BusLoadMonitor stopped")
 
