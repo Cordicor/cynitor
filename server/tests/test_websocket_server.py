@@ -860,6 +860,20 @@ class TestSetRegister:
         assert data["value"] == "42"
 
     @pytest.mark.asyncio
+    async def test_a_register_write_is_written_to_the_nodes_history(self, client, session):
+        # It left no record that Cynitor changed the node (F-024).
+        session.is_running = True
+        session.scanner = MagicMock(set_register=AsyncMock(side_effect=[[True], None]),
+                                    _get_node_unique_id_hex=lambda node_id: None)
+        session.event_logger = MagicMock(log_node_event=AsyncMock())
+        await client.post("/api/registers/42/set", json={"name": "flag", "value": "1", "type": "bit"})
+        await client.post("/api/registers/42/set", json={"name": "flag", "value": "0", "type": "bit"})
+        assert [c.args for c in session.event_logger.log_node_event.await_args_list] == [
+            (42, "register_write", {"name": "flag", "value": "1", "read_back": "True", "status": "ok"}),
+            (42, "register_write", {"name": "flag", "value": "0", "status": "timeout"}),
+        ]
+
+    @pytest.mark.asyncio
     async def test_set_register_timeout(self, client, session):
         session.is_running = True
         scanner = MagicMock()

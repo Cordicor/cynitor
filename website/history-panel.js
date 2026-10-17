@@ -13,6 +13,8 @@ const HISTORY_EVENT_LABELS = {
   mode_change: 'Mode',
   port_change: 'Ports changed',
   service_call: 'Service call',
+  register_write: 'Register write',
+  firmware_update: 'Firmware update',
   got_node_id: 'Got node ID',
   lost_node_id: 'Lost node ID',
   node_id_conflict: 'Node-ID conflict',
@@ -29,6 +31,8 @@ const HISTORY_EVENT_CLS = {
   mode_change: 'hist-warn',
   port_change: 'hist-info',
   service_call: 'hist-muted',
+  register_write: 'hist-info',
+  firmware_update: 'hist-warn',
   got_node_id: 'hist-ok',
   lost_node_id: 'hist-err',
   node_id_conflict: 'hist-err',
@@ -61,6 +65,12 @@ const formatEventDetail = (evt) => {
       return `uptime ${d.old_uptime}s → ${d.new_uptime}s`;
     case 'service_call':
       return `svc ${d.service_id} · ${d.status} · ${d.latency_ms}ms`;
+    case 'register_write':
+      return escapeHtml(d.status === 'ok'
+        ? `${d.name} = ${d.value}${d.read_back !== d.value ? ` · read back ${d.read_back}` : ''}`
+        : `${d.name} = ${d.value} · no answer`);
+    case 'firmware_update':
+      return escapeHtml(`from ${d.file}`);
     case 'got_node_id':
     case 'lost_node_id':
       return `#${d.node_id}`;

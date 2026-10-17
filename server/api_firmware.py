@@ -74,4 +74,5 @@ class FirmwareApi:
             return web.json_response({"error": str(e)}, status=504)
         except RuntimeError as e:
             return web.json_response({"error": str(e)}, status=409)
+        await self._note_in_node_history(node_id, "firmware_update", {"file": name})
         return web.json_response(update)

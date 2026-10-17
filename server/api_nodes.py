@@ -171,17 +171,27 @@ class NodesApi:
         try:
             updated = await self.session.scanner.set_register(node_id, name, str(value), reg_type)
             if updated is None:
+                await self._note_in_node_history(node_id, "register_write", {
+                    "name": name, "value": str(value), "status": "timeout"})
                 return web.json_response({"error": "Write failed — no response from node"}, status=504)
             if isinstance(updated, list):
                 formatted = ', '.join(str(v) for v in updated)
             else:
                 formatted = str(updated)
+            await self._note_in_node_history(node_id, "register_write", {
+                "name": name, "value": str(value), "read_back": formatted, "status": "ok"})
             return web.json_response({"status": "ok", "name": name, "value": formatted})
         except ValueError as e:
             return web.json_response({"error": str(e)}, status=400)
         except Exception as e:
             logger.error(f"Error in POST /api/registers/{node_id}/set: {e}", exc_info=True)
             return web.json_response({"error": str(e)}, status=500)
+
+    async def _note_in_node_history(self, node_id: int, event_type: str, detail: dict) -> None:
+        """Record what Cynitor did to a node (a register write, a firmware update) in its history."""
+        if self.session.event_logger is not None:
+            uid = self.session.scanner._get_node_unique_id_hex(node_id) if self.session.scanner else None
+            await self.session.event_logger.log_node_event(node_id, event_type, detail, unique_id=uid)
 
     async def _call_service(self, request: web.Request) -> web.Response:
         """Invoke a service on a remote node and return the response."""

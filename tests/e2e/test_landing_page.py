@@ -236,6 +236,24 @@ async def _(page):
                     [["severity", "3", "3"], ["timestamp", "5", "5"]]], f"Cards: {card}"
 
 
+@test("History: Cynitor's register writes and firmware updates are rows of the node's history")
+async def _(page):
+    rows = await page.evaluate("""() => {
+        const div = document.createElement('div');
+        div.innerHTML = renderHistoryTimeline([
+            {timestamp_unix: Date.now() / 1000, event_type: 'register_write',
+             detail: {name: 'cordicor.test.bits', value: '1 0 1', read_back: 'true, false, true', status: 'ok'}},
+            {timestamp_unix: Date.now() / 1000, event_type: 'register_write',
+             detail: {name: 'limit', value: '<b>5</b>', status: 'timeout'}},
+            {timestamp_unix: Date.now() / 1000, event_type: 'firmware_update', detail: {file: 'motor-1.2.app.bin'}}]);
+        return [...div.querySelectorAll('.hist-row')].map((r) =>
+            [r.querySelector('.hist-badge').textContent, r.querySelector('.hist-detail').textContent]);
+    }""")
+    assert rows == [["Register write", "cordicor.test.bits = 1 0 1 · read back true, false, true"],
+                    ["Register write", "limit = <b>5</b> · no answer"],
+                    ["Firmware update", "from motor-1.2.app.bin"]], f"Rows: {rows}"
+
+
 @test("Log panel shows diagnostics' severity, in time order")
 async def _(page):
     await open_log_panel(page)
