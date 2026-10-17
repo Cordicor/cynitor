@@ -1447,7 +1447,7 @@ async def main(can_iface: Optional[str] = None, force_compile: bool = False, bin
                can_bitrate: Optional[int] = None, data_dir: Optional[str] = None,
                can_data_bitrate: Optional[int] = None, allocator: bool = False,
                decode_on_demand: bool = False, update_check: bool = True,
-               allow_any_interface: bool = False, listen_only: bool = False) -> None:
+               allow_any_interface: bool = False, listen_only: bool = False, access_log: bool = False) -> None:
     from websocket_server import WebSocketServer
     from dsdl_manager import DsdlManager
 
@@ -1493,6 +1493,7 @@ async def main(can_iface: Optional[str] = None, force_compile: bool = False, bin
         adapter_catalog=adapter_catalog,
     )
     ws_server.allow_any_interface = allow_any_interface
+    ws_server.access_log = access_log
     await ws_server.start()
     if update_check and os.environ.get(DISABLE_UPDATE_CHECK_ENV, "").strip() not in ("1", "true", "yes"):
         ws_server.update_check = UpdateCheck(__version__)
@@ -1523,23 +1524,7 @@ async def main(can_iface: Optional[str] = None, force_compile: bool = False, bin
     else:
         logger.info("Mode:        selection  (waiting for the UI or POST /api/can/connect)")
     logger.info("-" * 60)
-    logger.info("Startup options:")
-    logger.info("  --can <iface>    attach to a CAN interface at startup (e.g. vcan0, can0, gs_usb:0, pcan:PCAN_USBBUS1,")
-    logger.info("                   or sim:classic / sim:fd, a simulated bus with demo devices)")
-    logger.info("  --bitrate <n>    bus speed in bit/s; required with --can for any adapter except SocketCAN")
-    logger.info("  --data-bitrate <n>  CAN FD data-phase speed; opens PCAN/Kvaser/Vector/IXXAT/gs_usb/slcan as CAN FD")
-    logger.info("  --allocator      give plug-and-play nodes their node-IDs; only for a bus with no allocator of its own")
-    logger.info("  --decode-on-demand  decode only the subjects watched or recorded; for a bus too busy to decode whole")
-    logger.info("  --listen-only    watch the bus without sending anything (no node names or registers then)")
-    logger.info("  --bind <host>    bind HTTP server to <host>  (default 127.0.0.1; 0.0.0.0 to expose on the network)")
-    logger.info("  --port <n>       listen on <n> instead of 8080")
-    logger.info("  --data-dir <dir> keep history, recordings and raw logs in <dir>")
-    logger.info("  --recompile      force DSDL recompilation via nnvg")
-    logger.info("  --no-frontend    serve only the API and WebSocket, not the dashboard")
-    logger.info("  --no-update-check  do not ask GitHub whether a newer release is out")
-    logger.info("  --allow-any-interface  let the API open any python-can interface, not only CAN adapters")
-    logger.info("  --insecure-no-auth  allow --bind beyond loopback without CYNITOR_AUTH_TOKEN")
-    logger.info("  --help           full reference")
+    logger.info("Options:     --help lists them")
     if not can_iface:
         logger.info("Selection-mode startup (no --can): connect from the UI or POST /api/can/connect")
     logger.info("=" * 60)
@@ -1745,6 +1730,11 @@ if __name__ == "__main__":
         help="Serve only the REST API and WebSocket; do not serve the dashboard",
     )
     parser.add_argument(
+        "--access-log",
+        action="store_true",
+        help="Log every HTTP request (a dashboard makes a few a second); off by default",
+    )
+    parser.add_argument(
         "--listen-only",
         action="store_true",
         help="Watch the bus without sending anything: no node-ID, heartbeat or requests, so node names "
@@ -1803,6 +1793,7 @@ if __name__ == "__main__":
             update_check=not args.no_update_check,
             allow_any_interface=args.allow_any_interface,
             listen_only=args.listen_only,
+            access_log=args.access_log,
         ))
     except KeyboardInterrupt:
         logger.info("Interrupted by user")

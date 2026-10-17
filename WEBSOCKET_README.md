@@ -169,21 +169,11 @@ Health:      http://localhost:8080/api/health
 Status:      http://localhost:8080/api/status
 Mode:        selection  (waiting for the UI or POST /api/can/connect)
 ------------------------------------------------------------
-Startup options:
-  --can <iface>    attach to a CAN interface at startup (e.g. vcan0, can0, gs_usb:0, pcan:PCAN_USBBUS1)
-  --bitrate <n>    bus speed in bit/s; required with --can for any adapter except SocketCAN
-  --data-bitrate <n>  CAN FD data-phase speed; opens PCAN/Kvaser/Vector/IXXAT/gs_usb/slcan as CAN FD
-  --allocator      give plug-and-play nodes their node-IDs; only for a bus with no allocator of its own
-  --decode-on-demand  decode only the subjects watched or recorded; for a bus too busy to decode whole
-  --bind <host>    bind HTTP server to <host>  (default 127.0.0.1; 0.0.0.0 to expose on the network)
-  --port <n>       listen on <n> instead of 8080
-  --data-dir <dir> keep history, recordings and raw logs in <dir>
-  --recompile      force DSDL recompilation via nnvg
-  --help           full reference
+Options:     --help lists them
 ============================================================
 ```
 
-In direct mode (`--can <iface>`) the `Mode:` line reads `direct (attached to <iface> at startup)` and the block ends with a hint pointing back at selection mode. When `--bind 0.0.0.0` is passed, an additional `WARNING` line is emitted before the tips block to make the network-exposed posture obvious.
+In direct mode (`--can <iface>`) the `Mode:` line reads `direct (attached to <iface> at startup)` and the block ends with a hint pointing back at selection mode. A bind beyond loopback is refused without a token unless `--insecure-no-auth` is given, and then a `WARNING` line says so. HTTP requests are not logged unless the server runs with `--access-log`.
 
 ## Usage
 

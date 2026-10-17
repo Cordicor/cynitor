@@ -243,6 +243,7 @@ topics to v1.0 subject-IDs on the device (`name#1234`).
 | `--insecure-no-auth` | Allow a `--bind` beyond loopback without a token, on a network you trust |
 | `--allow-any-interface` | Let the dashboard open any python-can interface, not only the CAN adapters Cynitor knows |
 | `--no-update-check` | Do not ask GitHub whether a newer release is out |
+| `--access-log` | Log every HTTP request; off by default, as a dashboard makes a few a second |
 | `--port <n>` | Listen on `<n>`. Default 8080 |
 | `--data-dir <dir>` | Keep the data in `<dir>` |
 | `--no-frontend` | Serve only the API and the WebSocket, not the dashboard |

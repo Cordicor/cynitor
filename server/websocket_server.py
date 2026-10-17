@@ -79,6 +79,7 @@ class WebSocketServer(CanApi, RawLogsApi, TestNodesApi, FirmwareApi, NodesApi, R
         self.cpu = ProcessCpu()  # the server's own CPU use, for the dashboard
         self.update_check = None  # update_check.UpdateCheck, unless turned off (main sets it)
         self.allow_any_interface = False  # --allow-any-interface: a request may open any python-can interface
+        self.access_log = False  # --access-log: log every HTTP request
         self.client_filters: dict[web.WebSocketResponse, dict[str, Any]] = {}
         # Clients that opted into the raw frame-capture stream → their per-client
         # subscriber queue on the FrameCaptureManager. Empty unless a Debugging
@@ -319,7 +320,8 @@ class WebSocketServer(CanApi, RawLogsApi, TestNodesApi, FirmwareApi, NodesApi, R
     async def start(self) -> None:
         """Start the WebSocket server."""
         try:
-            self.runner = web.AppRunner(self.app)
+            # A line per request is a few a second per open dashboard: only when asked for.
+            self.runner = web.AppRunner(self.app, **({} if self.access_log else {"access_log": None}))
             await self.runner.setup()
             site = web.TCPSite(self.runner, self.host, self.port)
             await site.start()
