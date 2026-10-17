@@ -1,6 +1,7 @@
 """Tests for raw CAN logs: the candump file, the session's start/stop, and /api/rawlogs."""
 
 import datetime
+import json
 import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
@@ -276,6 +277,18 @@ class TestSidecar:
 
     def test_missing_sidecar_reads_empty(self, tmp_path):
         assert read_sidecar(_log_with(tmp_path, [_heartbeat(50, 0)])) == {}
+
+    @pytest.mark.parametrize("written, kept", [
+        # A "publishers" that is no object left a session that never played (F-048).
+        ({"publishers": ["oops"], "names": {"50": "x"}}, {"publishers": {}, "names": {"50": "x"}}),
+        ({"publishers": {"50": {"1620": 7, "1621": "T_1_0"}, "x": {}}}, {"publishers": {"50": {"1621": "T_1_0"}}}),
+        ({"bitrate": "fast", "fd": "yes", "own_node_id": -3, "data_bitrate": 2000000}, {"data_bitrate": 2000000}),
+        (["a", "list"], {}),
+    ])
+    def test_what_does_not_fit_is_left_out(self, tmp_path, written, kept):
+        path = _log_with(tmp_path, [_heartbeat(50, 0)])
+        sidecar_path(path).write_text(json.dumps(written))
+        assert read_sidecar(path) == kept
 
     def test_fd_frames_detected(self, tmp_path):
         classic = _log_with(tmp_path, [_heartbeat(50, 0)])

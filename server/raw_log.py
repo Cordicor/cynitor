@@ -155,11 +155,39 @@ def write_sidecar(log: Path, info: dict) -> None:
 
 
 def read_sidecar(log: Path) -> dict:
-    """The sidecar of ``log``, or an empty one (logs from before sidecars, or a lost file)."""
+    """The sidecar of ``log``, or an empty one (logs from before sidecars, or a lost file).
+
+    Only what fits the shape Cynitor writes is kept: an edited or damaged
+    sidecar made playback fail half-way, leaving a session that never played.
+    """
     try:
-        return json.loads(sidecar_path(log).read_text(encoding="utf-8"))
+        info = json.loads(sidecar_path(log).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {}
+    if not isinstance(info, dict):
+        return {}
+    kept: dict = {}
+    for key in ("bitrate", "data_bitrate", "own_node_id"):
+        if isinstance(info.get(key), int) and not isinstance(info[key], bool) and info[key] >= 0:
+            kept[key] = info[key]
+    if isinstance(info.get("fd"), bool):
+        kept["fd"] = info["fd"]
+    for key in ("publishers", "servers"):
+        if key in info:
+            kept[key] = _port_types(info[key])
+    if isinstance(info.get("names"), dict):
+        kept["names"] = {str(k): v for k, v in info["names"].items() if str(k).isdigit() and isinstance(v, str)}
+    if any(key not in kept or kept[key] != info[key] for key in info if key != "version"):
+        logger.warning("Raw log %s: its sidecar has entries that do not fit; they are ignored", log.name)
+    return kept
+
+
+def _port_types(value: object) -> dict:
+    """{node-ID: {port-ID: type name}}, as a sidecar keeps them, without what is not."""
+    if not isinstance(value, dict):
+        return {}
+    return {str(node): {str(port): name for port, name in ports.items() if str(port).isdigit() and isinstance(name, str)}
+            for node, ports in value.items() if str(node).isdigit() and isinstance(ports, dict)}
 
 
 def log_has_fd_frames(log: Path) -> bool:

@@ -891,7 +891,7 @@ class CANSession:
         own = os.environ.get("UAVCAN__NODE__ID")
         return {
             "version": 1,
-            "own_node_id": int(own) if own and own.isdigit() else None,
+            "own_node_id": int(own) if own and own.isdigit() and int(own) <= 127 else None,  # not listening only
             "bitrate": self.can_bitrate,
             "data_bitrate": self.can_data_bitrate,
             "fd": self.can_fd,
@@ -920,14 +920,18 @@ class CANSession:
             f"rawlog:{name}", bitrate=bitrate, data_bitrate=data_bitrate, offline=info,
             open_bus=lambda _spec, _bitrate, _data_bitrate: player,
         )
-        # Decode every subject the sidecar names from the first frame on,
-        # rather than once each node has registered, which may be too late.
-        for node_id, subjects in info.get("publishers", {}).items():
-            try:
-                await self.scanner.add_subscriptions(int(node_id), {int(s): t for s, t in subjects.items()})
-            except Exception as exc:  # e.g. a custom type that is no longer compiled
-                logger.warning("Raw log %s: cannot decode node %s's subjects: %s", name, node_id, exc)
-        player.play()
+        try:
+            # Decode every subject the sidecar names from the first frame on,
+            # rather than once each node has registered, which may be too late.
+            for node_id, subjects in info.get("publishers", {}).items():
+                try:
+                    await self.scanner.add_subscriptions(int(node_id), {int(s): t for s, t in subjects.items()})
+                except Exception as exc:  # e.g. a custom type that is no longer compiled
+                    logger.warning("Raw log %s: cannot decode node %s's subjects: %s", name, node_id, exc)
+            player.play()
+        except BaseException:
+            await self.disconnect()  # a session that would never play is not left running
+            raise
 
     def rescan_registrations(self) -> None:
         """Force the register loop to re-attempt every appeared node on its next tick.
