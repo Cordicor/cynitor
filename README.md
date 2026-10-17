@@ -171,7 +171,7 @@ An adapter that is not found can be named, with `--can` or under **Other…**:
 | Kvaser, Vector, IXXAT | `kvaser:<channel>`, `vector:<channel>`, `ixxat:<channel>` | Yes |
 | CANable, candleLight firmware | `gs_usb:0`. On Linux it is a SocketCAN interface | If its firmware does CAN FD; a CANable 1.0's does not |
 | CANable, slcan firmware | `slcan:COM5@115200`. On Linux, `slcan:/dev/ttyACM0` with no `slcand` attached | CANable 2.0, at 2 or 5 Mbit/s only |
-| Anything else python-can drives | `<interface>:<channel>` | No |
+| Anything else python-can drives | `<interface>:<channel>`; from the dashboard only if the server runs with `--allow-any-interface` | No |
 | The [simulated bus](#try-it-without-hardware), no hardware | `sim:classic`, `sim:fd`; listed on every system | `sim:fd` |
 
 A name with a `:` in it is passed on as it is, without being checked against

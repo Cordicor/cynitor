@@ -8,7 +8,7 @@ from aiohttp import web
 
 from api_helpers import logger
 from bus_errors import BusErrors
-from can_config import is_explicit_spec, is_socketcan, resolve_bitrate, resolve_data_bitrate, socketcan_device
+from can_config import api_interface_error, is_explicit_spec, is_socketcan, resolve_bitrate, resolve_data_bitrate, socketcan_device
 from cyphal_v11 import V11Traffic
 
 
@@ -100,6 +100,9 @@ class CanApi:
         allocator = payload.get("allocator")
         if allocator is not None and not isinstance(allocator, bool):
             return web.json_response({"error": "Field 'allocator' must be true or false"}, status=400)
+
+        if is_explicit_spec(iface) and not self.allow_any_interface and (refused := api_interface_error(iface)):
+            return web.json_response({"error": refused}, status=400)
 
         if self.session.is_running:
             return web.json_response({"error": "Already connected"}, status=409)

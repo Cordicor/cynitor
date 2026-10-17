@@ -128,6 +128,17 @@ class TestStatus:
 class TestCANConnect:
 
     @pytest.mark.asyncio
+    async def test_connect_refuses_an_interface_cynitor_does_not_know(self, client, server, session):
+        body = {"interface": "slcan:/dev/pts/3@115200", "bitrate": 500000}
+        refused = await client.post("/api/can/connect", json=body)
+        assert refused.status == 400 and "not a serial port name" in (await refused.json())["error"]
+        session.connect.assert_not_awaited()
+        server.allow_any_interface = True  # --allow-any-interface
+        allowed = await client.post("/api/can/connect", json=body)
+        assert allowed.status == 200
+        session.connect.assert_awaited_once()
+
+    @pytest.mark.asyncio
     async def test_connect_missing_interface_field(self, client):
         resp = await client.post("/api/can/connect", json={})
         assert resp.status == 400

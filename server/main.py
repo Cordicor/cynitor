@@ -1401,7 +1401,8 @@ async def main(can_iface: Optional[str] = None, force_compile: bool = False, bin
                port: int = 8080, serve_frontend: bool = True,
                can_bitrate: Optional[int] = None, data_dir: Optional[str] = None,
                can_data_bitrate: Optional[int] = None, allocator: bool = False,
-               decode_on_demand: bool = False, update_check: bool = True) -> None:
+               decode_on_demand: bool = False, update_check: bool = True,
+               allow_any_interface: bool = False) -> None:
     from websocket_server import WebSocketServer
     from dsdl_manager import DsdlManager
 
@@ -1443,6 +1444,7 @@ async def main(can_iface: Optional[str] = None, force_compile: bool = False, bin
         website_dir=(project_root / "website") if serve_frontend else None,
         adapter_catalog=adapter_catalog,
     )
+    ws_server.allow_any_interface = allow_any_interface
     await ws_server.start()
     if update_check and os.environ.get(DISABLE_UPDATE_CHECK_ENV, "").strip() not in ("1", "true", "yes"):
         ws_server.update_check = UpdateCheck(__version__)
@@ -1484,6 +1486,7 @@ async def main(can_iface: Optional[str] = None, force_compile: bool = False, bin
     logger.info("  --recompile      force DSDL recompilation via nnvg")
     logger.info("  --no-frontend    serve only the API and WebSocket, not the dashboard")
     logger.info("  --no-update-check  do not ask GitHub whether a newer release is out")
+    logger.info("  --allow-any-interface  let the API open any python-can interface, not only CAN adapters")
     logger.info("  --help           full reference")
     if not can_iface:
         logger.info("Selection-mode startup (no --can): connect from the UI or POST /api/can/connect")
@@ -1686,6 +1689,12 @@ if __name__ == "__main__":
         help="Serve only the REST API and WebSocket; do not serve the dashboard",
     )
     parser.add_argument(
+        "--allow-any-interface",
+        action="store_true",
+        help="Let the dashboard and API open any python-can interface, not only the CAN adapters "
+             "Cynitor knows; python-can also has network and serial back-ends",
+    )
+    parser.add_argument(
         "--no-update-check",
         action="store_true",
         help="Do not ask GitHub, at start and once a day, whether a newer release is out "
@@ -1720,6 +1729,7 @@ if __name__ == "__main__":
             allocator=args.allocator,
             decode_on_demand=args.decode_on_demand,
             update_check=not args.no_update_check,
+            allow_any_interface=args.allow_any_interface,
         ))
     except KeyboardInterrupt:
         logger.info("Interrupted by user")
