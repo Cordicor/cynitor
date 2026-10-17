@@ -172,6 +172,7 @@ class NodesApi:
         if not name or value is None or not reg_type:
             return web.json_response({"error": "Missing required fields: name, value, type"}, status=400)
 
+        from scanner_registers import RegisterNotApplied  # imports the compiled DSDL, ready once connected
         try:
             updated = await self.session.scanner.set_register(node_id, name, str(value), reg_type)
             if updated is None:
@@ -185,6 +186,10 @@ class NodesApi:
             await self._note_in_node_history(node_id, "register_write", {
                 "name": name, "value": str(value), "read_back": formatted, "status": "ok"})
             return web.json_response({"status": "ok", "name": name, "value": formatted})
+        except RegisterNotApplied as e:
+            await self._note_in_node_history(node_id, "register_write", {
+                "name": name, "value": str(value), "status": "not_applied"})
+            return web.json_response({"error": str(e)}, status=409)
         except ValueError as e:
             return web.json_response({"error": str(e)}, status=400)
         except Exception as e:

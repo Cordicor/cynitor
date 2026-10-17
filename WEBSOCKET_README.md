@@ -1148,7 +1148,7 @@ Response (success):
 {"status": "ok", "name": "uavcan.node.id", "value": "42"}
 ```
 
-Returns `400` if required fields (`name`, `value`, `type`) are missing, the register is read-only, or the type is incompatible. Returns `503` if CAN is not connected.
+A number given for a register of another numeric type is converted to the register's type before it is sent. Returns `400` if required fields (`name`, `value`, `type`) are missing, the register is read-only, or the type is incompatible; `409` if the node answered with another value than the one written (it kept its own, as Cyphal allows; the error names what it holds), compared in the register's own precision; `504` if the node did not answer. Returns `503` if CAN is not connected.
 
 ### Recordings (`/api/recordings*`)
 

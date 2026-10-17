@@ -18,6 +18,10 @@ import uavcan.primitive
 import uavcan.register
 
 
+class RegisterNotApplied(Exception):
+    """A register write the node answered with another value than the one sent: it kept its own."""
+
+
 class ScannerRegisters:
     """The register part of ScannerNode, which has the pycyphal node (``_node``),
     the limits (REGISTER_TIMEOUT, MAX_REGISTERS, ...) and the type-name helpers these use."""
@@ -398,6 +402,9 @@ class ScannerRegisters:
                 raise ValueError(f"Register '{register_name}' is read-only")
 
             self._check_register_type(reg_type, current_field_name)
+            # A number for a number register goes as the register's own type: one
+            # of another type the node may keep its value for, as Cyphal allows.
+            reg_type = current_field_name
             self._check_register_range(reg_type, value)
             access_request.value = self._register_value(reg_type, value)
 
@@ -415,6 +422,9 @@ class ScannerRegisters:
             elif updated_value is None:
                 updated_value = "N/A"
 
+            if not self._holds(reg_type, value, updated_value):
+                raise RegisterNotApplied(f"Node {node_id} did not take the value: '{register_name}' holds "
+                                         f"{self._format_register_value(np.array(updated_value)) if isinstance(updated_value, list) else updated_value}")
             logging.info(f"Successfully set register '{register_name}' on node_id={node_id} to '{updated_value}' (type: {updated_field_name})")
             return updated_value
 
@@ -443,6 +453,28 @@ class ScannerRegisters:
         'real16': (-65504, 65504),
         'real32': (-3.4028235e+38, 3.4028235e+38),
     }
+
+    # The precision a numeric register holds its values in, to compare what was
+    # written with what the node reads back: 0.1 as real32 reads back 0.100000001.
+    _DTYPE_OF = {'real16': np.float16, 'real32': np.float32, 'real64': np.float64, 'bit': np.bool_}
+
+    def _holds(self, reg_type: str, written: str, read_back: Any) -> bool:
+        """Whether ``read_back`` (as set_register reports it) is the value ``written`` (as typed) was sent as."""
+        if reg_type == 'string':
+            return read_back == written
+        if reg_type == 'unstructured':
+            return str(read_back).lower() == bytes.fromhex(written).hex()
+        if reg_type == 'bit' or reg_type in self._NUMBER_OF:
+            sent = self._register_value(reg_type, written)
+            sent_values = list(getattr(sent, reg_type).value)
+            back = read_back if isinstance(read_back, list) else [read_back]
+            dtype = self._DTYPE_OF.get(reg_type, np.int64 if reg_type.startswith('integer') else np.uint64)
+            try:
+                return len(back) == len(sent_values) and bool(np.all(
+                    np.array(sent_values, dtype=dtype) == np.array(back, dtype=dtype)))
+            except (TypeError, ValueError, OverflowError):
+                return False
+        return True  # 'empty': nothing to compare
 
     def _check_register_type(self, reg_type: str, current_field_name: str) -> None:
         """ValueError unless a value of ``reg_type`` may go to a register that holds ``current_field_name``:
