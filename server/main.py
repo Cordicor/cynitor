@@ -1725,3 +1725,6 @@ if __name__ == "__main__":
         logger.info("Interrupted by user")
     except Exception as e:
         logger.error(f"Unexpected error: {e}", exc_info=True)
+        # A failed start (the port taken, an address not there yet) must not
+        # read as success: systemd's Restart=on-failure, scripts and CI go by it.
+        sys.exit(1)

@@ -232,3 +232,17 @@ def _wait_for_exit(pid, timeout):
             return
         time.sleep(0.1)
     raise AssertionError(f"server pid {pid} outlived its parent")
+
+
+class TestFailedStart:
+    def test_a_port_taken_exits_with_failure(self, tmp_path):
+        # It exited 0, which systemd's Restart=on-failure takes for success (F-013).
+        import socket
+        with socket.socket() as taken:
+            taken.bind(("127.0.0.1", 0))
+            taken.listen()
+            port = taken.getsockname()[1]
+            result = subprocess.run(
+                [sys.executable, "main.py", "--port", str(port), "--data-dir", str(tmp_path), "--no-update-check"],
+                cwd=Path(main.__file__).parent, capture_output=True, text=True, timeout=60)
+        assert result.returncode == 1, result.stderr[-500:]
