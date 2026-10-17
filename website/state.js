@@ -69,6 +69,7 @@ const state = {
   _watchedSent: null,  // the subjects last told to the server as watched, as sent; null: none yet
   lastWsMessageMs: 0,
   busUtilization: null,
+  update: null,          // a newer release, {version, url}, from /api/status
   droppedEvents: null,   // {scanner, logger, clients} from /api/status, null when not on CAN
   busLoadHistory: [],
   _busFullArmed: true,

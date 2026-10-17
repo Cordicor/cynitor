@@ -314,6 +314,15 @@ class TestCANConnectSpecsAndBitrate:
         assert (await resp.json())["server_cpu"] == 42.5
 
     @pytest.mark.asyncio
+    async def test_status_reports_a_newer_release(self, client, server, session):
+        with patch("main.discover_can_interfaces", return_value=[]):
+            unchecked = (await (await client.get("/api/status")).json())["update"]
+            newer = {"version": "1.4.0", "url": "https://github.com/OpenCyphal-Garage/cynitor/releases/tag/v1.4.0"}
+            server.update_check = MagicMock(available=newer)
+            found = (await (await client.get("/api/status")).json())["update"]
+        assert (unchecked, found) == (None, newer)
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize("bitrate", [0, 5_000_000, "500000", True])
     async def test_rejects_invalid_bitrate(self, client, session, bitrate):
         resp = await client.post(

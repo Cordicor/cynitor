@@ -857,6 +857,8 @@ const pollStatus = async () => {
   state.allocatorStatus = data.allocator ?? null;
   state.serverCpu = data.server_cpu ?? state.serverCpu;
   state.decodeOnDemand = data.decode_on_demand === true;
+  state.update = data.update ?? null;
+  renderVersionTag();
 
   const backendCanRunning = data.status === 'running' && !!data.can_interface;
 

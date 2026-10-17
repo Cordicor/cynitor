@@ -52,6 +52,8 @@ class CanApi:
             "server_cpu": self.cpu.read(),
             # Whether only the subjects watched or recorded are decoded (POST /api/decoding).
             "decode_on_demand": self.session.decode_on_demand,
+            # A newer release, {"version", "url"}, if the update check found one; else None.
+            "update": self.update_check.available if self.update_check is not None else None,
         })
 
     async def _set_decoding(self, request: web.Request) -> web.Response:

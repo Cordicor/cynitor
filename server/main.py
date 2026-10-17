@@ -42,6 +42,7 @@ from raw_log import (RAW_LOG_DIR, LogPlayer, RawLog, SocketcanTap, log_has_fd_fr
 from simulation import SimulatedBus
 from testnodes import TestNodeBus, TestNodeManager
 from transfer_rates import TransferRates
+from update_check import DISABLE_ENV as DISABLE_UPDATE_CHECK_ENV, UpdateCheck
 from type_guess import load_candidates, rank_types
 from startup_setup import ensure_libusb_on_path, prepare_runtime, resolve_project_root
 from version import __version__
@@ -1398,7 +1399,7 @@ async def main(can_iface: Optional[str] = None, force_compile: bool = False, bin
                port: int = 8080, serve_frontend: bool = True,
                can_bitrate: Optional[int] = None, data_dir: Optional[str] = None,
                can_data_bitrate: Optional[int] = None, allocator: bool = False,
-               decode_on_demand: bool = False) -> None:
+               decode_on_demand: bool = False, update_check: bool = True) -> None:
     from websocket_server import WebSocketServer
     from dsdl_manager import DsdlManager
 
@@ -1441,6 +1442,9 @@ async def main(can_iface: Optional[str] = None, force_compile: bool = False, bin
         adapter_catalog=adapter_catalog,
     )
     await ws_server.start()
+    if update_check and os.environ.get(DISABLE_UPDATE_CHECK_ENV, "").strip() not in ("1", "true", "yes"):
+        ws_server.update_check = UpdateCheck(__version__)
+        ws_server.update_check.start()
 
     logger.info("=" * 60)
     logger.info("SERVER RUNNING")
@@ -1477,6 +1481,7 @@ async def main(can_iface: Optional[str] = None, force_compile: bool = False, bin
     logger.info("  --data-dir <dir> keep history, recordings and raw logs in <dir>")
     logger.info("  --recompile      force DSDL recompilation via nnvg")
     logger.info("  --no-frontend    serve only the API and WebSocket, not the dashboard")
+    logger.info("  --no-update-check  do not ask GitHub whether a newer release is out")
     logger.info("  --help           full reference")
     if not can_iface:
         logger.info("Selection-mode startup (no --can): connect from the UI or POST /api/can/connect")
@@ -1496,6 +1501,8 @@ async def main(can_iface: Optional[str] = None, force_compile: bool = False, bin
         logger.info("Cleanup starting...")
         if session.is_running:
             await session.disconnect()
+        if ws_server.update_check is not None:
+            await ws_server.update_check.stop()
         await ws_server.stop()
         logger.info("Shutdown complete")
 
@@ -1676,6 +1683,12 @@ if __name__ == "__main__":
         action="store_true",
         help="Serve only the REST API and WebSocket; do not serve the dashboard",
     )
+    parser.add_argument(
+        "--no-update-check",
+        action="store_true",
+        help="Do not ask GitHub, at start and once a day, whether a newer release is out "
+             f"(or set {DISABLE_UPDATE_CHECK_ENV}=1)",
+    )
     args = parser.parse_args()
     if args.can:
         # Refuse up front rather than start and fall back to selection mode:
@@ -1704,6 +1717,7 @@ if __name__ == "__main__":
             can_data_bitrate=args.data_bitrate,
             allocator=args.allocator,
             decode_on_demand=args.decode_on_demand,
+            update_check=not args.no_update_check,
         ))
     except KeyboardInterrupt:
         logger.info("Interrupted by user")

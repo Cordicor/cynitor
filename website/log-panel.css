@@ -862,6 +862,17 @@
   letter-spacing: 0.1em;
 }
 
+.version-update {
+  margin-left: 0.5rem;
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.version-update:hover,
+.version-update:focus-visible {
+  text-decoration: underline;
+}
+
 /* The wordmark is dark blue, invisible on the dark sidebar: invert it and turn
    the hue back, which keeps the orange stroke orange. */
 [data-theme="dark"] .cyphal-logo {

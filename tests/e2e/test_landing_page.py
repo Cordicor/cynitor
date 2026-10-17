@@ -5666,6 +5666,7 @@ class _SidebarServer:
         self.token = None          # the CYNITOR_AUTH_TOKEN it wants, if any
         self.connect_delay = 0     # seconds a CAN connect takes
         self.bus_errors = None     # what it says of errors on the bus, while connected
+        self.update = None         # a newer release its update check found
         self.connect_body = None   # what the last CAN connect asked for
         self.allocator = None      # what it says of its node-ID allocator, while it runs one
         self.decode_on_demand = False  # whether it decodes only what is watched or recorded
@@ -5690,7 +5691,7 @@ class _SidebarServer:
                       "last_error": self.last_error, "cyphal_v11": None,
                       "bus_errors": self.bus_errors if self.can else None,
                       "allocator": self.allocator if self.can else None,
-                      "decode_on_demand": self.decode_on_demand}
+                      "decode_on_demand": self.decode_on_demand, "update": self.update}
         elif path == "/api/decoding" and self.decoding_error:
             await route.fulfill(json={"error": self.decoding_error}, status=500,
                                 headers={"Access-Control-Allow-Origin": "*"})
@@ -5817,6 +5818,33 @@ async def _(page):
         assert "120 Ω at each end" in title and "TX 0, RX 128" in title, f"Its title: {title}"
         assert (during, after) == ("semaphore warn", "semaphore ok"), f"The dot with errors, then without: {during}, {after}"
     finally:
+        await sidebar_close(page, server)
+
+
+@test("Sidebar: a newer release the server found is a link by the version, to its release page")
+async def _(page):
+    server = _SidebarServer()
+    page_url = "https://github.com/OpenCyphal-Garage/cynitor/releases/tag/v9.1.0"
+    await sidebar_open(page, server)
+    try:
+        await page.locator("#connectDashboardBtn").click()
+        await page.wait_for_function("state.dashboardConnected", timeout=WAIT_MS)
+        none = await page.locator("#versionTag .version-update").count()
+        server.update = {"version": "9.1.0", "url": page_url}
+        await page.evaluate("pollStatus()")
+        link = page.locator("#versionTag .version-update")
+        await link.wait_for(state="visible", timeout=WAIT_MS)
+        found = (await link.inner_text(), await link.get_attribute("href"), await link.get_attribute("target"))
+        if os.environ.get("CYNITOR_E2E_SHOTS"):  # a folder to see the footer in
+            await page.locator(".sidebar-footer").screenshot(path=os.path.join(os.environ["CYNITOR_E2E_SHOTS"], "version-update.png"))
+        server.update = {"version": "9.2.0", "url": "https://example.com/x"}  # only the project's own release pages
+        await page.evaluate("pollStatus()")
+        foreign = await link.count()
+        assert (none, found, foreign) == (0, ("v9.1.0 available", page_url, "_blank"), 0), \
+            f"Before: {none}; found: {found}; a link off the project: {foreign}"
+    finally:
+        server.update = None
+        await page.evaluate("state.update = null; renderVersionTag()")
         await sidebar_close(page, server)
 
 

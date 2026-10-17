@@ -76,6 +76,7 @@ class WebSocketServer(CanApi, RawLogsApi, TestNodesApi, FirmwareApi, NodesApi, R
         # Client management
         self.clients: Set[web.WebSocketResponse] = set()
         self.cpu = ProcessCpu()  # the server's own CPU use, for the dashboard
+        self.update_check = None  # update_check.UpdateCheck, unless turned off (main sets it)
         self.client_filters: dict[web.WebSocketResponse, dict[str, Any]] = {}
         # Clients that opted into the raw frame-capture stream → their per-client
         # subscriber queue on the FrameCaptureManager. Empty unless a Debugging

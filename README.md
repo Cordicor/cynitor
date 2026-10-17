@@ -50,6 +50,10 @@ No Python needed. Take the file for your system from the
   Kvaser, Vector and IXXAT adapters need their vendor's driver. Windows may
   warn about an unrecognised app the first time, as the executable is not
   code-signed.
+- Cynitor asks GitHub once a day whether a newer release is out, and if so the
+  version under the sidebar links to it. Nothing about you or the bus is sent.
+  `--no-update-check` (or `CYNITOR_NO_UPDATE_CHECK=1`) turns it off; without
+  internet access it fails quietly.
 
 ### From source
 
