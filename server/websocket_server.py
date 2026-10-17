@@ -8,6 +8,7 @@ API, as classes this server inherits; _setup_routes below has every route.
 import asyncio
 import hmac
 import json
+import os
 from pathlib import Path
 from typing import Optional, Set, Any
 from urllib.parse import urlsplit
@@ -171,6 +172,13 @@ class WebSocketServer(CanApi, RawLogsApi, TestNodesApi, FirmwareApi, NodesApi, R
             response.headers.setdefault("Cache-Control", "no-cache")
         return response
 
+    _DEV_SERVER_PORTS = frozenset({5500})  # `python3 -m http.server 5500` in website/, as the docs say
+
+    @staticmethod
+    def _dev_origins() -> set[str]:
+        """Other origins a dashboard may be served from, in CYNITOR_DEV_ORIGINS (comma-separated)."""
+        return {o.strip().rstrip("/").lower() for o in os.environ.get("CYNITOR_DEV_ORIGINS", "").split(",") if o.strip()}
+
     def _browser_request_allowed(self, request: web.Request) -> bool:
         """Whether a request may come from the browser page that sent it.
 
@@ -188,13 +196,21 @@ class WebSocketServer(CanApi, RawLogsApi, TestNodesApi, FirmwareApi, NodesApi, R
         host = (urlsplit(f"//{request.host}").hostname or "").lower()
         if self.host in self._LOOPBACK_HOSTS and host not in self._LOOPBACK_HOSTS:
             return False
+        # Browsers say where a request comes from even when they send no Origin,
+        # as for an <img>: a GET that reads registers costs frames on the bus.
+        if request.headers.get("Sec-Fetch-Site") == "cross-site":
+            return False
         origin = request.headers.get("Origin")
         if origin is None:
             return True
         parts = urlsplit(origin)  # "null" (sandboxed frames, file://) has no host
         if parts.scheme not in ("http", "https") or not parts.hostname:
             return False
-        return parts.netloc.lower() == request.host.lower() or parts.hostname in self._LOOPBACK_HOSTS
+        if parts.netloc.lower() == request.host.lower():
+            return True
+        # Another page on this machine: the frontend dev server only, not any port.
+        return parts.hostname in self._LOOPBACK_HOSTS and (
+            parts.port in self._DEV_SERVER_PORTS or origin.rstrip("/").lower() in self._dev_origins())
 
     @web.middleware
     async def _cors_middleware(self, request: web.Request, handler: Any) -> web.StreamResponse:

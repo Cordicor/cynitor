@@ -646,6 +646,30 @@ class TestWebSocket:
             assert "error" in resp
 
 
+class TestSecFetchSiteAndDevOrigins:
+    """F-033: what another page in the visitor's browser can still make the server do."""
+
+    @pytest.mark.asyncio
+    async def test_a_cross_site_get_without_origin_is_refused(self, client):
+        # An <img src=".../api/registers/50"> on any website: no Origin, but the browser says cross-site.
+        resp = await client.get("/api/status", headers={"Sec-Fetch-Site": "cross-site"})
+        assert resp.status == 403
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("site", ["same-origin", "same-site", "none"])
+    async def test_the_dashboards_own_requests_pass(self, client, site):
+        with patch("main.discover_can_interfaces", return_value=[]):
+            resp = await client.get("/api/status", headers={"Sec-Fetch-Site": site})
+        assert resp.status == 200
+
+    @pytest.mark.asyncio
+    async def test_a_page_on_another_local_port_is_refused_unless_named(self, client, monkeypatch):
+        refused = await client.post("/api/can/disconnect", headers={"Origin": "http://localhost:15500"})
+        monkeypatch.setenv("CYNITOR_DEV_ORIGINS", "http://localhost:15500")
+        named = await client.post("/api/can/disconnect", headers={"Origin": "http://localhost:15500"})
+        assert (refused.status, named.status) == (403, 409)  # 409: not connected, past the origin check
+
+
 class TestSecurityHeaders:
     """No page may frame the dashboard, nor run a script it did not serve; no version banner (F-019)."""
 

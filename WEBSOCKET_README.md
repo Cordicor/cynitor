@@ -92,7 +92,9 @@ When a terminal is attached, the server prints the token once at startup so it c
 The API commands nodes on the bus, and any website a user visits could otherwise send requests to `localhost:8080` through their browser. So requests to `/ws`, `/api` and `/api/...` are refused with `HTTP 403 {"error": "cross-origin request refused"}` when their `Origin` header names any page other than:
 
 - the dashboard this server serves itself (the `Origin` matches the `Host` it was reached at), or
-- a page served from this machine (`localhost`, `127.0.0.1` or `[::1]`, any port), such as the frontend dev server on `:5500`.
+- the frontend dev server on this machine (`localhost`, `127.0.0.1` or `[::1]`, port 5500), and any other origin listed in `CYNITOR_DEV_ORIGINS` (comma-separated, e.g. `http://localhost:3000`).
+
+A request the browser marks `Sec-Fetch-Site: cross-site` (sent by a page on another site, even one with no `Origin`, such as an `<img>`) is refused with `403`.
 
 Requests without an `Origin` header (curl, scripts, other non-browser clients) are not affected. `Origin: null`, which sandboxed frames and `file://` pages send, is refused. Allowed browser origins get `Access-Control-Allow-Origin` echoed back; nobody gets `*`.
 
