@@ -5,6 +5,7 @@ import argparse
 import asyncio
 import json
 import logging
+import ipaddress
 import os
 import re
 import shutil
@@ -237,6 +238,16 @@ class BusLoadMonitor:
                     self.utilization = float(match.group(1))
         except asyncio.CancelledError:
             raise
+
+
+def is_loopback(bind: str) -> bool:
+    """Whether ``bind`` listens on this machine only: a loopback address, or localhost."""
+    if bind.strip().lower() == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(bind.strip("[]")).is_loopback
+    except ValueError:
+        return False  # a host name: whatever it resolves to, assume the network
 
 
 def bound_address(bind: str, port: int) -> str:
@@ -1457,10 +1468,12 @@ async def main(can_iface: Optional[str] = None, force_compile: bool = False, bin
     logger.info("Auth:        %s", "token required (CYNITOR_AUTH_TOKEN set)" if auth_token else "OPEN (no token)")
     logger.info("Data:        %s", data_path)
     show_token_on_terminal(auth_token)
-    if bind == "0.0.0.0" and not auth_token:
-        logger.warning("Server is bound to 0.0.0.0 with NO auth — reachable from any network peer. Set CYNITOR_AUTH_TOKEN to require a bearer token.")
-    elif bind == "0.0.0.0":
-        logger.info("Server is bound to 0.0.0.0 with token auth — clients must present Authorization: Bearer <token>.")
+    if not is_loopback(bind) and not auth_token:  # only with --insecure-no-auth
+        logger.warning("Server is bound to %s with NO auth (--insecure-no-auth): anyone who can reach it can "
+                       "command the nodes on the bus. Set CYNITOR_AUTH_TOKEN to require a bearer token.", bind)
+    elif not is_loopback(bind):
+        logger.info("Server is bound to %s with token auth: clients must present Authorization: Bearer <token>. "
+                    "The traffic is plain HTTP; put a TLS reverse proxy in front beyond a trusted network.", bind)
     logger.info("REST API:    http://localhost:%d/api/", port)
     logger.info("Health:      http://localhost:%d/api/health", port)
     logger.info("Status:      http://localhost:%d/api/status", port)
@@ -1487,6 +1500,7 @@ async def main(can_iface: Optional[str] = None, force_compile: bool = False, bin
     logger.info("  --no-frontend    serve only the API and WebSocket, not the dashboard")
     logger.info("  --no-update-check  do not ask GitHub whether a newer release is out")
     logger.info("  --allow-any-interface  let the API open any python-can interface, not only CAN adapters")
+    logger.info("  --insecure-no-auth  allow --bind beyond loopback without CYNITOR_AUTH_TOKEN")
     logger.info("  --help           full reference")
     if not can_iface:
         logger.info("Selection-mode startup (no --can): connect from the UI or POST /api/can/connect")
@@ -1689,6 +1703,12 @@ if __name__ == "__main__":
         help="Serve only the REST API and WebSocket; do not serve the dashboard",
     )
     parser.add_argument(
+        "--insecure-no-auth",
+        action="store_true",
+        help="Allow a --bind beyond loopback without CYNITOR_AUTH_TOKEN: anyone who can reach the "
+             "port can then command the nodes on the bus",
+    )
+    parser.add_argument(
         "--allow-any-interface",
         action="store_true",
         help="Let the dashboard and API open any python-can interface, not only the CAN adapters "
@@ -1701,6 +1721,10 @@ if __name__ == "__main__":
              f"(or set {DISABLE_UPDATE_CHECK_ENV}=1)",
     )
     args = parser.parse_args()
+    if not is_loopback(args.bind) and not os.environ.get("CYNITOR_AUTH_TOKEN", "").strip() \
+            and not args.insecure_no_auth:
+        parser.error(f"--bind {args.bind} reaches beyond this machine, and the API commands the nodes on the bus: "
+                     "set CYNITOR_AUTH_TOKEN to require a token, or pass --insecure-no-auth on a network you trust")
     if args.can:
         # Refuse up front rather than start and fall back to selection mode:
         # the fix is on the command line, not in the dashboard.

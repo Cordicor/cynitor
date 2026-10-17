@@ -69,13 +69,7 @@ In this mode, the server starts on port 8080 immediately. Use the REST API to co
 
 Once connected, CAN telemetry begins. Disconnect with `POST /api/can/disconnect`.
 
-By default the server binds to `127.0.0.1` (localhost only). To expose it on the network — for example to reach the dashboard from another host on a trusted LAN — pass `--bind`:
-
-```bash
-python3 main.py --can vcan0 --bind 0.0.0.0
-```
-
-When exposed on a non-loopback address, require a bearer token by setting the `CYNITOR_AUTH_TOKEN` environment variable:
+By default the server binds to `127.0.0.1` (localhost only). To reach it from another host, pass `--bind` with a bearer token set in the `CYNITOR_AUTH_TOKEN` environment variable; a bind beyond loopback without one is refused at start (exit 2) unless `--insecure-no-auth` is given:
 
 ```bash
 CYNITOR_AUTH_TOKEN=$(openssl rand -hex 24) python3 main.py --can vcan0 --bind 0.0.0.0
@@ -1449,39 +1443,15 @@ count = logger.get_event_count()
 
 ## Configuration
 
-### Port and Host
+### Port, host and data folder
 
-The host is controlled by the `--bind` CLI flag (default `127.0.0.1`):
+Set on the command line, as the README's Options table lists them: `--port <n>` (default 8080),
+`--bind <host>` (default `127.0.0.1`; beyond loopback only with `CYNITOR_AUTH_TOKEN` set, or with
+`--insecure-no-auth`), and `--data-dir <dir>` (or `CYNITOR_DATA_DIR`) for where history, recordings and raw
+logs are kept.
 
 ```bash
-python3 main.py --can vcan0 --bind 0.0.0.0
-```
-
-For non-default ports, edit `main.py` directly:
-```python
-ws_server = WebSocketServer(
-    session=session,
-    host=bind,
-    port=9000,          # Change port
-    log_store=_log_store,
-)
-```
-
-### Database Path
-
-Edit `main.py`:
-```python
-event_logger = EventLogger(
-    db_path="./logs/telemetry.db",  # Custom location
-    max_events=500000                # Retention limit
-)
-```
-
-### Event Queue Size
-
-Edit `telemetry_manager.py`:
-```python
-queue = telemetry.subscribe(max_queue=200)  # Increase from 100
+CYNITOR_AUTH_TOKEN=$(openssl rand -hex 24) python3 main.py --can vcan0 --bind 0.0.0.0 --port 9000
 ```
 
 ## Architecture Components
@@ -1537,7 +1507,7 @@ Use `max_events` in EventLogger to prevent database bloat.
 **WebSocket connection refused:**
 - Ensure `main.py` is running
 - Check firewall (port 8080)
-- The server binds to `127.0.0.1` by default; if you need to reach it from another host, restart with `--bind 0.0.0.0` (no auth is enforced — only do this on a trusted network)
+- The server binds to `127.0.0.1` by default; if you need to reach it from another host, restart with `--bind 0.0.0.0` and `CYNITOR_AUTH_TOKEN` set (see the authentication section above)
 
 **High memory usage:**
 - Reduce TelemetryManager queue size

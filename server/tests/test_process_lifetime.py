@@ -246,3 +246,20 @@ class TestFailedStart:
                 [sys.executable, "main.py", "--port", str(port), "--data-dir", str(tmp_path), "--no-update-check"],
                 cwd=Path(main.__file__).parent, capture_output=True, text=True, timeout=60)
         assert result.returncode == 1, result.stderr[-500:]
+
+    def test_a_network_bind_without_a_token_is_refused(self, tmp_path):
+        # It started open to the network with one warning, and none for :: or a LAN address (F-031).
+        env = {k: v for k, v in os.environ.items() if k != "CYNITOR_AUTH_TOKEN"}
+        result = subprocess.run(
+            [sys.executable, "main.py", "--bind", "::", "--port", "0", "--data-dir", str(tmp_path)],
+            cwd=Path(main.__file__).parent, capture_output=True, text=True, timeout=60, env=env)
+        assert result.returncode == 2 and "--insecure-no-auth" in result.stderr
+
+
+class TestIsLoopback:
+    @pytest.mark.parametrize("bind, loopback", [
+        ("127.0.0.1", True), ("127.0.0.2", True), ("::1", True), ("[::1]", True), ("localhost", True),
+        ("0.0.0.0", False), ("::", False), ("192.168.1.20", False), ("cynitor.lan", False),
+    ])
+    def test_binds(self, bind, loopback):
+        assert main.is_loopback(bind) is loopback

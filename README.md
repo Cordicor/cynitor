@@ -234,7 +234,10 @@ topics to v1.0 subject-IDs on the device (`name#1234`).
 | `--data-bitrate <n>` | CAN FD data-phase speed in bit/s; leave it out for Classic CAN. Ignored for SocketCAN |
 | `--decode-on-demand` | Decode only the subjects a dashboard shows or a recording takes, and count the rest: for a bus that carries more than the server can decode. The dashboard's **Decode on demand** box does the same at any time |
 | `--allocator` | Give plug-and-play nodes their node-IDs. Off by default: only for a bus with no allocator of its own. The dashboard's **Node-ID allocator** box does the same for one session |
-| `--bind <host>` | Listen on `<host>`. Default `127.0.0.1`; `0.0.0.0` for the whole network |
+| `--bind <host>` | Listen on `<host>`. Default `127.0.0.1`; `0.0.0.0` for the whole network, which needs `CYNITOR_AUTH_TOKEN` set |
+| `--insecure-no-auth` | Allow a `--bind` beyond loopback without a token, on a network you trust |
+| `--allow-any-interface` | Let the dashboard open any python-can interface, not only the CAN adapters Cynitor knows |
+| `--no-update-check` | Do not ask GitHub whether a newer release is out |
 | `--port <n>` | Listen on `<n>`. Default 8080 |
 | `--data-dir <dir>` | Keep the data in `<dir>` |
 | `--no-frontend` | Serve only the API and the WebSocket, not the dashboard |
@@ -279,8 +282,10 @@ CYNITOR_AUTH_TOKEN=$(openssl rand -hex 24) cynitor-server --bind 0.0.0.0
 Open `http://<that-machine>:8080`: the dashboard asks for the token once and
 remembers it.
 
-- **Set a token whenever you bind beyond loopback.** Without one, anyone who
-  can reach the port can command the nodes on the bus.
+- **A token is needed to bind beyond loopback.** Without one, anyone who can
+  reach the port can command the nodes on the bus, so Cynitor refuses to start
+  that way unless `--insecure-no-auth` says the network is trusted.
+- It is plain HTTP: beyond a trusted network, put a TLS reverse proxy in front.
 - Cynitor prints the token on the terminal at startup and keeps it out of its
   log, so it does not end up in the system journal.
 - The token protects the API and the event stream. The dashboard's own files

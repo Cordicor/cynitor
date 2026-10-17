@@ -106,7 +106,7 @@ EventLogger.start()        SQLite persistence
                   prepare_runtime then publishes UAVCAN__CAN__MTU=64 and "<bitrate> <data-bitrate>". SocketCAN
                   ignores it: its MTU follows the interface (72 in sysfs means CAN FD).
 --recompile       Force `nnvg` to regenerate Python from DSDL even if outputs exist.
---bind <host>     Host/IP to bind the HTTP server to (default 127.0.0.1; use 0.0.0.0 to expose on the network).
+--bind <host>     Host/IP to bind the HTTP server to (default 127.0.0.1; 0.0.0.0 exposes it on the network, which needs CYNITOR_AUTH_TOKEN or --insecure-no-auth).
 --port <n>        TCP port to listen on (default 8080).
 --data-dir <dir>  Folder for the databases (default: CYNITOR_DATA_DIR, else the per-user data folder; see data_dir.py).
 --version         Print the version and exit.
