@@ -245,12 +245,15 @@ async def _(page):
              detail: {name: 'cordicor.test.bits', value: '1 0 1', read_back: 'true, false, true', status: 'ok'}},
             {timestamp_unix: Date.now() / 1000, event_type: 'register_write',
              detail: {name: 'limit', value: '<b>5</b>', status: 'timeout'}},
+            {timestamp_unix: Date.now() / 1000, event_type: 'register_write',
+             detail: {name: 'gain', value: '5', status: 'not_applied'}},
             {timestamp_unix: Date.now() / 1000, event_type: 'firmware_update', detail: {file: 'motor-1.2.app.bin'}}]);
         return [...div.querySelectorAll('.hist-row')].map((r) =>
             [r.querySelector('.hist-badge').textContent, r.querySelector('.hist-detail').textContent]);
     }""")
     assert rows == [["Register write", "cordicor.test.bits = 1 0 1 · read back true, false, true"],
                     ["Register write", "limit = <b>5</b> · no answer"],
+                    ["Register write", "gain = 5 · not taken by the node"],
                     ["Firmware update", "from motor-1.2.app.bin"]], f"Rows: {rows}"
 
 

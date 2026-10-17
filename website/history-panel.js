@@ -68,7 +68,7 @@ const formatEventDetail = (evt) => {
     case 'register_write':
       return escapeHtml(d.status === 'ok'
         ? `${d.name} = ${d.value}${d.read_back !== d.value ? ` · read back ${d.read_back}` : ''}`
-        : `${d.name} = ${d.value} · no answer`);
+        : `${d.name} = ${d.value} · ${d.status === 'not_applied' ? 'not taken by the node' : 'no answer'}`);
     case 'firmware_update':
       return escapeHtml(`from ${d.file}`);
     case 'got_node_id':
