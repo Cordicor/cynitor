@@ -845,6 +845,28 @@ async def _(page):
         await page.locator('.detail-tab[data-tab="publishers"]').click()
 
 
+@test("Cards: a node's card shows its own message, not another publisher's of the subject")
+async def _(page):
+    # On a subject several nodes publish, the card showed whichever's came last
+    # until the node's own arrived (audit F-043).
+    shown = await page.evaluate("""() => {
+        const saved = [new Map(state.latestByNode), new Map(state.latestBySubject)];
+        const other = {subject_id: 7510, publisher_node_id: 100, timestamp_unix: Date.now() / 1000, rate: 1,
+                       message_type: 'List_1_0', attributes: [{attribute: 'servers', value: [3333]}]};
+        state.latestBySubject.set(7510, other);
+        state.latestByNode.set(100, new Map([[7510, other]]));
+        state.latestByNode.set(21, new Map());
+        const before = buildSubjectDetailData([7510], 21)[0];
+        const own = {...other, publisher_node_id: 21, attributes: [{attribute: 'servers', value: [430]}]};
+        state.latestByNode.get(21).set(7510, own);
+        const after = buildSubjectDetailData([7510], 21)[0];
+        const subscriber = buildSubjectDetailData([7510], null)[0];
+        state.latestByNode = saved[0]; state.latestBySubject = saved[1];
+        return [before.attributes, before.messageType, after.attributes[0].value, subscriber.attributes[0].value];
+    }""")
+    assert shown == [[], "uavcan.node.port.List.1.0", [430], [3333]], f"Cards: {shown}"
+
+
 @test("Tables: offline nodes that lost their node-ID stay last; health sorts by severity")
 async def _(page):
     ids = "nodesTabulator.getRows('active').map(r => r.getData().id)"

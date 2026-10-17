@@ -234,10 +234,11 @@ const buildSubjectDetailData = (subjectIds, nodeId) => {
   const now = Date.now();
 
   return subjectIds.map((subjectId) => {
-    const nodeEvent = perNodeEvents?.get(subjectId);
     const networkEvent = state.latestBySubject.get(subjectId);
-    const event = nodeEvent || networkEvent;
-    const typeName = subjectTypeName(subjectId, event);
+    // A publisher's card shows its own messages only: on a subject several
+    // nodes publish, another's would read as this node's until its own came.
+    const event = Number.isInteger(nodeId) ? perNodeEvents?.get(subjectId) : networkEvent;
+    const typeName = subjectTypeName(subjectId, event || networkEvent);
     const fresh = isEventFresh(event, now);
     // A publisher's card shows its own rate; a subscriber's, the subject's
     // over all publishers. None once messages stopped: the card says silent.
