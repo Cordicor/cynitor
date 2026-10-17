@@ -398,7 +398,7 @@ class ScannerRegisters:
             access_response = access_response_tuple[0]
             current_field_name, _current_value = self._find_non_none_field(access_response.value)
             if not access_response.mutable:
-                logging.error(f"Register '{register_name}' on node_id={node_id} is read-only")
+                logging.info(f"Register '{register_name}' on node_id={node_id} is read-only: not written")
                 raise ValueError(f"Register '{register_name}' is read-only")
 
             self._check_register_type(reg_type, current_field_name)
@@ -431,6 +431,8 @@ class ScannerRegisters:
         except asyncio.TimeoutError:
             logging.error(f"Timeout while setting register '{register_name}' on node_id={node_id}")
             return None
+        except (ValueError, RegisterNotApplied):  # the request's or the node's say: the API answers it
+            raise
         except Exception as e:
             logging.error(f"Error setting register '{register_name}' on node_id={node_id}: {str(e)}")
             raise

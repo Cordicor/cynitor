@@ -29,6 +29,8 @@ from typing import Callable, Optional
 
 import can
 
+from raw_log import END_OF_LOG
+
 from can_config import FD_DATA_SAMPLE_POINT, FD_NOMINAL_SAMPLE_POINT
 from cyphal_v11 import V11Traffic
 from gs_usb_fd import GsUsbFdBus
@@ -316,7 +318,8 @@ class CANHub:
         if self._stop.is_set():
             return  # shutting down; errors from closing buses are expected
         self.error = message
-        logger.error("CAN hub stopped: %s", message)
+        # A played raw log's end is its normal stop (raw_log.END_OF_LOG).
+        logger.log(logging.INFO if message.endswith(END_OF_LOG) else logging.ERROR, "CAN hub stopped: %s", message)
         self._stop.set()
 
     def _pump(self, forward: Callable[[], None]) -> None:

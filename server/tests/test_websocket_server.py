@@ -164,6 +164,15 @@ class TestCANConnect:
         session.begin_firmware_update.assert_not_awaited()
 
     @pytest.mark.asyncio
+    async def test_connect_while_a_replay_runs_is_a_conflict(self, client, session):
+        # It was a 500 with a traceback in the log (F-018 b).
+        from main import SessionBusy
+        session.connect = AsyncMock(side_effect=SessionBusy("Replay session is active — stop it before connecting CAN"))
+        with patch("main.discover_can_interfaces", return_value=["vcan0"]):
+            resp = await client.post("/api/can/connect", json={"interface": "vcan0"})
+        assert resp.status == 409 and "Replay session is active" in (await resp.json())["error"]
+
+    @pytest.mark.asyncio
     async def test_connect_missing_interface_field(self, client):
         resp = await client.post("/api/can/connect", json={})
         assert resp.status == 400
@@ -616,6 +625,17 @@ class TestWebSocket:
             got_second = await next_event(ws)
         assert (got_first["subject_id"], got_second["subject_id"]) == (100, 200)
         assert first.gone == first.queues
+
+    @pytest.mark.asyncio
+    async def test_a_message_that_is_no_object_is_answered_and_the_stream_goes_on(self, client, session):
+        # A JSON array ended the socket, though later frames are to be accepted (F-018 a).
+        session.telemetry = None
+        async with client.ws_connect("/ws") as ws:
+            await ws.send_str("[1, 2]")
+            first = await ws.receive_json()
+            await ws.send_json({"type": "ping"})
+            second = await ws.receive_json()
+        assert first == {"error": "A message must be a JSON object"} and second["type"] == "pong"
 
     @pytest.mark.asyncio
     async def test_ws_invalid_json(self, client, session):

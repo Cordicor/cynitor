@@ -38,7 +38,7 @@ from data_dir import (EVENTS_DB, SCANNER_DB, SUBJECT_TYPES_FILE, TEST_NODES_FILE
                       resolve_data_dir)
 from firmware import COMMAND_STATUS, FIRMWARE_DIR, FirmwareServer, firmware_path, send_update_command
 from log_store import InMemoryLogStore, APILogHandler, TokenRedactingFilter
-from raw_log import (RAW_LOG_DIR, LogPlayer, RawLog, SocketcanTap, log_has_fd_frames, log_path,
+from raw_log import (END_OF_LOG, RAW_LOG_DIR, LogPlayer, RawLog, SocketcanTap, log_has_fd_frames, log_path,
                      new_log_name, read_sidecar, write_sidecar)
 from simulation import SimulatedBus
 from testnodes import TestNodeBus, TestNodeManager
@@ -265,6 +265,10 @@ def bound_address(bind: str, port: int) -> str:
 # CAN session lifecycle
 # ---------------------------------------------------------------------------
 
+class SessionBusy(RuntimeError):
+    """A connect refused because a session or a replay already runs: the caller's to resolve (409)."""
+
+
 class CANSession:
     """Manages the lifecycle of all CAN-dependent components."""
 
@@ -372,9 +376,9 @@ class CANSession:
         # the lock guards against concurrent connect() calls that both passed
         # this check before prepare_runtime returned.
         if self.is_running:
-            raise RuntimeError("Already connected")
+            raise SessionBusy("Already connected")
         if self.replay is not None:
-            raise RuntimeError("Replay session is active — stop it before connecting CAN")
+            raise SessionBusy("Replay session is active — stop it before connecting CAN")
 
         spec = normalize_can_iface(can_iface)
         if is_socketcan(spec):
@@ -411,7 +415,7 @@ class CANSession:
             if self.is_running:
                 if hub is not None:
                     await asyncio.to_thread(hub.stop)
-                raise RuntimeError("Already connected")
+                raise SessionBusy("Already connected")
             self.last_error = None
             # From here on _teardown owns the hub, including on failure below.
             self.hub = hub
@@ -1079,7 +1083,10 @@ class CANSession:
         if self._disconnect_task and not self._disconnect_task.done():
             logger.warning("Disconnect already in progress, ignoring duplicate")
             return
-        logger.error(f"CAN fatal error: {error_msg}")
+        if error_msg.endswith(END_OF_LOG):
+            logger.info("Raw log played to its end: %s", error_msg)
+        else:
+            logger.error(f"CAN fatal error: {error_msg}")
         self.last_error = error_msg
         self._disconnect_task = asyncio.create_task(self._deferred_disconnect())
 

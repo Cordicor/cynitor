@@ -27,6 +27,10 @@ import can
 logger = logging.getLogger(__name__)
 
 RAW_LOG_DIR = "raw"  # inside the data folder
+# What a played log raises when it has no frame left: its normal end, which
+# ends the session as a lost adapter would, but is no error.
+END_OF_LOG = "end of the raw log"
+
 _NAME = re.compile(r"^cynitor-\d{8}-\d{6}\.log$")
 
 
@@ -236,7 +240,7 @@ class LogPlayer(can.BusABC):
         msg = self._pending or self._next()
         self._pending = None
         if msg is None:
-            raise can.CanOperationError("end of the raw log")
+            raise can.CanOperationError(END_OF_LOG)
         if self._speed > 0:
             if self._start is None:
                 self._start = (msg.timestamp, time.monotonic())

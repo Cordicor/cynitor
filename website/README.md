@@ -155,7 +155,7 @@ Open in browser:
   - `GET /api/recordings` / `POST /api/recordings` / `PATCH /api/recordings/{id}` / `DELETE /api/recordings/{id}` — recording CRUD
   - `POST /api/recordings/{id}/stop` — stop a live recording
   - `POST /api/recordings/quick` — snapshot the last N seconds from the global buffer
-  - `GET /api/recordings/{id}/export?format={csv,json}` — export a recording
+  - `GET /api/recordings/{id}/export?format={csv,jsonl}` — export a recording
   - `GET /api/recordings/buffer` — global buffer stats (size, byte estimate, oldest-event timestamp)
 - CAN error handling:
   - Auto-disconnect on bus faults (BUS-OFF, interface disappearance)

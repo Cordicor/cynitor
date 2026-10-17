@@ -132,6 +132,10 @@ class CanApi:
                                       "allocator": self.session.allocator_status(),
                                       "listen_only": self.session.listen_only is True})
         except Exception as e:
+            from main import SessionBusy
+            if isinstance(e, SessionBusy):  # a session or a replay runs: the caller's to resolve
+                logger.info("CAN connect refused: %s", e)
+                return web.json_response({"error": str(e)}, status=409)
             logger.error(f"Failed to connect CAN: {e}", exc_info=True)
             return web.json_response({"error": str(e)}, status=500)
 

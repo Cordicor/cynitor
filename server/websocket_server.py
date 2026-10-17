@@ -576,6 +576,9 @@ class WebSocketServer(CanApi, RawLogsApi, TestNodesApi, FirmwareApi, NodesApi, R
             try:
                 if msg.type == web.WSMsgType.TEXT:
                     data = json.loads(msg.data)
+                    if not isinstance(data, dict):
+                        await ws.send_json({"error": "A message must be a JSON object"})
+                        continue
 
                     if data.get("type") == "filter":
                         self.client_filters[ws] = {
