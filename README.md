@@ -1,6 +1,6 @@
 # Cynitor
 
-[![Tests](https://github.com/OpenCyphal-Garage/cynitor/actions/workflows/test.yml/badge.svg?branch=dev)](https://github.com/OpenCyphal-Garage/cynitor/actions/workflows/test.yml)
+[![Tests](https://github.com/OpenCyphal-Garage/cynitor/actions/workflows/test.yml/badge.svg?branch=main&event=push)](https://github.com/OpenCyphal-Garage/cynitor/actions/workflows/test.yml)
 [![Latest release](https://img.shields.io/github/v/release/OpenCyphal-Garage/cynitor)](https://github.com/OpenCyphal-Garage/cynitor/releases/latest)
 
 A dashboard for [Cyphal](https://opencyphal.org/) (UAVCAN) networks on CAN and
