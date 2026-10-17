@@ -30,6 +30,7 @@ DSDL, imported when this module is.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import math
 import time
@@ -75,7 +76,11 @@ def make_node(name: str, make_transport: MakeTransport, node_id: int, minor: int
         "UAVCAN__PUB__TEMPERATURE__ID": str(TEMPERATURE_SUBJECT_ID),
         "UAVCAN__PUB__STATUS__ID": str(STATUS_SUBJECT_ID),
     }
-    info = uavcan.node.GetInfo_1_0.Response(name=name, software_version=uavcan.node.Version_1_0(major=1, minor=minor))
+    # The same unique-ID every start, as a real device has: a fresh one each time
+    # made every connect leave the previous one behind as an offline device.
+    unique_id = hashlib.md5(f"cynitor demo {name} {node_id}".encode()).digest()
+    info = uavcan.node.GetInfo_1_0.Response(name=name, software_version=uavcan.node.Version_1_0(major=1, minor=minor),
+                                            unique_id=unique_id)
     node = pycyphal.application.make_node(
         info, pycyphal.application.make_registry(None, environment_variables=registers),
         transport=make_transport(node_id),

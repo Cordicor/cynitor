@@ -459,10 +459,18 @@ class NodesApi:
         scanner = self.session.scanner
         if not scanner:
             return web.json_response({"error": "Not connected"}, status=503)
-        scanner.identity_map.remove_identity(uid)
-        if self.session.event_logger:
-            await self.session.event_logger.delete_node_data(uid)
+        await self._forget_device(uid)
         return web.json_response({"status": "ok"})
+
+    async def _forget_device(self, unique_id: Optional[str]) -> None:
+        """Forget a device: its identity, and what was saved about it."""
+        if not unique_id:
+            return
+        scanner, event_logger = getattr(self.session, "scanner", None), getattr(self.session, "event_logger", None)
+        if scanner is not None:
+            scanner.identity_map.remove_identity(unique_id)
+        if event_logger:
+            await event_logger.delete_node_data(unique_id)
 
     async def _get_all_nodes(self, request: web.Request) -> web.Response:
         telemetry = self.session.telemetry

@@ -52,7 +52,9 @@ class TestNodesApi:
         test_id = request.match_info["test_id"]
 
         async def delete() -> dict:
+            unique_id = self.session.test_nodes.view(test_id).get("unique_id")
             await self.session.test_nodes.delete(test_id)
+            await self._forget_device(unique_id)  # else it stays as an offline device for good
             return {"deleted": test_id}
         return await self._test_node_action(delete())
 

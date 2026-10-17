@@ -16,9 +16,11 @@ Checks, in order:
   4. a raw log records frames and downloads as candump lines;
   5. the connect contract: 409 while connected, 400 for an interface type
      the API does not open;
-  6. listening only: the session reconnects sending nothing, and register
+  6. reconnecting the bus leaves no offline device behind (the demo's
+     unique-ID is the same every start);
+  7. listening only: the session reconnects sending nothing, and register
      reads are refused with 409;
-  7. a server with a token refuses a request without it (401) and takes one
+  8. a server with a token refuses a request without it (401) and takes one
      with it.
 
 Run from the repository root (needs server/requirements.txt):
@@ -184,6 +186,18 @@ def walk(data_dir: Path, bus: str) -> None:
               f"an interface type the API does not open is refused: {code}")
 
         # 6
+        for _ in range(2):
+            server.request("POST", "/api/can/connect", {"interface": bus})
+            server.wait_until(lambda: named_node(server))
+            server.request("POST", "/api/can/disconnect", {})
+        server.request("POST", "/api/can/connect", {"interface": bus})
+        server.wait_until(lambda: named_node(server))
+        nodes = server.request("GET", "/api/nodes")[1]["nodes"]
+        ghosts = [k for k, n in nodes.items() if not k.isdigit() or n.get("has_disappeared")]
+        check(not ghosts, f"reconnecting leaves no offline device behind ({sorted(nodes)})")
+        server.request("POST", "/api/can/disconnect", {})
+
+        # 7
         code, body = server.request("POST", "/api/can/connect", {"interface": bus, "listen_only": True})
         check(code == 200 and body.get("listen_only") is True, f"a listen-only session connects: {code}")
         server.wait_until(lambda: named_node(server) or server.request("GET", "/api/nodes")[1]["nodes"], 15)
@@ -192,7 +206,7 @@ def walk(data_dir: Path, bus: str) -> None:
     finally:
         server.stop()
 
-    # 7
+    # 8
     token_dir = data_dir / "token"
     token_dir.mkdir()
     server = Server(token_dir, [], token="walk-token-1234")
