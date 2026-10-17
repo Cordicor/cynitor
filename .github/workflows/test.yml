@@ -35,7 +35,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest]
-        python-version: ['3.10', '3.11', '3.12']
+        python-version: ['3.10', '3.11', '3.12', '3.13']
         include:
           # Windows Server 2022 is built from the Windows 10 code base, 2025
           # from Windows 11's, so between them they stand in for both.
