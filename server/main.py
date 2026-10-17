@@ -138,6 +138,20 @@ def _get_can_bitrates(iface: str) -> tuple[int, Optional[int]]:
     return bitrate, dbitrate
 
 
+def _canbusload_counts_can_fd() -> bool:
+    """Whether the canbusload on PATH counts CAN FD frames.
+
+    Releases before mid-2021 (Ubuntu 22.04 ships 2020.11) accept a data
+    bitrate but count Classic CAN frames only; their usage text gives the
+    interface as ``<ifname>@<bitrate>``, later ones as ``<ifname>@<bitrate>[,<dbitrate>]``.
+    """
+    try:
+        result = subprocess.run(["canbusload"], check=False, capture_output=True, text=True, timeout=5)
+        return "dbitrate" in result.stdout + result.stderr
+    except Exception:
+        return False
+
+
 class BusLoadMonitor:
     """Runs canbusload as a subprocess and exposes the latest utilization %.
 
@@ -153,16 +167,21 @@ class BusLoadMonitor:
         self._bitrate, self._dbitrate = _get_can_bitrates(iface)
         self._proc: Optional[asyncio.subprocess.Process] = None
         self._task: Optional[asyncio.Task] = None
-        self._disabled = shutil.which("canbusload") is None
+        self._disabled_why: Optional[str] = None
+        if shutil.which("canbusload") is None:
+            self._disabled_why = "'canbusload' not on PATH (install can-utils on Linux for bus-load metrics)"
+        elif self._dbitrate and not _canbusload_counts_can_fd():
+            # It would read CAN FD traffic as an idle bus: the load is unknown instead.
+            self._disabled_why = ("this canbusload counts Classic CAN frames only, and the bus is CAN FD "
+                                  "(a newer can-utils counts both)")
+        self._disabled = self._disabled_why is not None
         self.utilization: Optional[float] = None if self._disabled else 0.0
 
     async def start(self) -> None:
         if self._disabled:
-            logger.info("BusLoadMonitor disabled: 'canbusload' not on PATH (install can-utils on Linux for bus-load metrics)")
+            logger.info("BusLoadMonitor disabled: %s", self._disabled_why)
             return
-        # canbusload counts CAN FD frames' data phase at ",<dbitrate>". Releases
-        # before mid-2021 (Ubuntu 22.04 ships 2020.11) accept the suffix but
-        # count Classic CAN frames only, so CAN FD load reads low with them.
+        # canbusload counts CAN FD frames' data phase at ",<dbitrate>".
         rates = f"{self._bitrate},{self._dbitrate}" if self._dbitrate else str(self._bitrate)
         self._proc = await asyncio.create_subprocess_exec(
             "canbusload", f"{self._iface}@{rates}", "-b",

@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from main import BusLoadMonitor, _get_can_bitrates
+from main import BusLoadMonitor, _canbusload_counts_can_fd, _get_can_bitrates
 
 
 class TestGetCanBitrates:
@@ -41,7 +41,7 @@ class TestGetCanBitrates:
 
 
 def make_monitor(iface: str = "vcan0", canbusload: str | None = "/usr/bin/canbusload",
-                 bitrates: tuple = (500000, None)):
+                 bitrates: tuple = (500000, None), counts_can_fd: bool = True):
     """Build a BusLoadMonitor with the canbusload probe pinned.
 
     The monitor decides once, at construction, whether it is permanently
@@ -53,7 +53,8 @@ def make_monitor(iface: str = "vcan0", canbusload: str | None = "/usr/bin/canbus
     Pass canbusload=None to construct the disabled no-op variant.
     """
     with patch("main._get_can_bitrates", return_value=bitrates), \
-         patch("main.shutil.which", return_value=canbusload):
+         patch("main.shutil.which", return_value=canbusload), \
+         patch("main._canbusload_counts_can_fd", return_value=counts_can_fd):
         return BusLoadMonitor(iface)
 
 
@@ -160,6 +161,31 @@ class TestBusLoadMonitor:
         monitor = make_monitor()
         await monitor.stop()
         assert monitor.utilization == 0.0
+
+
+class TestOldCanbusloadOnCanFd:
+    """can-utils before mid-2021 (Ubuntu 22.04's 2020.11) counts Classic CAN frames only."""
+
+    def test_load_is_unknown_on_a_can_fd_bus(self):
+        # It read 400 CAN FD frames a second as "0% load" (audit F-046).
+        monitor = make_monitor("can0", bitrates=(500000, 2000000), counts_can_fd=False)
+        assert monitor._disabled and monitor.utilization is None and monitor.is_alive
+
+    def test_a_classic_bus_is_still_measured(self):
+        monitor = make_monitor("can0", bitrates=(500000, None), counts_can_fd=False)
+        assert not monitor._disabled and monitor.utilization == 0.0
+
+    @pytest.mark.parametrize("usage, counts", [
+        ("commandline in the form: <ifname>@<bitrate>\n", False),
+        ("commandline in the form: <ifname>@<bitrate>[,<dbitrate>]\n", True),
+    ])
+    def test_the_version_is_told_by_its_usage_text(self, usage, counts):
+        with patch("main.subprocess.run", return_value=MagicMock(stdout=usage, stderr="")):
+            assert _canbusload_counts_can_fd() is counts
+
+    def test_a_canbusload_that_cannot_run_counts_nothing(self):
+        with patch("main.subprocess.run", side_effect=OSError):
+            assert _canbusload_counts_can_fd() is False
 
 
 class TestBusLoadMonitorWithoutCanUtils:
