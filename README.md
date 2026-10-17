@@ -129,7 +129,7 @@ Then connect Cynitor to `vcan0`. There the demo takes options:
 |---|---|
 | `--conflict` | A second node on the same node-ID after 10 s, which Cynitor flags |
 | `--node-id 51`, in a second terminal | A second demo: every subject then has two publishers, which the plots and Compare show apart |
-| `--fd` | Needed on a CAN FD vcan (`cat /sys/class/net/vcan0/mtu` says 72). Cynitor runs CAN FD there, and a demo without `--fd` gets none of its requests: no name, no services |
+| `--fd` | Runs Cyphal/CAN FD. On a SocketCAN interface set up for CAN FD (a new vcan is one on current kernels: `cat /sys/class/net/vcan0/mtu` says 72) the demo does so by itself, as Cynitor does there |
 
 ## Features
 
@@ -201,7 +201,7 @@ bus with error frames.
   sudo ip link set can0 down
   sudo ip link set can0 type can bitrate 500000 dbitrate 2000000 fd on
   sudo ip link set can0 up
-  # a virtual interface only needs the CAN FD frame size:
+  # a vcan is CAN FD as made on current kernels (mtu 72); to switch one to it:
   sudo ip link set vcan0 down && sudo ip link set vcan0 mtu 72 && sudo ip link set vcan0 up
   ```
 
