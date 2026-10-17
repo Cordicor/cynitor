@@ -756,8 +756,12 @@ class WebSocketServer(CanApi, RawLogsApi, TestNodesApi, FirmwareApi, NodesApi, R
         })
 
     async def _health_check(self, request: web.Request) -> web.Response:
+        # Started with --can and that bus down (not by the operator's disconnect): 503, so a supervisor sees it.
+        wanted = getattr(self.session, "wanted_can", None)
+        can_down = isinstance(wanted, str) and not self.session.is_running
         return web.json_response({
-            "status": "healthy" if self._running else "degraded",
+            "status": "healthy" if self._running and not can_down else "degraded",
+            "can_error": (self.session.last_error or f"{wanted} is not connected") if can_down else None,
             "can_status": "running" if self.session.is_running else "idle",
             "can_interface": self.session.can_interface,
             "connected_clients": len(self.clients),
@@ -765,6 +769,6 @@ class WebSocketServer(CanApi, RawLogsApi, TestNodesApi, FirmwareApi, NodesApi, R
                 "host": self.host,
                 "port": self.port,
             }
-        })
+        }, status=503 if can_down else 200)
 
 

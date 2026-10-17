@@ -828,6 +828,7 @@ Response:
 ```json
 {
     "status": "healthy",
+    "can_error": null,
     "can_status": "running",
     "can_interface": "vcan0",
     "connected_clients": 3,
@@ -837,6 +838,8 @@ Response:
     }
 }
 ```
+
+A server started with `--can` answers `503`, `"status": "degraded"` and `can_error` saying why, while that bus is down, until it is attached again (`--reconnect` does that by itself) or the operator disconnects it with `POST /api/can/disconnect`.
 
 **Get recent application logs (all levels):**
 ```bash

@@ -679,6 +679,27 @@ class TestSecFetchSiteAndDevOrigins:
         assert (refused.status, named.status) == (403, 409)  # 409: not connected, past the origin check
 
 
+class TestHealthOfAWantedBus:
+    """F-037: a server started with --can is not healthy while that bus is down."""
+
+    @pytest.mark.asyncio
+    async def test_a_lost_bus_is_a_503_until_the_operator_disconnects(self, client, session):
+        session.wanted_can, session.is_running, session.last_error = "can0", False, "Interface can0 no longer exists"
+        down = await client.get("/api/health")
+        body = await down.json()
+        session.wanted_can = None  # as POST /api/can/disconnect leaves it
+        chosen = await client.get("/api/health")
+        assert (down.status, body["status"], body["can_error"]) == (503, "degraded", "Interface can0 no longer exists")
+        assert chosen.status == 200
+
+    @pytest.mark.asyncio
+    async def test_disconnecting_clears_it(self, client, session):
+        session.is_running, session.wanted_can = True, "can0"
+        with patch("main.discover_can_interfaces", return_value=[]):
+            await client.post("/api/can/disconnect")
+        assert session.wanted_can is None
+
+
 class TestSecurityHeaders:
     """No page may frame the dashboard, nor run a script it did not serve; no version banner (F-019)."""
 

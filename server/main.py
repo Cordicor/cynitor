@@ -289,6 +289,9 @@ class CANSession:
         # --listen-only, likewise: watch the bus without sending anything.
         self.default_listen_only = default_listen_only
         self.listen_only = False  # whether the session that runs sends nothing
+        # The interface the server was started with (--can), while the operator
+        # has not disconnected it: down, the server is not healthy.
+        self.wanted_can: Optional[str] = None
         # --decode-on-demand, and the dashboard's switch: decode only the
         # subjects a dashboard watches or a recording takes, and count the rest
         # from their frames (see transfer_rates). For a bus that carries more
@@ -1348,6 +1351,26 @@ async def _event_logger_loop(event_logger, queue: asyncio.Queue) -> None:
         raise
 
 
+RECONNECT_BACKOFF_S = (5, 10, 20, 40, 60)  # waits between attempts; the last repeats
+
+
+async def _keep_attached(session, can_iface: str, force_compile: bool = False) -> None:
+    """--reconnect: attach `can_iface` again whenever its session is down, until the operator disconnects it."""
+    attempt = 0
+    while session.wanted_can == can_iface:
+        await asyncio.sleep(RECONNECT_BACKOFF_S[min(attempt, len(RECONNECT_BACKOFF_S) - 1)])
+        if session.is_running or session.replay is not None or session.wanted_can != can_iface:
+            attempt = 0
+            continue
+        try:
+            await session.connect(can_iface, force_compile=force_compile)
+            logger.info("Reconnected to %s", can_iface)
+            attempt = 0
+        except Exception as exc:
+            attempt += 1
+            logger.warning("Reconnecting to %s failed (%d): %s", can_iface, attempt, exc)
+
+
 async def attach_or_fall_back(session, can_iface: str, force_compile: bool = False) -> bool:
     """Attach to `can_iface`, or warn and leave the server in selection mode.
 
@@ -1447,7 +1470,8 @@ async def main(can_iface: Optional[str] = None, force_compile: bool = False, bin
                can_bitrate: Optional[int] = None, data_dir: Optional[str] = None,
                can_data_bitrate: Optional[int] = None, allocator: bool = False,
                decode_on_demand: bool = False, update_check: bool = True,
-               allow_any_interface: bool = False, listen_only: bool = False, access_log: bool = False) -> None:
+               allow_any_interface: bool = False, listen_only: bool = False, access_log: bool = False,
+               reconnect: bool = False) -> None:
     from websocket_server import WebSocketServer
     from dsdl_manager import DsdlManager
 
@@ -1531,7 +1555,10 @@ async def main(can_iface: Optional[str] = None, force_compile: bool = False, bin
 
     try:
         if can_iface:
+            session.wanted_can = can_iface
             await attach_or_fall_back(session, can_iface, force_compile)
+            if reconnect:
+                asyncio.create_task(_keep_attached(session, can_iface, force_compile))
 
         await asyncio.Event().wait()
 
@@ -1730,6 +1757,12 @@ if __name__ == "__main__":
         help="Serve only the REST API and WebSocket; do not serve the dashboard",
     )
     parser.add_argument(
+        "--reconnect",
+        action="store_true",
+        help="With --can: attach to it again whenever its session ends (an adapter unplugged, a bus fault), "
+             "waiting 5 s, then longer, up to a minute, between attempts",
+    )
+    parser.add_argument(
         "--access-log",
         action="store_true",
         help="Log every HTTP request (a dashboard makes a few a second); off by default",
@@ -1794,6 +1827,7 @@ if __name__ == "__main__":
             allow_any_interface=args.allow_any_interface,
             listen_only=args.listen_only,
             access_log=args.access_log,
+            reconnect=args.reconnect,
         ))
     except KeyboardInterrupt:
         logger.info("Interrupted by user")

@@ -146,6 +146,7 @@ class CanApi:
         if not self.session.is_running:
             return web.json_response({"error": "Not connected"}, status=409)
 
+        self.session.wanted_can = None  # the operator's choice: no longer down, and not reconnected
         await self.session.disconnect()
         available = await asyncio.to_thread(discover_can_interfaces)
         return web.json_response({
