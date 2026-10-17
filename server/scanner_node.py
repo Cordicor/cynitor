@@ -7,6 +7,8 @@ import logging
 import datetime
 import re
 import importlib
+import socket
+import struct
 import time
 import numpy as np
 from pycyphal.dsdl import get_model, to_builtin
@@ -30,6 +32,11 @@ from scanner_services import ScannerServices
 # lines a second from a bus that outruns the decoding. They are counted
 # instead (ScannerNode.dropped_frames).
 logging.getLogger("pycyphal.transport.can._session._input").setLevel(logging.WARNING)
+
+# Linux's getsockopt(SOL_SOCKET, SO_MEMINFO): unsigned ints, of which the
+# ninth (SK_MEMINFO_DROPS) counts what the socket's full receive queue let go.
+_SO_MEMINFO = 55
+_SK_MEMINFO_DROPS = 8
 
 
 def _fire_and_log(coro, context: str = "background task"):
@@ -71,6 +78,9 @@ class ScannerNode(ScannerRegisters, ScannerServices):
     INFO_REFRESH_S = 60.0   # GetInfo refresh period once a node has answered
     INFO_RETRY_S = 10.0     # retry period while it has not
     NODE_ID_CONFLICT_REPORT_S = 60.0  # report a shared node-ID at most this often
+    KERNEL_DROPS_REPORT_S = 60.0      # warn of frames lost in the kernel at most this often
+    _kernel_drops_reported = 0        # the kernel's drop count at the last warning ...
+    _kernel_drops_reported_at = float("-inf")  # ... and when it was given
     # The furthest the decoding of a subject may fall behind the bus. pycyphal
     # keeps the frames that wait to be decoded without limit, so a subject that
     # outran the decoding put the live view ever further behind, with nothing
@@ -388,9 +398,34 @@ class ScannerNode(ScannerRegisters, ScannerServices):
             return 0
 
     def dropped_frames(self) -> int:
-        """CAN frames let go before decoding: their subject's messages came faster than they were decoded."""
-        return self._dropped_frames_closed + sum(
+        """CAN frames let go before decoding: their subject's messages came faster than they were decoded,
+        or the bus faster than they were read (kernel_dropped_frames)."""
+        return self._dropped_frames_closed + self.kernel_dropped_frames() + sum(
             self._frames_dropped(subscriber) for subscriber in self.publishers_subscribers.values())
+
+    def kernel_dropped_frames(self) -> int:
+        """CAN frames the kernel let go, its receive queue for the scanner's SocketCAN socket being full.
+
+        Past what can be decoded, most frames are lost there, before pycyphal
+        sees them. The socket is pycyphal's own (its media's ``_sock``); 0 when
+        there is none, behind the hub or off Linux.
+        """
+        try:
+            sock = self._node.presentation.transport._maybe_media._sock
+            meminfo = sock.getsockopt(socket.SOL_SOCKET, _SO_MEMINFO, 4 * (_SK_MEMINFO_DROPS + 1))
+            return struct.unpack_from(f"{_SK_MEMINFO_DROPS + 1}I", meminfo)[_SK_MEMINFO_DROPS]
+        except (AttributeError, OSError, struct.error):
+            return 0
+
+    def report_kernel_drops(self) -> None:
+        """Warn of frames the kernel let go since the last warning, at most once a KERNEL_DROPS_REPORT_S."""
+        drops = self.kernel_dropped_frames()
+        now = time.monotonic()
+        if drops <= self._kernel_drops_reported or now - self._kernel_drops_reported_at < self.KERNEL_DROPS_REPORT_S:
+            return
+        logging.warning(f"{drops - self._kernel_drops_reported} CAN frames lost in the kernel's receive queue: "
+                        "the bus carries more than Cynitor decodes. Decode on demand handles such a bus.")
+        self._kernel_drops_reported, self._kernel_drops_reported_at = drops, now
 
     @staticmethod
     def _major_type(type_name: str) -> str:

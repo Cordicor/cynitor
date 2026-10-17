@@ -1254,6 +1254,7 @@ async def _register_loop(scanner, registered_nodes: set[int], session: 'CANSessi
                     session.schedule_fatal_disconnect(error)
                     return
                 await _sample_bus_errors(session)
+                scanner.report_kernel_drops()
 
             try:
                 for node in scanner.all_nodes.values():

@@ -7,7 +7,11 @@ type name from the sibling ".type" register.
 
 import asyncio
 import datetime
+import inspect
 import json
+import socket
+import struct
+import sys
 import time
 import types
 from decimal import Decimal
@@ -377,6 +381,70 @@ class TestFramesDroppedBeforeDecoding:
         node = ScannerNode.__new__(ScannerNode)
         node.publishers_subscribers = {1620: SimpleNamespace()}
         assert node.dropped_frames() == 0
+
+
+def scanner_on_socket(sock) -> ScannerNode:
+    """A scanner whose pycyphal transport reads from ``sock``, as on SocketCAN."""
+    node = ScannerNode.__new__(ScannerNode)
+    node.publishers_subscribers = {}
+    media = SimpleNamespace(_sock=sock)
+    node._node = SimpleNamespace(presentation=SimpleNamespace(transport=SimpleNamespace(_maybe_media=media)))
+    return node
+
+
+def socket_that_dropped(drops: int):
+    """A socket whose SO_MEMINFO says its receive queue let ``drops`` go."""
+    meminfo = struct.pack("9I", 0, 212992, 0, 212992, 0, 0, 0, 0, drops)
+    return SimpleNamespace(getsockopt=lambda level, option, size: meminfo[:size])
+
+
+class TestKernelDroppedFrames:
+    """Past what can be decoded, the kernel's queue for the scanner's socket overflows (F-042)."""
+
+    def test_counted_with_the_frames_dropped_before_decoding(self):
+        node = scanner_on_socket(socket_that_dropped(1000))
+        node.publishers_subscribers = {1620: subscriber_that_dropped(7)}
+        assert node.kernel_dropped_frames() == 1000
+        assert node.dropped_frames() == 1007
+
+    def test_nothing_without_a_socketcan_socket(self):
+        node = ScannerNode.__new__(ScannerNode)
+        node.publishers_subscribers = {}
+        node._node = SimpleNamespace(presentation=SimpleNamespace(transport=SimpleNamespace(_maybe_media=object())))
+        assert node.kernel_dropped_frames() == 0
+
+    def test_nothing_when_the_socket_cannot_say(self):
+        def refuse(*_):
+            raise OSError(92, "Protocol not available")
+        assert scanner_on_socket(SimpleNamespace(getsockopt=refuse)).kernel_dropped_frames() == 0
+
+    @pytest.mark.skipif(not sys.platform.startswith("linux"), reason="SO_MEMINFO is Linux's")
+    def test_a_real_socket_is_read(self):
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            assert scanner_on_socket(sock).kernel_dropped_frames() == 0
+
+    def test_pycyphal_still_keeps_the_socket_where_it_is_read(self):
+        # kernel_dropped_frames goes through two private attributes of
+        # pycyphal's: a release that renames them must fail here, not count 0.
+        from pycyphal.transport.can import CANTransport
+        from pycyphal.transport.can.media.socketcan import SocketCANMedia
+        assert "self._maybe_media" in inspect.getsource(CANTransport.__init__)
+        assert "self._sock =" in inspect.getsource(SocketCANMedia.__init__)
+
+    def test_a_warning_once_a_while_while_the_count_grows(self, caplog):
+        node = scanner_on_socket(socket_that_dropped(0))
+        node.report_kernel_drops()
+        assert "kernel's receive queue" not in caplog.text
+        node._node.presentation.transport._maybe_media._sock = socket_that_dropped(1234)
+        node.report_kernel_drops()
+        node._node.presentation.transport._maybe_media._sock = socket_that_dropped(2000)
+        node.report_kernel_drops()
+        warnings = [r.getMessage() for r in caplog.records if "kernel's receive queue" in r.getMessage()]
+        assert warnings == ["1234 CAN frames lost in the kernel's receive queue: the bus carries more "
+                            "than Cynitor decodes. Decode on demand handles such a bus."]
+        node._kernel_drops_reported_at -= ScannerNode.KERNEL_DROPS_REPORT_S
+        node.report_kernel_drops()
+        assert "766 CAN frames lost" in caplog.text
 
 
 class TestDecodingOnDemand:
