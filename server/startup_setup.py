@@ -237,5 +237,12 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-    prepare_runtime(can_iface=args.can, force_compile=args.recompile)
-    logger.info("Runtime environment prepared (CAN interface: %s)", args.can)
+    # A build step: it compiles, and opens no bus (yakut accommodate would listen on it).
+    prepare_runtime(can_iface=args.can, force_compile=args.recompile, auto_node_id=False)
+    compiled = resolve_project_root() / "python_compiled_messages"
+    missing = [name for name in ("uavcan", "reg") if not (compiled / name).is_dir()]
+    if missing:
+        logger.error("DSDL not compiled: %s missing in %s (is nnvg installed? pip install nunavut)",
+                     ", ".join(missing), compiled)
+        sys.exit(1)
+    logger.info("DSDL compiled in %s", compiled)
