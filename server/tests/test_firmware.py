@@ -118,6 +118,17 @@ class TestApi:
         assert (await client.delete("/api/firmware/new-2.0.bin")).status == 200
         assert (await client.delete("/api/firmware/new-2.0.bin")).status == 404
 
+    async def test_the_folder_has_a_quota(self, api):
+        # Files of 32 MiB each were kept without limit (F-035).
+        client, session = api
+        held = sum(f.stat().st_size for f in session.firmware_folder.iterdir() if f.is_file())
+        with patch("api_firmware.MAX_FIRMWARE_FOLDER_BYTES", held + 10):
+            assert (await client.post("/api/firmware?name=a.bin", data=b"123456")).status == 201
+            assert (await client.post("/api/firmware?name=a.bin", data=b"1234567")).status == 201  # replaces itself
+            full = await client.post("/api/firmware?name=b.bin", data=b"12345")
+        assert full.status == 413 and "delete one first" in (await full.json())["error"]
+        assert not (session.firmware_folder / "b.bin").exists()
+
     async def test_upload_refusals(self, api):
         client, session = api
         assert (await client.post("/api/firmware?name=../x.bin", data=b"x")).status == 400

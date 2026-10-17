@@ -374,7 +374,11 @@ class WebSocketServer(CanApi, RawLogsApi, TestNodesApi, FirmwareApi, NodesApi, R
     # WebSocket handler
     # ------------------------------------------------------------------
 
-    async def _websocket_handler(self, request: web.Request) -> web.WebSocketResponse:
+    MAX_CLIENTS = 64  # open dashboards and API streams; each costs CPU for every event
+
+    async def _websocket_handler(self, request: web.Request) -> web.StreamResponse:
+        if len(self.clients) >= self.MAX_CLIENTS:
+            return web.json_response({"error": f"At most {self.MAX_CLIENTS} streams are open at once"}, status=503)
         ws = web.WebSocketResponse()
         await ws.prepare(request)
 

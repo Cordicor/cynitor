@@ -181,6 +181,8 @@ In direct mode (`--can <iface>`) the `Mode:` line reads `direct (attached to <if
 
 ### WebSocket Client (JavaScript/Browser)
 
+At most 64 streams (`/ws`) are open at once; another is refused with `503`.
+
 **Connect:**
 ```javascript
 const ws = new WebSocket('ws://localhost:8080/ws');
@@ -1188,7 +1190,7 @@ Auto-stop is checked both on each matching event (during ingest) and via a 5-sec
 POST   /api/recordings/quick   body: { name, last_seconds, filter?, notes? }
 ```
 
-Snapshots matching events from the global buffer in `[now - last_seconds, now]` into the recording's dedicated store at creation time. Useful workflow: "the bus just glitched, save the last 30 seconds." Returns `201` with the full recording row.
+Snapshots matching events from the global buffer in `[now - last_seconds, now]` into the recording's dedicated store at creation time. Useful workflow: "the bus just glitched, save the last 30 seconds." Returns `201` with the full recording row. `last_seconds` is at most 86400, the history kept. A recording's `name` holds at most 200 characters and its `notes` 10,000 (400 otherwise).
 
 #### Filter shape (OR-across-dimensions)
 
@@ -1405,7 +1407,7 @@ POST   /api/nodes/{node_id}/firmware { file } → update      (404 no such file,
 
 An `update` is `{ file, bytes, read, state, started_unix, updated_unix, mode }`: `read` is how far the node has read the file, `state` is `requested` (the node accepted the command), `reading`, or `transferred` (it read the last, short chunk), and `mode` the mode in its latest heartbeat (`SOFTWARE_UPDATE` in the bootloader, `OPERATIONAL` once the new firmware runs), or null. Updates are kept per session and end with it.
 
-Names are plain file names (letters, digits, `.`, `_`, `-`; up to 128 characters); a file holds 1 byte to 32 MiB (400 empty, 413 larger). Only `uavcan.file.Read` is served, and only for these files: other nodes cannot list, write or delete files on this computer. Nothing is served while a raw log plays or when Cynitor has no node-ID; then the update is refused with 409.
+Names are plain file names (letters, digits, `.`, `_`, `-`; up to 128 characters); a file holds 1 byte to 32 MiB (400 empty, 413 larger), and all of them together 256 MiB (413 "delete one first"). Only `uavcan.file.Read` is served, and only for these files: other nodes cannot list, write or delete files on this computer. Nothing is served while a raw log plays or when Cynitor has no node-ID; then the update is refused with 409.
 
 ### Event Logger (SQLite)
 

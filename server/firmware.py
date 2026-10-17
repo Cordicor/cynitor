@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 
 FIRMWARE_DIR = "firmware"  # inside the data folder
 MAX_FIRMWARE_BYTES = 32 * 1024 * 1024
+MAX_FIRMWARE_FOLDER_BYTES = 256 * 1024 * 1024  # all firmware files together
 # A plain file name: no folders, and short enough for uavcan.file.Path (255 bytes).
 _NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 COMMAND_TIMEOUT = 2.0  # seconds a node has to answer the update command

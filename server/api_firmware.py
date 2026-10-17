@@ -5,7 +5,7 @@ Handlers of the REST API, which WebSocketServer (websocket_server.py) inherits a
 from aiohttp import web
 
 from api_helpers import _parse_int, listen_only_refusal, MAX_NODE_ID
-from firmware import firmware_path, list_firmware, MAX_FIRMWARE_BYTES
+from firmware import firmware_path, list_firmware, MAX_FIRMWARE_BYTES, MAX_FIRMWARE_FOLDER_BYTES
 
 
 class FirmwareApi:
@@ -26,6 +26,8 @@ class FirmwareApi:
                 {"error": "name must be a plain file name: letters, digits, '.', '_' or '-'"}, status=400)
         path.parent.mkdir(parents=True, exist_ok=True)
         partial = path.with_name(f".{path.name}.part")  # not a firmware name until complete
+        # The folder's other files, which this one may not push over the quota.
+        others = sum(f.stat().st_size for f in path.parent.iterdir() if f.is_file() and f.name != path.name)
         size = 0
         try:
             with partial.open("wb") as f:
@@ -33,6 +35,8 @@ class FirmwareApi:
                     size += len(chunk)
                     if size > MAX_FIRMWARE_BYTES:
                         raise ValueError
+                    if others + size > MAX_FIRMWARE_FOLDER_BYTES:
+                        raise OverflowError
                     f.write(chunk)
             if size == 0:
                 raise ValueError
@@ -42,6 +46,11 @@ class FirmwareApi:
             return web.json_response(
                 {"error": f"A firmware file holds 1 byte to {MAX_FIRMWARE_BYTES // (1024 * 1024)} MiB"},
                 status=413 if size else 400)
+        except OverflowError:
+            partial.unlink(missing_ok=True)
+            return web.json_response(
+                {"error": f"The firmware files hold {MAX_FIRMWARE_FOLDER_BYTES // (1024 * 1024)} MiB together: "
+                          "delete one first"}, status=413)
         except BaseException:
             partial.unlink(missing_ok=True)
             raise

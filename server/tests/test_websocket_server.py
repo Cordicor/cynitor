@@ -4,6 +4,7 @@ import asyncio
 import time
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
+import aiohttp
 from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 from websocket_server import WebSocketServer
@@ -645,6 +646,16 @@ class TestWebSocket:
             await ws.send_json({"type": "ping"})
             second = await ws.receive_json()
         assert first == {"error": "A message must be a JSON object"} and second["type"] == "pong"
+
+    @pytest.mark.asyncio
+    async def test_streams_beyond_the_cap_are_refused(self, client, server, session):
+        # 500 sockets were accepted in 0.4 s, CPU 13 % to 45 % (F-035).
+        session.telemetry = None
+        server.MAX_CLIENTS = 1
+        async with client.ws_connect("/ws"):
+            with pytest.raises(aiohttp.WSServerHandshakeError) as refused:
+                await client.ws_connect("/ws")
+        assert refused.value.status == 503
 
     @pytest.mark.asyncio
     async def test_ws_invalid_json(self, client, session):
