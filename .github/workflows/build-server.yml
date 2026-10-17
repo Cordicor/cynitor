@@ -130,6 +130,8 @@ jobs:
         run: |
           version=$(grep -m1 '^__version__' server/version.py | cut -d'"' -f2)
           cp packaging/dist/cynitor-server "packaging/out/cynitor-server-${version}-linux-x86_64"
+          # What the binary bundles, to check against advisories later.
+          pip freeze > "packaging/out/cynitor-server-${version}-linux-x86_64.requirements.txt"
           ls -lh packaging/out/
 
       - uses: actions/upload-artifact@v7
@@ -211,6 +213,8 @@ jobs:
           version=$(grep -m1 '^__version__' server/version.py | cut -d'"' -f2)
           mkdir -p packaging/out
           cp packaging/dist/cynitor-server.exe "packaging/out/cynitor-server-${version}-windows-x86_64.exe"
+          # What the executable bundles, to check against advisories later.
+          pip freeze > "packaging/out/cynitor-server-${version}-windows-x86_64.requirements.txt"
           ls -lh packaging/out/
 
       - uses: actions/upload-artifact@v7
