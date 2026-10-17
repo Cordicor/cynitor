@@ -1572,8 +1572,12 @@ def _exit_when_parent_dies() -> None:
     started it and keeps holding port 8080. The next start would then find a
     stale server answering on the port it wanted.
 
-    Linux and Windows (see _exit_when_windows_parent_dies); a no-op elsewhere.
+    Linux and Windows (see _exit_when_windows_parent_dies); a no-op elsewhere,
+    and from source, which has no bootloader: there the parent is a shell, and
+    a server left running with nohup or & must outlive it.
     """
+    if not getattr(sys, "frozen", False):
+        return
     if not IS_LINUX:
         if IS_WINDOWS:
             _exit_when_windows_parent_dies()

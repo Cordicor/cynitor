@@ -26,7 +26,19 @@ class TestShutdownOnSigterm:
             main._shutdown_on_sigterm(signal.SIGTERM, None)
 
 
+@pytest.fixture
+def frozen(monkeypatch):
+    """Run as the PyInstaller binary does: the only case the parent watch is armed in."""
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+
+
 class TestExitWhenParentDies:
+    def test_not_armed_from_source(self):
+        # A source server left running with nohup or & died with its shell (F-017).
+        with patch.object(main, "IS_LINUX", True), patch("ctypes.CDLL") as cdll:
+            main._exit_when_parent_dies()
+        cdll.assert_not_called()
+
     def test_noop_off_linux(self):
         with patch.object(main, "IS_LINUX", False), \
              patch.object(main, "IS_WINDOWS", False), \
@@ -34,14 +46,14 @@ class TestExitWhenParentDies:
             main._exit_when_parent_dies()
         cdll.assert_not_called()
 
-    def test_windows_watches_the_parent(self):
+    def test_windows_watches_the_parent(self, frozen):
         with patch.object(main, "IS_LINUX", False), \
              patch.object(main, "IS_WINDOWS", True), \
              patch.object(main, "_exit_when_windows_parent_dies") as watch:
             main._exit_when_parent_dies()
         watch.assert_called_once()
 
-    def test_requests_sigterm_on_parent_death(self):
+    def test_requests_sigterm_on_parent_death(self, frozen):
         libc = MagicMock()
         libc.prctl.return_value = 0
         with patch.object(main, "IS_LINUX", True), \
@@ -51,7 +63,7 @@ class TestExitWhenParentDies:
         # PR_SET_PDEATHSIG is 1.
         libc.prctl.assert_called_once_with(1, signal.SIGTERM, 0, 0, 0)
 
-    def test_exits_when_parent_died_during_startup(self):
+    def test_exits_when_parent_died_during_startup(self, frozen):
         # The parent changing between the two reads means it exited before
         # prctl landed, so the signal will never arrive. Note the new parent
         # is not pid 1: orphans go to the nearest subreaper, so comparing
@@ -165,6 +177,7 @@ class TestParentDeathEndToEnd:
             "import sys, time\n"
             f"sys.path.insert(0, {str(server_dir)!r})\n"
             "import main\n"
+            "sys.frozen = True  # as the PyInstaller binary, for which it is armed\n"
             "main._exit_when_parent_dies()\n"
             "print('armed', flush=True)\n"
             "time.sleep(60)\n"
