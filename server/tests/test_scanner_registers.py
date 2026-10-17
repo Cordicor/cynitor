@@ -104,6 +104,11 @@ class TestGetRegisters:
         node.list.close.assert_called_once_with()
         node.access.close.assert_called_once_with()
 
+    async def test_bits_read_true_and_false_as_dsdl_writes_them(self, uavcan_types):
+        # Python's True/False showed (audit F-046); writes take either spelling.
+        node = Node({"one": ("bit", np.array([True]), True), "flags": ("bit", np.array([True, False, True]), True)})
+        assert [r["value"] for r in await scanner_for(node).get_registers(7)] == ["true", "true, false, true"]
+
     async def test_a_name_asked_for_twice_in_vain_is_passed_over(self, uavcan_types):
         node = Node({"a": ("bit", np.array([True]), True), "b": ("bit", np.array([False]), True),
                      "c": ("bit", np.array([True]), True)}, silent={1: 2})

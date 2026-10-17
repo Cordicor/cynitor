@@ -190,6 +190,8 @@ class ScannerRegisters:
         if value is None:
             return "N/A"
         if isinstance(value, np.ndarray):
+            if value.dtype == bool:  # true/false, as DSDL and yakut write them, not Python's True/False
+                return ', '.join('true' if v else 'false' for v in value.tolist())
             if value.size == 1:
                 return str(value.item())
             return ', '.join(str(v) for v in value.tolist())
