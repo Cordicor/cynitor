@@ -1,6 +1,6 @@
-# PyCyphal WebSocket Telemetry Server
+# Cynitor server: REST and WebSocket API
 
-Production-grade real-time telemetry streaming system for UAVCAN networks.
+The API reference of Cynitor's server: the REST endpoints and the WebSocket stream the dashboard uses, for scripts and other clients.
 
 ## Architecture
 
@@ -62,6 +62,23 @@ Or omit `--can` and select via startup API:
 ```bash
 python3 main.py
 ```
+
+Output:
+```
+============================================================
+SERVER RUNNING
+============================================================
+Bound to:    http://127.0.0.1:8080/
+REST API:    http://localhost:8080/api/
+Health:      http://localhost:8080/api/health
+Status:      http://localhost:8080/api/status
+Mode:        selection  (waiting for the UI or POST /api/can/connect)
+------------------------------------------------------------
+Options:     --help lists them
+============================================================
+```
+
+In direct mode (`--can <iface>`) the `Mode:` line reads `direct (attached to <iface> at startup)` and the block ends with a hint pointing back at selection mode. A bind beyond loopback is refused without a token unless `--insecure-no-auth` is given, and then a `WARNING` line says so. HTTP requests are not logged unless the server runs with `--access-log`.
 
 In this mode, the server starts on port 8080 immediately. Use the REST API to connect:
 - `GET /api/status` (lists available CAN interfaces and connection state)
@@ -155,27 +172,6 @@ While it is on:
 - Every other subject is counted from its CAN frames as they pass, by the subject-ID and node-ID of each transfer's last frame, whether its type is known or not. Once a second each of its publishers gets an event with `"undecoded": true`, an empty `attributes`, and the `rate`, `subject_rate` and `timestamp_unix` (of its last message) counted, so that rates, last-seen times and the graph show as before.
 - The 24 h history, "save the last N seconds" and `GET /api/latest/*` hold values only for what was decoded at the time. Start a recording, or leave the switch off, for what must be kept.
 - Switching it off decodes every subject again at once.
-
-```bash
-python3 main.py
-```
-
-Output:
-```
-============================================================
-SERVER RUNNING
-============================================================
-Bound to:    http://127.0.0.1:8080/
-REST API:    http://localhost:8080/api/
-Health:      http://localhost:8080/api/health
-Status:      http://localhost:8080/api/status
-Mode:        selection  (waiting for the UI or POST /api/can/connect)
-------------------------------------------------------------
-Options:     --help lists them
-============================================================
-```
-
-In direct mode (`--can <iface>`) the `Mode:` line reads `direct (attached to <iface> at startup)` and the block ends with a hint pointing back at selection mode. A bind beyond loopback is refused without a token unless `--insecure-no-auth` is given, and then a `WARNING` line says so. HTTP requests are not logged unless the server runs with `--access-log`.
 
 ## Usage
 
@@ -1563,4 +1559,4 @@ asyncio.run(main())
 
 ## License
 
-PyCyphal (UAVCAN) - MIT License
+MIT, as the repository's `LICENSE` file says.
