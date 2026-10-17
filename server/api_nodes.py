@@ -260,6 +260,8 @@ class NodesApi:
             }, status=504)
         except ValueError as e:
             return web.json_response({"status": "error", "error": str(e)}, status=400)
+        except ConnectionError as e:  # the node went offline while the call waited
+            return web.json_response({"status": "error", "error": str(e)}, status=409)
         except Exception as e:
             latency_ms = round((time.monotonic() - t0) * 1000)
             if self.session.event_logger:

@@ -137,13 +137,24 @@ class TestWhatAFailureSays:
                                   "Invalid value fast for attribute gain: ")
 
     async def test_a_node_that_does_not_answer(self, service):
+        # A timeout, which the API answers with 504 "no answer"; it was a generic
+        # error, a 500, after pycyphal's own 1 s (F-045).
         node, client = service
         client.call = AsyncMock(return_value=None)
-        with pytest.raises(Exception, match="^Service 100 call failed or no response received$"):
+        with pytest.raises(asyncio.TimeoutError, match=r"^Service 100 on node 42 gave no answer in 5s$"):
             await call(node, {})
+        assert client.response_timeout == ScannerNode.SERVICE_CALL_TIMEOUT
 
     async def test_a_call_that_takes_too_long(self, service):
         node, client = service
         client.call = AsyncMock(side_effect=asyncio.TimeoutError)
-        with pytest.raises(Exception, match=r"^Service 100 on node 42 timed out after 5\.0s$"):
+        with pytest.raises(asyncio.TimeoutError, match=r"^Service 100 on node 42 gave no answer in 5s$"):
+            await call(node, {})
+
+    async def test_a_node_dropped_while_the_call_waits(self, service):
+        # pycyphal closes the client: its object's repr reached the page.
+        import pycyphal.presentation
+        node, client = service
+        client.call = AsyncMock(side_effect=pycyphal.presentation.PortClosedError("ClientImpl(...)"))
+        with pytest.raises(ConnectionError, match="^Node 42 went offline while the call waited for its answer$"):
             await call(node, {})

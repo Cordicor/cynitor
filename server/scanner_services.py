@@ -14,6 +14,7 @@ import json
 import logging
 from typing import Any, Optional
 
+import pycyphal.presentation
 from pycyphal.dsdl import deserialize, to_builtin
 from pydsdl import CompositeType
 
@@ -129,16 +130,21 @@ class ScannerServices:
             for attr_name in [a.name for a in request._MODEL_.attributes]:
                 logging.info(f"  {attr_name}: {getattr(request, attr_name)} (type: {type(getattr(request, attr_name)).__name__})")
 
+            # pycyphal's client gives up after its own 1 s unless told otherwise.
+            client.response_timeout = self.SERVICE_CALL_TIMEOUT
             try:
-                response_tuple = await asyncio.wait_for(client.call(request), timeout=self.SERVICE_CALL_TIMEOUT)
+                response_tuple = await asyncio.wait_for(client.call(request), timeout=self.SERVICE_CALL_TIMEOUT + 1)
                 logging.debug(f"Received response tuple for service {service_id}: {response_tuple}")
+            except pycyphal.presentation.PortClosedError:
+                # The node was dropped (gone offline, or restarted) while the call waited.
+                raise ConnectionError(f"Node {node_id} went offline while the call waited for its answer") from None
             except asyncio.TimeoutError:
-                logging.error(f"Service call timed out for service {service_id} on node {node_id} after {self.SERVICE_CALL_TIMEOUT}s")
-                raise Exception(f"Service {service_id} on node {node_id} timed out after {self.SERVICE_CALL_TIMEOUT}s")
+                response_tuple = None
 
             if response_tuple is None or response_tuple[0] is None:
-                logging.error(f"Service call failed for service {service_id} on node {node_id}: No response received")
-                raise Exception(f"Service {service_id} call failed or no response received")
+                logging.error(f"Service {service_id} on node {node_id}: no response in {self.SERVICE_CALL_TIMEOUT}s")
+                raise asyncio.TimeoutError(f"Service {service_id} on node {node_id} gave no answer "
+                                           f"in {self.SERVICE_CALL_TIMEOUT:.0f}s")
 
             response = response_tuple[0]
             logging.info(f"Received response for service {service_id}: {response}")

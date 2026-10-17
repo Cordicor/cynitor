@@ -973,6 +973,16 @@ class TestServiceCall:
         assert data["status"] == "timeout"
 
     @pytest.mark.asyncio
+    async def test_call_to_a_node_that_went_offline(self, client, session):
+        session.is_running = True
+        session.scanner = MagicMock(service_metadata={(42, 435): {"namespace": "uavcan.node",
+                                                                   "service_name": "ExecuteCommand_1_3"}})
+        session.scanner.make_service_call = AsyncMock(
+            side_effect=ConnectionError("Node 42 went offline while the call waited for its answer"))
+        resp = await client.post("/api/services/42/435/call", json={"attributes": {}})
+        assert resp.status == 409 and "went offline" in (await resp.json())["error"]
+
+    @pytest.mark.asyncio
     async def test_call_invalid_json(self, client, session):
         session.is_running = True
         resp = await client.post("/api/services/42/100/call", data=b"not json", headers={"Content-Type": "application/json"})
