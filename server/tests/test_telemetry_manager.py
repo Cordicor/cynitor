@@ -148,6 +148,32 @@ class TestTelemetryLoop:
         assert not q.empty()
 
 
+class TestNonFiniteFloats:
+    """JSON has no NaN or infinity: written as such, a browser dropped the whole message."""
+
+    @pytest.mark.asyncio
+    async def test_sent_as_null_and_strict_json(self, manager, mock_scanner):
+        import json
+        import numpy as np
+        q = manager.subscribe()
+        event = _sample_event(subject_id=1700)
+        event["attributes"] = [
+            {"attribute": "meter_per_second", "value": [float("nan"), 1.0, float("inf")]},
+            {"attribute": "value", "value": np.float32("nan")},
+            {"attribute": "minus", "value": float("-inf")},
+        ]
+        await manager.start()
+        await mock_scanner.message_queue.put(event)
+        sent = await asyncio.wait_for(q.get(), 1)
+        await manager.stop()
+        assert [a["value"] for a in sent["attributes"]] == [[None, 1.0, None], None, None]
+        json.dumps(sent, allow_nan=False)  # what a browser's JSON.parse takes
+        assert sent is manager.get_latest_subject(1700)  # the event sent is the one cached
+
+    def test_finite_floats_are_kept(self, manager):
+        assert TelemetryManager._to_json_compatible([0.0, -1.5, 1e300]) == [0.0, -1.5, 1e300]
+
+
 class TestDroppedCounts:
 
     @pytest.mark.asyncio

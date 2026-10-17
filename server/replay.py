@@ -21,6 +21,8 @@ import time
 from pathlib import Path
 from typing import Any, Optional
 
+from telemetry_manager import TelemetryManager
+
 
 logger = logging.getLogger(__name__)
 
@@ -373,7 +375,8 @@ def _row_to_event(row: dict[str, Any]) -> dict[str, Any]:
         "publisher_node_id": row.get("publisher_node_id"),
         "unique_id": row.get("unique_id"),
         "payload_bytes": None,
-        "attributes": attrs if isinstance(attrs, list) else [],
+        # Recordings made before NaN was stored as null hold it as NaN, which no browser reads.
+        "attributes": TelemetryManager._to_json_compatible(attrs) if isinstance(attrs, list) else [],
         "replay": True,
     }
 

@@ -1,6 +1,7 @@
 import asyncio
 import datetime
 import logging
+import math
 from collections import defaultdict
 from typing import Any, Optional
 
@@ -265,8 +266,8 @@ class TelemetryManager:
         while True:
             try:
                 event = await self.scanner.message_queue.get()
-                self._update_state(event)
-                await self._broadcast(event)
+                # What is cached is what is sent: JSON-safe, NaN and infinity as null.
+                await self._broadcast(self._update_state(event))
             except asyncio.CancelledError:
                 logger.info("Telemetry loop cancelled")
                 return
@@ -278,9 +279,9 @@ class TelemetryManager:
     # STATE MANAGEMENT
     # ------------------------------------------------------------------
 
-    def _update_state(self, event: dict[str, Any]) -> None:
+    def _update_state(self, event: dict[str, Any]) -> dict[str, Any]:
         """
-        Update the latest-state cache with the new event.
+        Update the latest-state cache with the new event, and return it as cached: JSON-safe.
         
         Args:
             event: Event dict with keys: subject_id, timestamp, rate, message_type, 
@@ -301,6 +302,7 @@ class TelemetryManager:
                 self.latest_by_node[publisher_node_id][subject_id] = event
         except Exception as e:
             logging.error(f"Invalid event structure: {event}, error: {e}")
+        return event
 
     # ------------------------------------------------------------------
     # BROADCAST
@@ -331,7 +333,13 @@ class TelemetryManager:
 
     @classmethod
     def _to_json_compatible(cls, value: Any) -> Any:
-        """Recursively normalize values for aiohttp JSON responses and WebSocket sends."""
+        """Recursively normalize values for aiohttp JSON responses and WebSocket sends.
+
+        JSON has no NaN or infinity: a float that is neither becomes None, as
+        written NaN is no JSON a browser reads, and the whole message was lost.
+        """
+        if isinstance(value, float) and not math.isfinite(value):
+            return None
         if value is None or isinstance(value, (str, int, float, bool)):
             return value
 

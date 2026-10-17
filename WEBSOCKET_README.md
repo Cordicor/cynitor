@@ -259,6 +259,8 @@ Telemetry events (filtered per client):
 
 `rate` is this publisher's message rate on the subject, in Hz (one decimal, over the last 10 s). `subject_rate` is the subject's total over its publishers still sending: with five nodes publishing Heartbeat at 1 Hz, each event carries `rate` 1.0 and `subject_rate` 5.0. A publisher whose last message is older than three of its periods (two seconds at least) no longer counts in it, the rule by which the dashboard calls a subject silent. Both are computed when a message arrives, so a subject that stops altogether sends no new value: the dashboard tells that from the time of its last message. Events recorded before `subject_rate` existed lack it, and there `rate` was the subject total.
 
+A float that is NaN or infinite (sensors often send NaN for "not available") is `null` in `attributes`, in an array element by element: JSON has no NaN, and a browser cannot read a message that holds one. The same `null` reaches the REST API, history, recordings and their exports; replaying a recording made before this sends `null` too.
+
 `timestamp_unix` is when the transfer was received as stamped by the transport (for SocketCAN, the kernel's receive timestamp), not when the backend got round to processing it.
 
 `payload_bytes` is the size, in bytes, of the received transfer's serialized payload (sum of `transfer.fragmented_payload` fragment lengths). It is `null` if the transport did not expose the fragmented payload (best-effort field).
