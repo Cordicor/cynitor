@@ -36,7 +36,7 @@ from cyphal_v11 import SOCKETCAN_FILTER, V11Traffic
 from data_dir import (EVENTS_DB, SCANNER_DB, SUBJECT_TYPES_FILE, TEST_NODES_FILE, prepare_data_dir,
                       resolve_data_dir)
 from firmware import COMMAND_STATUS, FIRMWARE_DIR, FirmwareServer, firmware_path, send_update_command
-from log_store import InMemoryLogStore, APILogHandler
+from log_store import InMemoryLogStore, APILogHandler, TokenRedactingFilter
 from raw_log import (RAW_LOG_DIR, LogPlayer, RawLog, SocketcanTap, log_has_fd_frames, log_path,
                      new_log_name, read_sidecar, write_sidecar)
 from simulation import SimulatedBus
@@ -59,6 +59,8 @@ logger = logging.getLogger(__name__)
 
 _log_store = InMemoryLogStore(max_entries=5000)
 _root_logger = logging.getLogger()
+for _handler in _root_logger.handlers:  # the console: the journal under systemd
+    _handler.addFilter(TokenRedactingFilter())
 if not any(isinstance(handler, APILogHandler) for handler in _root_logger.handlers):
     _root_logger.addHandler(APILogHandler(_log_store))
 
