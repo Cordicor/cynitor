@@ -14,11 +14,27 @@ RestartSec=5
 # its data folder. Data an earlier version wrote into / is moved there on the
 # first start.
 StateDirectory=cynitor
-# Raw SocketCAN sockets need CAP_NET_RAW. Running as root is the simple
-# default; to harden, create a dedicated user and grant only that capability:
-#   User=cynitor
-#   AmbientCapabilities=CAP_NET_RAW
-#   CapabilityBoundingSet=CAP_NET_RAW
+# Not root: an unprivileged user of its own, made at start, which is all
+# SocketCAN needs (its raw sockets need no capability). DynamicUser also
+# makes the system read-only to it, but for its StateDirectory, and gives it
+# a private /tmp. An existing /var/lib/cynitor is handed over to it.
+DynamicUser=yes
+# slcan adapters are serial ports, owned by the dialout group.
+SupplementaryGroups=dialout
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+LockPersonality=yes
+# CAN, the HTTP server, and netlink, which reads an interface's bitrate.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_CAN AF_NETLINK
 
 [Install]
 WantedBy=multi-user.target

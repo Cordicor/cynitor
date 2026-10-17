@@ -304,8 +304,11 @@ beyond loopback, then:
 sudo systemctl enable --now cynitor-server
 ```
 
-The unit runs as root, because raw SocketCAN sockets need `CAP_NET_RAW`; its
-comments show how to narrow that to a dedicated user.
+The unit does not run as root: systemd gives it a user of its own
+(`DynamicUser`), in the `dialout` group for slcan adapters, which can write
+only to `/var/lib/cynitor`. SocketCAN needs nothing more. An adapter that
+needs other device access (a vendor driver's device files) needs a drop-in
+that grants it, made with `sudo systemctl edit cynitor-server`.
 
 ## Troubleshooting
 

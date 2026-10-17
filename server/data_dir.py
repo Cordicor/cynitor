@@ -96,7 +96,10 @@ def prepare_data_dir(data_dir: Path, legacy_dir: Path) -> list[str]:
             # move open files). Put back what moved: a database separated
             # from its -wal file loses whatever was committed there.
             for part in done:
-                shutil.move(str(data_dir / part.name), str(part))
+                try:
+                    shutil.move(str(data_dir / part.name), str(part))
+                except OSError:  # a read-only legacy folder (the service's /): the copy stays in the data folder
+                    pass
             logger.warning("Could not move %s into %s (%s); left where it is", source, data_dir, exc)
             continue
         moved.append(name)
