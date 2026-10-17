@@ -153,3 +153,17 @@ class TestTokenExtraction:
             headers={"Authorization": "Bearer "},
         )
         assert resp.status == 401
+
+    @pytest.mark.asyncio
+    async def test_a_query_token_opens_gets_only(self, secured_client):
+        # Only a WebSocket handshake or a download needs ?token=; a request that
+        # changes something brings the header (F-034).
+        resp = await secured_client.post("/api/can/disconnect?token=s3cret")
+        assert resp.status == 401
+
+    @pytest.mark.asyncio
+    async def test_a_wrong_token_waits_before_its_401(self, secured_client):
+        import time
+        t0 = time.monotonic()
+        resp = await secured_client.get("/api/status", headers={"Authorization": "Bearer wrong"})
+        assert resp.status == 401 and time.monotonic() - t0 >= 0.2

@@ -6,6 +6,7 @@ API, as classes this server inherits; _setup_routes below has every route.
 """
 
 import asyncio
+import hmac
 import json
 from pathlib import Path
 from typing import Optional, Set, Any
@@ -125,6 +126,8 @@ class WebSocketServer(CanApi, RawLogsApi, TestNodesApi, FirmwareApi, NodesApi, R
         """
         return path == "/ws" or path == "/api" or path.startswith("/api/")
 
+    _AUTH_FAILURE_DELAY_S = 0.25  # how long a request with a wrong token waits for its 401
+
     @web.middleware
     async def _auth_middleware(self, request: web.Request, handler: Any) -> web.StreamResponse:
         if self.auth_token is None or request.method == "OPTIONS":
@@ -134,7 +137,8 @@ class WebSocketServer(CanApi, RawLogsApi, TestNodesApi, FirmwareApi, NodesApi, R
         if not self._is_protected_path(request.path):
             return await handler(request)
         token = self._extract_token(request)
-        if token != self.auth_token:
+        if token is None or not hmac.compare_digest(token.encode(), self.auth_token.encode()):
+            await asyncio.sleep(self._AUTH_FAILURE_DELAY_S)  # slows guessing down
             return web.json_response({"error": "missing or invalid token"}, status=401)
         return await handler(request)
 
@@ -146,7 +150,9 @@ class WebSocketServer(CanApi, RawLogsApi, TestNodesApi, FirmwareApi, NodesApi, R
         header = request.headers.get("Authorization", "")
         if header.startswith("Bearer "):
             return header[7:].strip() or None
-        qs = request.query.get("token")
+        # Only where a header is impossible: the WebSocket handshake and a
+        # download link, both GETs. A request that changes something brings the header.
+        qs = request.query.get("token") if request.method == "GET" else None
         return qs.strip() if qs else None
 
     @web.middleware

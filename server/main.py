@@ -1474,6 +1474,9 @@ async def main(can_iface: Optional[str] = None, force_compile: bool = False, bin
     # the token. When unset, the server runs open. Strongly recommended
     # whenever --bind 0.0.0.0 is used.
     auth_token = os.environ.get("CYNITOR_AUTH_TOKEN", "").strip() or None
+    if auth_token is not None and len(auth_token) < 16:
+        logger.warning("CYNITOR_AUTH_TOKEN is %d characters long: a short token can be guessed. "
+                       "Use a long random one, such as $(openssl rand -hex 24)", len(auth_token))
 
     ws_server = WebSocketServer(
         session=session,

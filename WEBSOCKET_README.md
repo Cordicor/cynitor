@@ -79,7 +79,9 @@ With the variable set, every REST and WebSocket request outside `/api/health` mu
 
 Protected requests must present the token as:
 - REST: `Authorization: Bearer <token>` header
-- WebSocket: `?token=<token>` query parameter (browsers can't attach custom headers on WS handshakes)
+- WebSocket and downloads: `?token=<token>` query parameter (browsers can't attach custom headers on WS handshakes or links); it is taken on `GET` requests only
+
+A wrong token waits a quarter of a second for its `401`. The server warns at start if the token is shorter than 16 characters.
 
 Unauthenticated requests get `HTTP 401 {"error": "missing or invalid token"}`. With the variable unset the server runs open — same behaviour as before this option existed. The frontend prompts the user to paste the token on the first 401 and stores it in `localStorage` under `cynitor.auth.token`.
 
