@@ -142,6 +142,20 @@ class TestServiceCallRecorder:
         assert [(c["status"], c["latency_ms"]) for c in log.calls] == [("ok", 3.0)]
 
     @pytest.mark.asyncio
+    async def test_a_response_handed_over_a_drain_before_its_request_is_paired(self, bus):
+        """The thread with Cynitor's request can be later than a fast node's
+        answer by more than a drain: a frame waits HOLD_S for the earlier ones."""
+        recorder, tap, log = bus
+        recorder.start()
+        tap.send(response(20, 10, 435, 5, b"\x06", T + 0.003))
+        await recorder.drain(now=T + 0.05)
+        tap.send(request(10, 20, 435, 5, b"\x07", T))
+        await recorder.drain(now=T + 0.1)
+        assert log.calls == []  # the response is not yet old enough to be taken
+        await recorder.drain(now=T + 0.2)
+        assert [(c["status"], c["latency_ms"], c["request"]) for c in log.calls] == [("ok", 3.0, "asked 07")]
+
+    @pytest.mark.asyncio
     async def test_only_the_calls_a_recording_takes_are_described(self, bus):
         recorder, tap, log = bus
         log.wants = lambda call: call["service_id"] == 384

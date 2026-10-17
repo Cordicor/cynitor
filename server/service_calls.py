@@ -51,6 +51,7 @@ class ServiceCallRecorder:
     REPLY_TIMEOUT = 5.0     # seconds a request waits for its response, as Cynitor's own calls wait
     WAITING_MAX = 20000     # frames waiting for the event loop; more are dropped
     DRAIN_INTERVAL = 0.05   # seconds between hand-overs to the event loop
+    HOLD_S = 0.1            # seconds a frame waits for earlier ones from the hub's other thread
 
     def __init__(self, open_tap, describe, log, node_uid=lambda node_id: None) -> None:
         self._open_tap = open_tap
@@ -60,6 +61,7 @@ class ServiceCallRecorder:
         self._close_tap = None
         self._drainer = None
         self._waiting: deque = deque()
+        self._held: list = []  # (frame, arrival) of frames not yet HOLD_S old, in time order
         self._tracer = CANTracer()
         # (client, server, service-ID, transfer-ID) -> (time, payload) of a request awaiting its response
         self._pending: dict = {}
@@ -91,6 +93,7 @@ class ServiceCallRecorder:
         self._drainer = None
         close()
         self._waiting.clear()
+        self._held.clear()
         self._pending.clear()
 
     async def _drain_loop(self) -> None:
@@ -104,18 +107,22 @@ class ServiceCallRecorder:
     async def drain(self, now: Optional[float] = None) -> None:
         """Rebuild transfers from the frames that came, and record the calls they end,
         and those whose response is overdue."""
-        frames = []
+        frames = self._held
         while self._waiting:
             frames.append(self._waiting.popleft())
-        # Behind the hub, the frames from the bus and Cynitor's own come on two threads.
+        # Behind the hub, the frames from the bus and Cynitor's own come on two
+        # threads, one of them maybe a drain late: a frame is taken once it is
+        # HOLD_S old, in time order with those that came on the other thread.
         frames.sort(key=lambda item: _frame_time(*item))
+        now = time.time() if now is None else now
+        ready = next((i for i, item in enumerate(frames) if _frame_time(*item) > now - self.HOLD_S), len(frames))
+        frames, self._held = frames[:ready], frames[ready:]
         calls: list[dict] = []
         for msg, arrival in frames:
             try:
                 self._take(msg, _frame_time(msg, arrival), calls)
             except Exception as exc:
                 logger.debug("Service call recorder skipped a frame it could not read: %s", exc)
-        now = time.time() if now is None else now
         for key, (asked, request) in list(self._pending.items()):
             if now - asked > self.REPLY_TIMEOUT:
                 del self._pending[key]
