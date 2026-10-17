@@ -34,6 +34,7 @@ const state = {
   canAllocator: false,
   canListenOnly: false,  // connect sending nothing (the connect form's Listen only)
   listenOnly: false,     // whether the session that runs sends nothing, from /api/status
+  ownNodeId: null,       // Cynitor's own node-ID on the bus, from /api/status
   // Cynitor's allocator in the CAN session connected to (GET /api/status
   // allocator): {other_allocator, allocated}, or null while it runs none.
   allocatorStatus: null,
@@ -220,6 +221,17 @@ const upgradeStableKeys = () => {
 const getNodeAlias = (uid) => {
   const key = uniqueIdKey(uid);
   return key ? state.nodeAliases[key] || null : null;
+};
+
+// A node as a confirmation names it: node-ID, name, the end of its unique-ID
+// and the bus, so that a command goes to the device meant, not one that took
+// its node-ID meanwhile.
+const describeNode = (nodeId) => {
+  const node = state.latestNodesPayload?.nodes?.[String(nodeId)];
+  const name = getNodeAlias(node?.unique_id) || node?.name;
+  const uid = uniqueIdKey(node?.unique_id);
+  return [`node ${nodeId}`, name && `"${name}"`, uid && `unique-ID …${uid.slice(-8)}`,
+    state.preferredCanInterface && `on ${state.preferredCanInterface}`].filter(Boolean).join(', ');
 };
 
 const setNodeAlias = (uid, alias) => {

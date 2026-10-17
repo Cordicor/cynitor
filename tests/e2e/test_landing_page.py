@@ -5738,7 +5738,8 @@ class _SidebarServer:
                       "allocator": self.allocator if self.can else None,
                       "decode_on_demand": self.decode_on_demand, "update": self.update,
                       "history_error": self.history_error if self.can else None,
-                      "listen_only": bool(self.can) and self.listen_only}
+                      "listen_only": bool(self.can) and self.listen_only,
+                      "own_node_id": None if not self.can or self.listen_only else 127}
         elif path == "/api/decoding" and self.decoding_error:
             await route.fulfill(json={"error": self.decoding_error}, status=500,
                                 headers={"Access-Control-Allow-Origin": "*"})
@@ -6341,6 +6342,40 @@ async def _(page):
     finally:
         await page.evaluate("state.canAllocator = false; _writeSettingsNow()")  # off again for the tests after
         await sidebar_close(page, server)
+
+
+@test("Sidebar: the CAN line says which node-ID Cynitor is, or that it only listens")
+async def _(page):
+    server = _SidebarServer()
+    await sidebar_open(page, server)
+    try:
+        await page.locator("#connectDashboardBtn").click()
+        await page.wait_for_function("state.dashboardConnected", timeout=WAIT_MS)
+        await sidebar_connect_can(page)
+        await page.evaluate("pollStatus()")
+        await page.wait_for_function("el('canUtilization').textContent.includes('as node 127')", timeout=WAIT_MS)
+        await sidebar_disconnect_can(page)
+        await page.locator("#canListenOnlyToggle").check()
+        await sidebar_connect_can(page)
+        await page.evaluate("pollStatus()")
+        await page.wait_for_function("el('canUtilization').textContent.includes('listening only')", timeout=WAIT_MS)
+    finally:
+        await page.evaluate("state.canListenOnly = false; _writeSettingsNow()")
+        await sidebar_close(page, server)
+
+
+@test("Confirmations name the device: node-ID, name, the end of its unique-ID and the bus")
+async def _(page):
+    text = await page.evaluate("""() => {
+        const saved = [state.latestNodesPayload, state.preferredCanInterface];
+        state.latestNodesPayload = {nodes: {'21': {node_id: 21, name: 'org.example.esc',
+                                                   unique_id: '0123456789abcdef0123456789abcdef'}}};
+        state.preferredCanInterface = 'can0';
+        const out = NODE_COMMANDS[0].question(21);
+        [state.latestNodesPayload, state.preferredCanInterface] = saved;
+        return out;
+    }""")
+    assert text == 'Restart node 21, "org.example.esc", unique-ID …89abcdef, on can0?', f"Question: {text}"
 
 
 @test("Sidebar: Listen only connects sending nothing; while it runs the box says so, and the choice is kept")

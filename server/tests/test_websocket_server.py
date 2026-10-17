@@ -366,6 +366,15 @@ class TestCANConnectSpecsAndBitrate:
         assert (fine, failing) == (None, "disk I/O error")
 
     @pytest.mark.asyncio
+    async def test_status_names_cynitors_own_node_id(self, client, session):
+        # It was shown nowhere (F-039).
+        session.is_running = True
+        session._own_node_ids = MagicMock(return_value={127})
+        with patch("main.discover_can_interfaces", return_value=[]):
+            status = await (await client.get("/api/status")).json()
+        assert status["own_node_id"] == 127
+
+    @pytest.mark.asyncio
     async def test_status_reports_a_newer_release(self, client, server, session):
         with patch("main.discover_can_interfaces", return_value=[]):
             unchecked = (await (await client.get("/api/status")).json())["update"]

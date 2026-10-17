@@ -312,7 +312,8 @@ const updateSemaphores = () => {
       const dropped = state.droppedEvents;
       const droppedTotal = dropped ? dropped.scanner + dropped.logger + dropped.clients : 0;
       const dropStr = droppedTotal > 0 ? ` · ${droppedTotal} dropped` : '';
-      canInfo.textContent = `${rate.toFixed(1)} msg/s${utilStr}${dropStr}`;
+      const selfStr = state.listenOnly ? ' · listening only' : state.ownNodeId != null ? ` · as node ${state.ownNodeId}` : '';
+      canInfo.textContent = `${rate.toFixed(1)} msg/s${utilStr}${dropStr}${selfStr}`;
       canInfo.title = droppedTotal > 0
         ? `Messages lost because the backend could not keep up — before decoding: ${dropped.scanner}, `
           + `from history/recordings: ${dropped.logger}, from dashboard views: ${dropped.clients}`
@@ -877,6 +878,7 @@ const pollStatus = async () => {
   state.busErrors = data.bus_errors ?? null;
   state.allocatorStatus = data.allocator ?? null;
   state.listenOnly = data.listen_only === true;
+  state.ownNodeId = Number.isInteger(data.own_node_id) ? data.own_node_id : null;
   state.serverCpu = data.server_cpu ?? state.serverCpu;
   state.decodeOnDemand = data.decode_on_demand === true;
   state.update = data.update ?? null;

@@ -438,9 +438,9 @@ const bindServiceCardEvents = (content, nodeId, forSubjects = false) => {
 // as buttons. Status names follow the order of its STATUS_* constants.
 const EXECUTE_COMMAND_SERVICE_ID = 435;
 const NODE_COMMANDS = [
-  { command: 65535, label: 'Restart', question: (id) => `Restart node ${id}?` },
+  { command: 65535, label: 'Restart', question: (id) => `Restart ${describeNode(id)}?` },
   { command: 65532, label: 'Factory reset', danger: true,
-    question: (id) => `Factory reset node ${id}? Its registers return to their defaults.` },
+    question: (id) => `Factory reset ${describeNode(id)}? Its registers return to their defaults.` },
 ];
 const EXECUTE_COMMAND_STATUS = ['success', 'failure', 'not authorized', 'bad command',
   'bad parameter', 'bad state', 'internal error'];
@@ -534,7 +534,7 @@ const followFirmwareUpdate = (nodeId, box) => {
 };
 
 const startFirmwareUpdate = async (nodeId, file, box) => {
-  const question = `Update node ${nodeId} with ${file.name} (${formatBytes(file.size)})?\n\n`
+  const question = `Update ${describeNode(nodeId)} with ${file.name} (${formatBytes(file.size)})?\n\n`
     + 'It restarts into its bootloader, which must speak Cyphal, and reads the file from Cynitor.';
   if (!window.confirm(question)) return;
   const name = firmwareFileName(file.name);

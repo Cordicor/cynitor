@@ -147,7 +147,7 @@ const bindRegisterEvents = (container, nodeId) => {
       if (!input) return;
 
       const sentValue = input.value;
-      if (!confirm(`Write "${name}" = ${sentValue}?`)) return;
+      if (!confirm(`Write "${name}" = ${sentValue} to ${describeNode(nodeId)}?`)) return;
 
       btn.disabled = true;
       btn.textContent = '…';

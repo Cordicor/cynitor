@@ -54,6 +54,8 @@ class CanApi:
             "server_cpu": self.cpu.read(),
             # Whether only the subjects watched or recorded are decoded (POST /api/decoding).
             "decode_on_demand": self.session.decode_on_demand,
+            # Cynitor's own node-ID on the bus; None when not connected, or anonymous (listening only).
+            "own_node_id": next(iter(self.session._own_node_ids()), None) if self.session.is_running else None,
             # Whether the session that runs sends nothing on the bus (connect's listen_only).
             "listen_only": self.session.is_running and self.session.listen_only is True,
             # A newer release, {"version", "url"}, if the update check found one; else None.

@@ -405,6 +405,8 @@ Response:
 
 `history_error` says why history and recordings are not being written, such as `"disk I/O error"` on a full disk, until a write works again; otherwise `null`. What such a write loses counts in `dropped.logger`.
 
+`own_node_id` is Cynitor's own node-ID on the bus, `null` when not connected or listening only (`listen_only`).
+
 `update` is a newer Cynitor release, `{"version": "1.4.0", "url": "https://github.com/OpenCyphal-Garage/cynitor/releases/tag/v1.4.0"}`, when the server's update check (GitHub, at start and once a day) found one; otherwise `null`, also when the check is off (`--no-update-check`, `CYNITOR_NO_UPDATE_CHECK=1`) or GitHub cannot be reached.
 
 `bus_utilization` is the bus load in percent, here and in the `metrics` message and `/api/can/transport`. It is `null` when not connected to CAN, and when nothing can measure it: on SocketCAN it comes from `canbusload` (Linux can-utils), so a host without it reports `null`, not an idle 0. So does a CAN FD bus when the host's `canbusload` counts Classic frames only (can-utils before mid-2021, such as Ubuntu 22.04's 2020.11), as it would read CAN FD traffic as an idle bus.
