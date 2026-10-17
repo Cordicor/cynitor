@@ -45,6 +45,8 @@ No Python needed. Take the file for your system from the
 
 - All of them are for x86-64, hold the same server and open no window: you
   use it from a browser.
+- Each file has a `<file>.sha256` beside it: `sha256sum -c <file>.sha256`
+  checks a download.
 - The Linux builds are made on Ubuntu 22.04 and run on it and anything newer.
 - The Windows build includes what CANable (candleLight) adapters need. PEAK,
   Kvaser, Vector and IXXAT adapters need their vendor's driver. Windows may

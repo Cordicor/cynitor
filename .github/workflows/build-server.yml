@@ -55,7 +55,7 @@ jobs:
           cache-dependency-path: server/requirements.txt
 
       - name: Install build dependencies
-        run: pip install -r server/requirements.txt pyinstaller
+        run: pip install -r server/requirements.txt pyinstaller==6.22.3
 
       - name: Compile DSDL
         # python_compiled_messages/ is gitignored and the frozen binary cannot
@@ -147,6 +147,8 @@ jobs:
           gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 \
             || gh release create "$GITHUB_REF_NAME" --generate-notes \
             || gh release view "$GITHUB_REF_NAME" >/dev/null
+          # A <file>.sha256 beside each file, for users to check their download.
+          (cd packaging/out && for f in *; do sha256sum "$f" > "$f.sha256"; done)
           gh release upload "$GITHUB_REF_NAME" packaging/out/* --clobber
 
   windows:
@@ -183,7 +185,7 @@ jobs:
       - name: Install build dependencies
         # On Windows, requirements.txt also brings gs_usb and libusb-package,
         # whose DLL the spec bundles for candleLight adapters.
-        run: pip install -r server/requirements.txt pyinstaller
+        run: pip install -r server/requirements.txt pyinstaller==6.22.3
 
       - name: Compile DSDL
         working-directory: server
@@ -227,4 +229,6 @@ jobs:
           gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 \
             || gh release create "$GITHUB_REF_NAME" --generate-notes \
             || gh release view "$GITHUB_REF_NAME" >/dev/null
+          # A <file>.sha256 beside each file, for users to check their download.
+          (cd packaging/out && for f in *; do sha256sum "$f" > "$f.sha256"; done)
           gh release upload "$GITHUB_REF_NAME" packaging/out/* --clobber
