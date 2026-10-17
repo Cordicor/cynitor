@@ -2,11 +2,9 @@
 
 import datetime
 import time
-import collections
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import numpy
-import pytest
 
 from node_info import NodeInfo, NodeTime  # uavcan.* is stubbed in conftest.py
 

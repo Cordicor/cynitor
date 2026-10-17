@@ -190,7 +190,7 @@ class TestClientLifecycle:
         queue from the telemetry manager — otherwise leaked queues would
         pile up across reconnects."""
         before = len(session.telemetry._queues)
-        async with client.ws_connect("/ws") as ws:
+        async with client.ws_connect("/ws"):
             await asyncio.sleep(0.1)
             during = len(session.telemetry._queues)
             assert during == before + 1, "subscriber registered while client is connected"

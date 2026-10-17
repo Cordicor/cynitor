@@ -1,10 +1,8 @@
 """Tests for EventLogger (SQLite persistence)."""
 
 import asyncio
-import os
 import time
 import sqlite3
-import tempfile
 import pytest
 from event_logger import EventLogger, FilterMatcher
 

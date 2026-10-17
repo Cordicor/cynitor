@@ -1,6 +1,5 @@
 """Firmware updates: the file server's reads, the session's update command, the REST API."""
 
-from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest

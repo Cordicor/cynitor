@@ -3,11 +3,9 @@
 import asyncio
 import time
 import pytest
-from decimal import Decimal
-from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 from aiohttp import web
-from aiohttp.test_utils import AioHTTPTestCase, TestClient, TestServer
+from aiohttp.test_utils import TestClient, TestServer
 from websocket_server import WebSocketServer
 from dsdl_manager import DsdlManager
 import can
@@ -201,8 +199,6 @@ class TestCANConnect:
     async def test_connect_success(self, client, session):
         """Test successful CAN connection via mocked handler."""
         # We need to mock the full handler because it imports discover_can_interfaces from main
-        original_handler = session.connect
-
         async def patched_connect(request):
             session.is_running = True
             session.can_interface = "vcan0"

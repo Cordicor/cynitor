@@ -999,7 +999,7 @@ async def _(page):
 
     await page.route("**/api/identity/*", identity)
     try:
-        await page.locator(f"#nodesTable .tabulator-row", has_text="old_sensor").locator(
+        await page.locator("#nodesTable .tabulator-row", has_text="old_sensor").locator(
             '.tabulator-cell[tabulator-field="name"]').dblclick()
         await page.locator(".name-input").fill("bench sensor")
         await page.keyboard.press("Enter")

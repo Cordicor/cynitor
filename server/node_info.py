@@ -1,7 +1,7 @@
 # This class provides all information about Cyphal node.
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Deque, Optional
+from typing import Deque, Optional
 
 import datetime
 import collections

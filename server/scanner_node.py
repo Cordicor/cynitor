@@ -742,19 +742,11 @@ class ScannerNode(ScannerRegisters, ScannerServices):
     async def port_callback(self, msg: uavcan.node.port.List_1_0, transfer: pycyphal.transport.TransferFrom):
         node_id: int = transfer.source_node_id
 
-        # Snapshot ports before update for change detection
         node = self.all_nodes[node_id]
         def _port_ids(ids):
             return sorted(self._make_json_serializable(s.value) if hasattr(s, 'value') else int(s) for s in ids)
 
-        old_ports = {
-            "publishers": _port_ids(node.publisher_SubjectIDs) if node.has_publishers else [],
-            "subscribers": _port_ids(node.subscriber_SubjectIDs) if node.has_subscribers else [],
-            "servers": _port_ids(node.server_ServiceIDs) if node.has_servers else [],
-            "clients": _port_ids(node.client_ServiceIDs) if node.has_clients else [],
-        }
-
-        self.all_nodes[node_id].set_port_list(port_list=msg)
+        node.set_port_list(port_list=msg)
 
         # Detect port changes
         new_ports = {
