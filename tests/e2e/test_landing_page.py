@@ -5667,6 +5667,7 @@ class _SidebarServer:
         self.connect_delay = 0     # seconds a CAN connect takes
         self.bus_errors = None     # what it says of errors on the bus, while connected
         self.update = None         # a newer release its update check found
+        self.history_error = None  # why its database cannot be written, while connected
         self.connect_body = None   # what the last CAN connect asked for
         self.allocator = None      # what it says of its node-ID allocator, while it runs one
         self.decode_on_demand = False  # whether it decodes only what is watched or recorded
@@ -5691,7 +5692,8 @@ class _SidebarServer:
                       "last_error": self.last_error, "cyphal_v11": None,
                       "bus_errors": self.bus_errors if self.can else None,
                       "allocator": self.allocator if self.can else None,
-                      "decode_on_demand": self.decode_on_demand, "update": self.update}
+                      "decode_on_demand": self.decode_on_demand, "update": self.update,
+                      "history_error": self.history_error if self.can else None}
         elif path == "/api/decoding" and self.decoding_error:
             await route.fulfill(json={"error": self.decoding_error}, status=500,
                                 headers={"Access-Control-Allow-Origin": "*"})
@@ -5884,9 +5886,15 @@ async def _(page):
         server.last_error = None
         await page.evaluate("pollStatus()")
         gone = await page.evaluate(SIDEBAR_CAN_ERROR)
-        assert (shown, gone) == ("Another node uses Cynitor's own node-ID 127", None), f"Shown: {shown!r}; then: {gone!r}"
+        server.history_error = "disk I/O error"  # a full disk
+        await page.evaluate("pollStatus()")
+        unsaved = await page.evaluate(SIDEBAR_CAN_ERROR)
+        server.history_error = None
+        assert (shown, gone, unsaved) == ("Another node uses Cynitor's own node-ID 127", None,
+                                          "History and recordings are not being saved: disk I/O error"), \
+            f"Shown: {shown!r}; then: {gone!r}; with the disk full: {unsaved!r}"
     finally:
-        server.last_error = None
+        server.last_error = server.history_error = None
         await sidebar_close(page, server)
 
 

@@ -42,6 +42,8 @@ class CanApi:
             "available_adapters": await self._list_adapters(),
             "bus_utilization": bus_load.utilization if bus_load else None,
             "dropped": self.session.dropped_events(),
+            # Why history and recordings are not being written (a full disk), until a write works again.
+            "history_error": getattr(getattr(self.session, "event_logger", None), "write_error", None),
             "last_error": self.session.last_error,
             "cyphal_v11": v11.status() if isinstance(v11 := getattr(self.session, "v11", None), V11Traffic) else None,
             "bus_errors": (errors.status() if isinstance(errors := getattr(self.session, "bus_errors", None), BusErrors)

@@ -314,6 +314,15 @@ class TestCANConnectSpecsAndBitrate:
         assert (await resp.json())["server_cpu"] == 42.5
 
     @pytest.mark.asyncio
+    async def test_status_says_why_history_is_not_written(self, client, session):
+        with patch("main.discover_can_interfaces", return_value=[]):
+            session.event_logger = MagicMock(write_error=None)
+            fine = (await (await client.get("/api/status")).json())["history_error"]
+            session.event_logger.write_error = "disk I/O error"
+            failing = (await (await client.get("/api/status")).json())["history_error"]
+        assert (fine, failing) == (None, "disk I/O error")
+
+    @pytest.mark.asyncio
     async def test_status_reports_a_newer_release(self, client, server, session):
         with patch("main.discover_can_interfaces", return_value=[]):
             unchecked = (await (await client.get("/api/status")).json())["update"]

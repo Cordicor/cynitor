@@ -98,8 +98,10 @@ class EventLogger:
         self.retention_seconds = float(retention_seconds)
         self.max_events = max_events
         self._queue: asyncio.Queue = asyncio.Queue(maxsize=self.QUEUE_SIZE)
-        self.dropped_events = 0  # events discarded because _queue was full
+        self.dropped_events = 0  # events discarded because _queue was full, or lost by a failed write
         self._drop_warning_at: Optional[float] = None  # monotonic time of the last warning of that
+        self.write_error: Optional[str] = None  # why the last write to the database failed, until one works
+        self._write_error_logged_at: Optional[float] = None  # monotonic time it was last logged
         self._running = False
         self._task: Optional[asyncio.Task] = None
         self._autostop_task: Optional[asyncio.Task] = None
@@ -326,6 +328,23 @@ class EventLogger:
             logger.warning("Logger queue full: events come faster than they are written, and the oldest "
                            "are dropped from history and recordings (%d so far)", self.dropped_events)
     
+    def _write_failed(self, what: str, lost: int, exc: Exception) -> None:
+        """A write to the database failed (a full disk, a damaged file): count what it lost, keep
+        why for /api/status, and log it the first time and then at most every DROP_WARNING_INTERVAL_S."""
+        self.dropped_events += lost
+        first = self.write_error is None
+        self.write_error = str(exc)
+        now = time.monotonic()
+        if first or now - (self._write_error_logged_at or 0.0) >= self.DROP_WARNING_INTERVAL_S:
+            self._write_error_logged_at = now
+            logger.error("Failed to write %s to the database: %s (%d events dropped so far)",
+                         what, exc, self.dropped_events, exc_info=first)
+
+    def _write_worked(self) -> None:
+        if self.write_error is not None:
+            self.write_error = None
+            logger.info("Writing to the database works again")
+
     async def _log_loop(self) -> None:
         """Main logging loop."""
         while self._running or not self._queue.empty():
@@ -440,8 +459,9 @@ class EventLogger:
         try:
             auto_stop = await asyncio.to_thread(self._write_events_sync, events)
         except Exception as e:
-            logger.error(f"Failed to write events: {e}", exc_info=True)
+            self._write_failed("events", len(events), e)
             return
+        self._write_worked()
         for rid, reason in auto_stop:
             await self._auto_stop_recording(rid, reason)
     
@@ -618,7 +638,7 @@ class EventLogger:
             await asyncio.to_thread(self._log_node_event_sync, node_id, event_type, detail, unique_id)
             logger.debug(f"Node history: node={node_id} uid={unique_id} type={event_type}")
         except Exception as e:
-            logger.error(f"Failed to log node event: {e}", exc_info=True)
+            self._write_failed("a node event", 0, e)
 
     # ------------------------------------------------------------------
     # Service calls heard on the bus, for the recordings (service_calls)
@@ -673,8 +693,9 @@ class EventLogger:
         try:
             auto_stop = await asyncio.to_thread(self._log_service_calls_sync, calls)
         except Exception as e:
-            logger.error(f"Failed to record service calls: {e}", exc_info=True)
+            self._write_failed("service calls", len(calls), e)
             return
+        self._write_worked()
         for rid, reason in auto_stop:
             await self._auto_stop_recording(rid, reason)
 

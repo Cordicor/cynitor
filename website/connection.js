@@ -890,9 +890,12 @@ const pollStatus = async () => {
       showToast(`CAN disconnected: ${data.last_error}`, 'error');
       setCanError(`Disconnected: ${data.last_error}`);
     }
-  } else if (backendCanRunning && (data.last_error || null) !== state.canError) {
-    // A problem the session goes on with, as another node using Cynitor's node-ID.
-    setCanError(data.last_error || null);
+  } else if (backendCanRunning) {
+    // A problem the session goes on with: another node using Cynitor's
+    // node-ID, or a database that cannot be written (a full disk).
+    const problem = data.last_error
+      || (data.history_error ? `History and recordings are not being saved: ${data.history_error}` : null);
+    if (problem !== state.canError) setCanError(problem);
   }
 
   updateSemaphores();
