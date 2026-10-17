@@ -270,7 +270,7 @@ class CANSession:
 
     def __init__(self, default_bitrate: Optional[int] = None, data_dir: Path = Path("."),
                  default_data_bitrate: Optional[int] = None, default_allocator: bool = False,
-                 decode_on_demand: bool = False) -> None:
+                 decode_on_demand: bool = False, default_listen_only: bool = False) -> None:
         # Where the databases live; main() passes the resolved data folder.
         self.data_dir = Path(data_dir)
         # --bitrate, used when connect() is not given one. There is no built-in
@@ -282,6 +282,9 @@ class CANSession:
         # --allocator, likewise: whether Cynitor gives plug-and-play nodes
         # their node-IDs. Off unless asked for: a bus may have one allocator only.
         self.default_allocator = default_allocator
+        # --listen-only, likewise: watch the bus without sending anything.
+        self.default_listen_only = default_listen_only
+        self.listen_only = False  # whether the session that runs sends nothing
         # --decode-on-demand, and the dashboard's switch: decode only the
         # subjects a dashboard watches or a recording takes, and count the rest
         # from their frames (see transfer_rates). For a bus that carries more
@@ -329,6 +332,7 @@ class CANSession:
         # Whether UAVCAN__NODE__ID is one this session picked, and so is
         # forgotten when it ends: the next bus may have a node on it.
         self._picked_node_id = False
+        self._node_id_before: Optional[str] = None  # UAVCAN__NODE__ID as it was, while listening only
         # Recording-replay engine. None unless a replay session is in progress.
         # Mutually exclusive with scanner — the WS handler chooses telemetry
         # vs replay based on which is non-None, and connect()/start_replay()
@@ -341,7 +345,8 @@ class CANSession:
 
     async def connect(self, can_iface: str, force_compile: bool = False,
                       bitrate: Optional[int] = None, data_bitrate: Optional[int] = None,
-                      *, allocator: Optional[bool] = None, open_bus=None, offline: Optional[dict] = None) -> None:
+                      *, allocator: Optional[bool] = None, open_bus=None, offline: Optional[dict] = None,
+                      listen_only: Optional[bool] = None) -> None:
         """Start all CAN components.
 
         `bitrate` is ignored by SocketCAN (set it with `ip link`) and required
@@ -354,7 +359,12 @@ class CANSession:
 
         `allocator` has Cynitor give plug-and-play nodes their node-IDs for
         this session; None means `default_allocator`.
+
+        `listen_only` has the session send nothing: no node-ID, no heartbeat,
+        no requests, so no names or registers either; None means
+        `default_listen_only`.
         """
+        listen_only = self.default_listen_only if listen_only is None else bool(listen_only)
         bitrate = resolve_bitrate(can_iface, self.default_bitrate if bitrate is None else bitrate)
         data_bitrate = resolve_data_bitrate(
             can_iface, self.default_data_bitrate if data_bitrate is None else data_bitrate)
@@ -388,14 +398,14 @@ class CANSession:
         simulation: Optional[SimulatedBus] = None
         if is_socketcan(spec):
             device = socketcan_device(spec)
-            await self._pick_node_id(spec, fd=socketcan_supports_fd(device))
+            await self._pick_node_id(spec, fd=socketcan_supports_fd(device), listen_only=listen_only)
             await asyncio.to_thread(prepare_runtime, can_iface, force_compile, bitrate)
         else:
             if is_simulated(spec) and open_bus is None:
                 # The hub opens the simulated bus's wire as it would an adapter.
                 simulation = SimulatedBus(bitrate, data_bitrate)
                 open_bus = simulation.open_wire
-            hub = await self._open_hub(spec, bitrate, force_compile, data_bitrate, open_bus)
+            hub = await self._open_hub(spec, bitrate, force_compile, data_bitrate, open_bus, listen_only)
 
         async with self._lock:
             if self.is_running:
@@ -413,13 +423,14 @@ class CANSession:
                 logger.info("Initializing ScannerNode...")
                 self.scanner = ScannerNode(register_file=str(self.data_dir / SCANNER_DB))
                 self.scanner.offline = offline
+                self.scanner.listen_only = self.listen_only = listen_only
                 self.scanner.on_own_node_id_conflict = self._own_node_id_taken
                 self._apply_saved_subject_types()
                 if offline is None and self.scanner.node.id is not None:
                     self.firmware = FirmwareServer(self.firmware_folder)
                     self.firmware.serve_on(self.scanner.node)
                 # Nothing can be sent while a raw log plays, an answer neither.
-                if offline is None and (self.default_allocator if allocator is None else allocator):
+                if offline is None and not listen_only and (self.default_allocator if allocator is None else allocator):
                     self._start_allocator()
 
                 logger.info("Initializing TelemetryManager...")
@@ -493,7 +504,7 @@ class CANSession:
                     # Last, so that the devices join a bus Cynitor already watches.
                     self.simulation = simulation
                     simulation.start()
-                if offline is None:  # nothing can be sent while a raw log plays
+                if offline is None and not listen_only:  # nothing can be sent while a raw log plays
                     self.test_nodes.attach(TestNodeBus(self._test_node_transport, simulation is not None,
                                                        self._node_ids_in_use))
                 logger.info("CAN session started on %s", can_iface)
@@ -660,13 +671,19 @@ class CANSession:
             logger.warning("Cannot watch %s for Cyphal v1.1 traffic: %s", device, exc)
             return None
 
-    async def _pick_node_id(self, local_spec: str, fd: bool = False) -> None:
+    async def _pick_node_id(self, local_spec: str, fd: bool = False, listen_only: bool = False) -> None:
         """Choose Cynitor's own node-ID from the heartbeats on the bus, unless one is set.
 
         The way `yakut accommodate` does it, without needing yakut: without a
         node-ID the scanner runs anonymously and can ask no node for its
-        GetInfo or registers.
+        GetInfo or registers. Listening only, it runs anonymously on purpose:
+        a node-ID out of range is none to pycyphal, which then sends nothing.
         """
+        if listen_only:
+            self._node_id_before = os.environ.get("UAVCAN__NODE__ID")
+            os.environ["UAVCAN__NODE__ID"] = "65535"
+            self._picked_node_id = True
+            return
         if "UAVCAN__NODE__ID" in os.environ:
             return
         node_id = await asyncio.to_thread(pick_free_node_id, local_spec, frozenset(), None, fd)
@@ -677,7 +694,7 @@ class CANSession:
             self._picked_node_id = True
 
     async def _open_hub(self, spec: str, bitrate: int, force_compile: bool,
-                        data_bitrate: Optional[int] = None, open_bus=None) -> CANHub:
+                        data_bitrate: Optional[int] = None, open_bus=None, listen_only: bool = False) -> CANHub:
         """Open a non-SocketCAN adapter once and point every component at the hub's channel.
 
         Most such adapters admit a single open handle, and the node-ID picker,
@@ -687,7 +704,7 @@ class CANSession:
         hub = CANHub(spec, bitrate, data_bitrate) if open_bus is None else CANHub(spec, bitrate, data_bitrate, open_bus)
         await asyncio.to_thread(hub.start)
         try:
-            await self._pick_node_id(hub.local_spec)
+            await self._pick_node_id(hub.local_spec, listen_only=listen_only)
             await asyncio.to_thread(
                 prepare_runtime, hub.local_spec, force_compile, bitrate, False, data_bitrate,
             )
@@ -1041,7 +1058,11 @@ class CANSession:
         self.registered_nodes.clear()
         if self._picked_node_id:  # one the user set stays
             os.environ.pop("UAVCAN__NODE__ID", None)
+            if self._node_id_before is not None:  # set aside while listening only
+                os.environ["UAVCAN__NODE__ID"] = self._node_id_before
             self._picked_node_id = False
+            self._node_id_before = None
+        self.listen_only = False
         self.can_interface = None
         self.can_bitrate = None
         self.can_data_bitrate = None
@@ -1103,6 +1124,8 @@ async def register_nodes(scanner, registered_nodes_set: set[int],
         try:
             if isinstance(scanner.offline, dict):  # a raw log plays: nobody answers register reads
                 dsdl_pub_messages, dsdl_srv_messages = scanner.offline_ports(node.node_id)
+            elif scanner.listen_only is True:  # nothing is asked: the subjects' types are the user's, or guessed
+                dsdl_pub_messages, dsdl_srv_messages = {}, {}
             else:
                 dsdl_pub_messages, dsdl_srv_messages = await scanner.update_reg_list(node.node_id)
             scanner.node_service_types[node.node_id] = dict(dsdl_srv_messages)
@@ -1413,7 +1436,7 @@ async def main(can_iface: Optional[str] = None, force_compile: bool = False, bin
                can_bitrate: Optional[int] = None, data_dir: Optional[str] = None,
                can_data_bitrate: Optional[int] = None, allocator: bool = False,
                decode_on_demand: bool = False, update_check: bool = True,
-               allow_any_interface: bool = False) -> None:
+               allow_any_interface: bool = False, listen_only: bool = False) -> None:
     from websocket_server import WebSocketServer
     from dsdl_manager import DsdlManager
 
@@ -1430,7 +1453,7 @@ async def main(can_iface: Optional[str] = None, force_compile: bool = False, bin
 
     session = CANSession(default_bitrate=can_bitrate, data_dir=data_path,
                          default_data_bitrate=can_data_bitrate, default_allocator=allocator,
-                         decode_on_demand=decode_on_demand)
+                         decode_on_demand=decode_on_demand, default_listen_only=listen_only)
     project_root = resolve_project_root()
     dsdl_mgr = DsdlManager(project_root, data_dir=data_path)
     dsdl_mgr.make_importable()
@@ -1493,6 +1516,7 @@ async def main(can_iface: Optional[str] = None, force_compile: bool = False, bin
     logger.info("  --data-bitrate <n>  CAN FD data-phase speed; opens PCAN/Kvaser/Vector/IXXAT/gs_usb/slcan as CAN FD")
     logger.info("  --allocator      give plug-and-play nodes their node-IDs; only for a bus with no allocator of its own")
     logger.info("  --decode-on-demand  decode only the subjects watched or recorded; for a bus too busy to decode whole")
+    logger.info("  --listen-only    watch the bus without sending anything (no node names or registers then)")
     logger.info("  --bind <host>    bind HTTP server to <host>  (default 127.0.0.1; 0.0.0.0 to expose on the network)")
     logger.info("  --port <n>       listen on <n> instead of 8080")
     logger.info("  --data-dir <dir> keep history, recordings and raw logs in <dir>")
@@ -1703,6 +1727,12 @@ if __name__ == "__main__":
         help="Serve only the REST API and WebSocket; do not serve the dashboard",
     )
     parser.add_argument(
+        "--listen-only",
+        action="store_true",
+        help="Watch the bus without sending anything: no node-ID, heartbeat or requests, so node names "
+             "and registers are not read. The dashboard's Listen only box does the same for one session",
+    )
+    parser.add_argument(
         "--insecure-no-auth",
         action="store_true",
         help="Allow a --bind beyond loopback without CYNITOR_AUTH_TOKEN: anyone who can reach the "
@@ -1754,6 +1784,7 @@ if __name__ == "__main__":
             decode_on_demand=args.decode_on_demand,
             update_check=not args.no_update_check,
             allow_any_interface=args.allow_any_interface,
+            listen_only=args.listen_only,
         ))
     except KeyboardInterrupt:
         logger.info("Interrupted by user")

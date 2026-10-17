@@ -54,6 +54,8 @@ class CanApi:
             "server_cpu": self.cpu.read(),
             # Whether only the subjects watched or recorded are decoded (POST /api/decoding).
             "decode_on_demand": self.session.decode_on_demand,
+            # Whether the session that runs sends nothing on the bus (connect's listen_only).
+            "listen_only": self.session.is_running and self.session.listen_only is True,
             # A newer release, {"version", "url"}, if the update check found one; else None.
             "update": self.update_check.available if self.update_check is not None else None,
         })
@@ -100,6 +102,10 @@ class CanApi:
         allocator = payload.get("allocator")
         if allocator is not None and not isinstance(allocator, bool):
             return web.json_response({"error": "Field 'allocator' must be true or false"}, status=400)
+        # Optional; the session sends nothing. --listen-only stands in likewise.
+        listen_only = payload.get("listen_only")
+        if listen_only is not None and not isinstance(listen_only, bool):
+            return web.json_response({"error": "Field 'listen_only' must be true or false"}, status=400)
 
         if is_explicit_spec(iface) and not self.allow_any_interface and (refused := api_interface_error(iface)):
             return web.json_response({"error": refused}, status=400)
@@ -119,10 +125,12 @@ class CanApi:
                 )
 
         try:
-            await self.session.connect(iface, bitrate=bitrate, data_bitrate=data_bitrate, allocator=allocator)
+            await self.session.connect(iface, bitrate=bitrate, data_bitrate=data_bitrate, allocator=allocator,
+                                       listen_only=listen_only)
             return web.json_response({"status": "running", "can_interface": iface,
                                       "can_fd": self.session.can_fd,
-                                      "allocator": self.session.allocator_status()})
+                                      "allocator": self.session.allocator_status(),
+                                      "listen_only": self.session.listen_only is True})
         except Exception as e:
             logger.error(f"Failed to connect CAN: {e}", exc_info=True)
             return web.json_response({"error": str(e)}, status=500)

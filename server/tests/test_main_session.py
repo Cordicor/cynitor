@@ -461,6 +461,22 @@ class TestNodeIdIsPickedForEachBus:
         await session.disconnect()
         assert os.environ["UAVCAN__NODE__ID"] == "7"
 
+    @pytest.mark.parametrize("set_by_user", [None, "7"])
+    async def test_listening_only_runs_anonymously_and_restores_the_users_node_id(self, hubs, monkeypatch, set_by_user):
+        # F-032: a session that sends nothing has no node-ID; pycyphal takes one
+        # out of range for none. A node-ID the user set is theirs again after.
+        import os
+        import main
+        if set_by_user is None:
+            monkeypatch.delenv("UAVCAN__NODE__ID")
+        else:
+            monkeypatch.setenv("UAVCAN__NODE__ID", set_by_user)
+        session = main.CANSession()
+        await session._pick_node_id("socketcan:vcan0", listen_only=True)
+        during = os.environ["UAVCAN__NODE__ID"]
+        await session.disconnect()
+        assert (during, os.environ.get("UAVCAN__NODE__ID")) == ("65535", set_by_user)
+
     def test_another_node_on_cynitors_node_id_is_said_in_last_error(self):
         import main
         session = main.CANSession()

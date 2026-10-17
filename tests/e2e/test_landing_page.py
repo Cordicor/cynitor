@@ -5686,6 +5686,7 @@ class _SidebarServer:
         self.bus_errors = None     # what it says of errors on the bus, while connected
         self.update = None         # a newer release its update check found
         self.history_error = None  # why its database cannot be written, while connected
+        self.listen_only = False   # whether the session it runs sends nothing
         self.connect_body = None   # what the last CAN connect asked for
         self.allocator = None      # what it says of its node-ID allocator, while it runs one
         self.decode_on_demand = False  # whether it decodes only what is watched or recorded
@@ -5711,7 +5712,8 @@ class _SidebarServer:
                       "bus_errors": self.bus_errors if self.can else None,
                       "allocator": self.allocator if self.can else None,
                       "decode_on_demand": self.decode_on_demand, "update": self.update,
-                      "history_error": self.history_error if self.can else None}
+                      "history_error": self.history_error if self.can else None,
+                      "listen_only": bool(self.can) and self.listen_only}
         elif path == "/api/decoding" and self.decoding_error:
             await route.fulfill(json={"error": self.decoding_error}, status=500,
                                 headers={"Access-Control-Allow-Origin": "*"})
@@ -5729,7 +5731,9 @@ class _SidebarServer:
             self.can = self.connect_body["interface"]
             # As the backend: its allocator runs only in a session asked to run it.
             self.allocator = {"other_allocator": None, "allocated": 0} if self.connect_body.get("allocator") else None
-            answer = {"status": "running", "can_interface": self.can, "can_fd": False, "allocator": self.allocator}
+            self.listen_only = self.connect_body.get("listen_only") is True
+            answer = {"status": "running", "can_interface": self.can, "can_fd": False, "allocator": self.allocator,
+                      "listen_only": self.listen_only}
         elif path == "/api/can/disconnect":
             self.can, self.allocator, answer = None, None, {"status": "idle"}
         elif path == "/api/nodes" and self.can:
@@ -6311,6 +6315,35 @@ async def _(page):
         assert kept == (True, True), f"After a reload, the choice and the box: {kept}"
     finally:
         await page.evaluate("state.canAllocator = false; _writeSettingsNow()")  # off again for the tests after
+        await sidebar_close(page, server)
+
+
+@test("Sidebar: Listen only connects sending nothing; while it runs the box says so, and the choice is kept")
+async def _(page):
+    server = _SidebarServer()
+    await sidebar_open(page, server)
+    row, box = page.locator("#canListenOnlyRow"), page.locator("#canListenOnlyToggle")
+    try:
+        await page.locator("#connectDashboardBtn").click()
+        await page.wait_for_function("state.dashboardConnected", timeout=WAIT_MS)
+        offered = (await row.is_visible(), await box.is_checked(), await box.is_enabled())
+        await sidebar_connect_can(page)
+        unticked = (server.connect_body.get("listen_only"), await row.is_hidden())
+        await sidebar_disconnect_can(page)
+        await box.check()
+        await sidebar_connect_can(page)
+        running = (server.connect_body.get("listen_only"), await row.is_visible(), await box.is_checked(),
+                   await box.is_disabled(), "sends nothing" in (await row.get_attribute("title")))
+        await sidebar_disconnect_can(page)
+        await page.evaluate("_writeSettingsNow()")
+        await page.reload(wait_until="load")
+        kept = (await page.evaluate("state.canListenOnly"), await box.is_checked())
+        assert offered == (True, False, True), f"Before connecting, the box shown, ticked, enabled: {offered}"
+        assert unticked == (False, True), f"Unticked, Connect sent listen_only false and the box hides: {unticked}"
+        assert running == (True, True, True, True, True), f"Ticked, connected listening only: {running}"
+        assert kept == (True, True), f"After a reload, the choice and the box: {kept}"
+    finally:
+        await page.evaluate("state.canListenOnly = false; _writeSettingsNow()")
         await sidebar_close(page, server)
 
 

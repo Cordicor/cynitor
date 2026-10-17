@@ -235,6 +235,7 @@ topics to v1.0 subject-IDs on the device (`name#1234`).
 | `--bitrate <n>` | Bus speed in bit/s. Required with `--can` for every adapter but SocketCAN and the simulated bus |
 | `--data-bitrate <n>` | CAN FD data-phase speed in bit/s; leave it out for Classic CAN. Ignored for SocketCAN |
 | `--decode-on-demand` | Decode only the subjects a dashboard shows or a recording takes, and count the rest: for a bus that carries more than the server can decode. The dashboard's **Decode on demand** box does the same at any time |
+| `--listen-only` | Watch the bus without sending anything: no node-ID, heartbeat or requests, so node names, versions and registers are not read. The dashboard's **Listen only** box does the same for one session. The CAN controller still acknowledges frames unless the interface itself is in listen-only mode (SocketCAN: `ip link set can0 type can ... listen-only on`) |
 | `--allocator` | Give plug-and-play nodes their node-IDs. Off by default: only for a bus with no allocator of its own. The dashboard's **Node-ID allocator** box does the same for one session |
 | `--bind <host>` | Listen on `<host>`. Default `127.0.0.1`; `0.0.0.0` for the whole network, which needs `CYNITOR_AUTH_TOKEN` set |
 | `--insecure-no-auth` | Allow a `--bind` beyond loopback without a token, on a network you trust |

@@ -90,6 +90,7 @@ class ScannerNode(ScannerRegisters, ScannerServices):
     # arrive would leave no transfer of several frames whole.
     MAX_DECODING_LAG_S = 1.0
     offline: Optional[dict] = None    # set per session while a raw log plays (see __init__)
+    listen_only = False               # set per session that sends nothing: no GetInfo then
     # Called with a message when another node uses Cynitor's own node-ID (the session's last_error).
     on_own_node_id_conflict: Optional[Callable[[str], None]] = None
     _dropped_frames_closed = 0        # frames dropped on subjects no longer decoded (see dropped_frames)
@@ -1037,7 +1038,7 @@ class ScannerNode(ScannerRegisters, ScannerServices):
         GetInfo can take up to the response timeout. Awaiting it inside the
         heartbeat callback would hold up every other node's heartbeats behind it.
         """
-        if node_id in self._info_in_flight or self.offline is not None:
+        if node_id in self._info_in_flight or self.offline is not None or self.listen_only:
             return False
         self._info_in_flight.add(node_id)
         self.all_nodes[node_id].last_info_attempt = datetime.datetime.now()

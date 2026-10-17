@@ -32,6 +32,8 @@ const state = {
   // The connect form's choice: have Cynitor give plug-and-play nodes their
   // node-IDs. Off unless ticked: a bus may have one allocator only.
   canAllocator: false,
+  canListenOnly: false,  // connect sending nothing (the connect form's Listen only)
+  listenOnly: false,     // whether the session that runs sends nothing, from /api/status
   // Cynitor's allocator in the CAN session connected to (GET /api/status
   // allocator): {other_allocator, allocated}, or null while it runs none.
   allocatorStatus: null,
@@ -799,6 +801,7 @@ const _writeSettingsNow = () => {
     canBitrates: state.canBitrates,
     canDataBitrates: state.canDataBitrates,
     canAllocator: state.canAllocator,
+    canListenOnly: state.canListenOnly,
     customCanSpec: state.customCanSpec,
     // A session being restored or reconnected is still the user's: a reload meanwhile goes on with it.
     dashboardConnected: state.dashboardConnected || Boolean(state.dashboardRetry || state.pendingReconnect),
@@ -944,6 +947,7 @@ const loadSettings = () => {
     state.canDataBitrates = settings.canDataBitrates;
   }
   state.canAllocator = settings.canAllocator === true;
+  state.canListenOnly = settings.canListenOnly === true;
   if (typeof settings.customCanSpec === 'string') {
     state.customCanSpec = settings.customCanSpec;
     el('canSpecInput').value = settings.customCanSpec;

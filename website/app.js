@@ -48,6 +48,10 @@ const bind = () => {
     state.canAllocator = el('canAllocatorToggle').checked;
     saveSettings();
   });
+  el('canListenOnlyToggle').addEventListener('change', () => {
+    state.canListenOnly = el('canListenOnlyToggle').checked;
+    saveSettings();
+  });
   el('decodeOnDemandToggle').addEventListener('change', () => {
     setDecodeOnDemand(el('decodeOnDemandToggle').checked);
   });

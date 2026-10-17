@@ -9,7 +9,7 @@ from typing import Optional
 
 from aiohttp import web
 
-from api_helpers import _parse_int, logger, MAX_NODE_ID, MAX_SERVICE_ID, MAX_SUBJECT_ID
+from api_helpers import _parse_int, listen_only_refusal, logger, MAX_NODE_ID, MAX_SERVICE_ID, MAX_SUBJECT_ID
 
 
 def _synthesize_nodes_from_recording(db_path, recording_id: int) -> dict:
@@ -136,6 +136,8 @@ class NodesApi:
 
         if not self.session.is_running:
             return web.json_response({"error": "CAN bus not connected"}, status=503)
+        if refused := listen_only_refusal(self.session):
+            return refused
 
         try:
             registers = await self.session.scanner.get_registers(node_id)
@@ -156,6 +158,8 @@ class NodesApi:
 
         if not self.session.is_running:
             return web.json_response({"error": "CAN bus not connected"}, status=503)
+        if refused := listen_only_refusal(self.session):
+            return refused
 
         try:
             body = await request.json()
@@ -204,6 +208,8 @@ class NodesApi:
 
         if not self.session.is_running:
             return web.json_response({"error": "CAN bus not connected"}, status=503)
+        if refused := listen_only_refusal(self.session):
+            return refused
 
         try:
             body = await request.json()

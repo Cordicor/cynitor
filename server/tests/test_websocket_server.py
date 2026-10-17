@@ -139,6 +139,33 @@ class TestCANConnect:
         session.connect.assert_awaited_once()
 
     @pytest.mark.asyncio
+    async def test_listen_only_reaches_the_session_and_must_be_true_or_false(self, client, session):
+        with patch("main.discover_can_interfaces", return_value=["vcan0"]):
+            bad = await client.post("/api/can/connect", json={"interface": "vcan0", "listen_only": "yes"})
+            ok = await client.post("/api/can/connect", json={"interface": "vcan0", "listen_only": True})
+        assert bad.status == 400 and ok.status == 200
+        session.connect.assert_awaited_once_with("vcan0", bitrate=None, data_bitrate=None, allocator=None,
+                                                 listen_only=True)
+
+    @pytest.mark.asyncio
+    async def test_nothing_is_sent_while_listening_only(self, client, session):
+        # Registers, service calls and firmware updates would transmit: refused with the reason.
+        session.is_running, session.listen_only = True, True
+        session.scanner = MagicMock(get_registers=AsyncMock(), set_register=AsyncMock(), make_service_call=AsyncMock())
+        session.begin_firmware_update = AsyncMock()
+        answers = [
+            await client.get("/api/registers/42"),
+            await client.post("/api/registers/42/set", json={"name": "x", "value": "1", "type": "natural16"}),
+            await client.post("/api/services/42/435/call", json={"attributes": {}}),
+            await client.post("/api/nodes/42/firmware", json={"file": "a.bin"}),
+        ]
+        assert [a.status for a in answers] == [409, 409, 409, 409]
+        assert "listens only" in (await answers[0].json())["error"]
+        session.scanner.get_registers.assert_not_awaited()
+        session.scanner.set_register.assert_not_awaited()
+        session.begin_firmware_update.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_connect_missing_interface_field(self, client):
         resp = await client.post("/api/can/connect", json={})
         assert resp.status == 400
@@ -206,7 +233,7 @@ class TestCANConnectSpecsAndBitrate:
         with patch("main.discover_can_interfaces", return_value=["vcan0"]):
             resp = await client.post("/api/can/connect", json={"interface": "vcan0"})
         assert resp.status == 200
-        session.connect.assert_awaited_once_with("vcan0", bitrate=None, data_bitrate=None, allocator=None)
+        session.connect.assert_awaited_once_with("vcan0", bitrate=None, data_bitrate=None, allocator=None, listen_only=None)
 
     @pytest.mark.asyncio
     async def test_explicit_spec_skips_discovery(self, client, session):
@@ -218,7 +245,7 @@ class TestCANConnectSpecsAndBitrate:
             )
         assert resp.status == 200
         discover.assert_not_called()
-        session.connect.assert_awaited_once_with("gs_usb:0", bitrate=250000, data_bitrate=None, allocator=None)
+        session.connect.assert_awaited_once_with("gs_usb:0", bitrate=250000, data_bitrate=None, allocator=None, listen_only=None)
 
     @pytest.mark.asyncio
     async def test_adapter_without_bitrate_is_refused(self, client, session):
@@ -233,7 +260,7 @@ class TestCANConnectSpecsAndBitrate:
         session.default_bitrate = 250_000
         resp = await client.post("/api/can/connect", json={"interface": "gs_usb:0"})
         assert resp.status == 200
-        session.connect.assert_awaited_once_with("gs_usb:0", bitrate=None, data_bitrate=None, allocator=None)
+        session.connect.assert_awaited_once_with("gs_usb:0", bitrate=None, data_bitrate=None, allocator=None, listen_only=None)
 
     @pytest.mark.asyncio
     async def test_data_bitrate_opens_can_fd(self, client, session):
@@ -242,7 +269,7 @@ class TestCANConnectSpecsAndBitrate:
         })
         assert resp.status == 200
         session.connect.assert_awaited_once_with("pcan:PCAN_USBBUS1", bitrate=500000, data_bitrate=2000000,
-                                                     allocator=None)
+                                                     allocator=None, listen_only=None)
         assert (await resp.json())["can_fd"] is False  # what the (mock) session reports
 
     @pytest.mark.asyncio
@@ -279,7 +306,7 @@ class TestCANConnectSpecsAndBitrate:
         with patch("main.discover_can_interfaces", return_value=["vcan0"]):
             resp = await client.post("/api/can/connect", json={"interface": "vcan0", "allocator": allocator})
         assert resp.status == 200
-        session.connect.assert_awaited_once_with("vcan0", bitrate=None, data_bitrate=None, allocator=allocator)
+        session.connect.assert_awaited_once_with("vcan0", bitrate=None, data_bitrate=None, allocator=allocator, listen_only=None)
         assert (await resp.json())["allocator"] is None  # what the (mock) session reports it runs
 
     @pytest.mark.asyncio

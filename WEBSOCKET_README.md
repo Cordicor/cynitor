@@ -446,6 +446,8 @@ Response (success):
 
 `data_bitrate` (integer, 1–12000000 bit/s, optional) opens the adapter as CAN FD with that data-phase bitrate; left out, the session is Classic CAN unless the server was started with `--data-bitrate`. Only adapters whose `supports_fd` is true take it (PEAK, Kvaser, Vector, IXXAT, candleLight with CAN FD firmware, slcan), at one of their `data_bitrates` where those are given (slcan: 2000000 or 5000000); SocketCAN ignores it and runs CAN FD when the interface is set up for it. `can_fd` in the response says which it became.
 
+`listen_only` (boolean, optional) has the session send nothing on the bus: no node-ID, heartbeat, GetInfo or register reads, no allocator and no test nodes; subjects decode from their fixed IDs and the types the user set. Left out, it does only if the server was started with `--listen-only`. Meanwhile `GET /api/registers/{id}`, `POST /api/registers/{id}/set`, service calls and firmware updates answer `409` saying the session listens only. `listen_only` in the response, and in `GET /api/status`, says whether the session sends nothing. The CAN controller still acknowledges frames unless the interface itself is in listen-only mode.
+
 `allocator` (boolean, optional) has Cynitor give plug-and-play nodes their node-IDs in this session (see [Allocator Behavior](#4-allocator-behavior)); left out, it does only if the server was started with `--allocator`. Turn it on only for a bus with no allocator of its own.
 
 ```bash
