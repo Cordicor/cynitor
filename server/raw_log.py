@@ -87,9 +87,12 @@ class RawLog:
             self._close_locked()
 
     def _close_locked(self) -> None:
-        if self._writer is not None:
-            self._writer.stop()
-            self._writer = None
+        writer, self._writer = self._writer, None
+        if writer is not None:
+            try:
+                writer.stop()
+            except Exception as exc:  # a full disk fails the flush too; the error is already said
+                logger.debug("Raw log %s: closing failed: %s", self.path.name, exc)
 
     def status(self) -> dict:
         size = self.path.stat().st_size if self.path.exists() else 0

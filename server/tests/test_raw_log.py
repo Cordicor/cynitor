@@ -59,6 +59,16 @@ class TestRawLogFile:
         assert log.error == "No space left on device" and log._writer is None
         assert log.status()["error"] == "No space left on device"
 
+    def test_a_close_that_fails_too_does_not_escape(self, tmp_path):
+        # On a full disk, closing flushes and fails as well; that raised into the
+        # thread that handed the frame over, and behind the hub ended it (F-027).
+        log = RawLog(tmp_path / "cynitor-20260928-120000.log", channel="can0")
+        log._writer.on_message_received = MagicMock(side_effect=OSError("No space left on device"))
+        log._writer.stop = MagicMock(side_effect=OSError("No space left on device (flush)"))
+        log.write(_frames()[0])
+        log.write(_frames()[1])
+        assert log.error == "No space left on device" and log._writer is None
+
 
 class TestNames:
     def test_new_name(self):

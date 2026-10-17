@@ -243,8 +243,8 @@ class CANHub:
             raise
         self._still_present = presence_check(self._adapter)
         self._threads = [
-            threading.Thread(target=self._pump_from_bus, name=f"{self.channel}-rx", daemon=True),
-            threading.Thread(target=self._pump_to_bus, name=f"{self.channel}-tx", daemon=True),
+            threading.Thread(target=self._pump, args=(self._pump_from_bus,), name=f"{self.channel}-rx", daemon=True),
+            threading.Thread(target=self._pump, args=(self._pump_to_bus,), name=f"{self.channel}-tx", daemon=True),
         ]
         for thread in self._threads:
             thread.start()
@@ -306,7 +306,11 @@ class CANHub:
 
     def _tell(self, msg: can.Message) -> None:
         for listener in self._listeners:
-            listener(msg)
+            try:
+                listener(msg)
+            except Exception as exc:  # it must not end the pump: drop it, say why
+                self.remove_listener(listener)
+                logger.error("CAN hub: a frame listener failed and was removed: %s", exc, exc_info=True)
 
     def _fail(self, message: str) -> None:
         if self._stop.is_set():
@@ -314,6 +318,14 @@ class CANHub:
         self.error = message
         logger.error("CAN hub stopped: %s", message)
         self._stop.set()
+
+    def _pump(self, forward: Callable[[], None]) -> None:
+        """Run a pump thread; an error that ends it ends the hub, which the session's health check sees."""
+        try:
+            forward()
+        except Exception as exc:
+            logger.error("CAN hub: forwarding failed", exc_info=True)
+            self._fail(f"{self.spec}: forwarding stopped: {exc}")
 
     def _pump_from_bus(self) -> None:
         assert self._adapter is not None and self._local is not None
