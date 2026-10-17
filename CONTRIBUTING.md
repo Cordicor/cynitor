@@ -11,12 +11,13 @@ Backend, from `server/`:
 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest tests/ -v -p pytest_asyncio.plugin
 ```
 
-Integration, a real Cyphal stack behind the CAN hub on a virtual bus, from the
-repository root:
+Integration, a real Cyphal stack behind the CAN hub on a virtual bus, and a running
+server's API walked over HTTP, from the repository root:
 
 ```bash
 python3 tests/integration/hub_session.py
 python3 tests/integration/hub_session.py --fd
+python3 tests/integration/api_walk.py
 ```
 
 Dashboard, end to end in Chromium (needs `pip install playwright` and

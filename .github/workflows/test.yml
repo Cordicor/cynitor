@@ -104,6 +104,9 @@ jobs:
       - name: Run a CAN FD session through the hub
         run: python tests/integration/hub_session.py --fd
 
+      - name: Walk the API of a running server on the simulated bus
+        run: python tests/integration/api_walk.py
+
   e2e:
     name: Frontend end-to-end
     runs-on: ubuntu-latest
