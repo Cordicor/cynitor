@@ -1,6 +1,6 @@
-# PyCyphal WebSocket Telemetry Server
+# Cynitor server: REST and WebSocket API
 
-Production-grade real-time telemetry streaming system for UAVCAN networks.
+The API reference of Cynitor's server: the REST endpoints and the WebSocket stream the dashboard uses, for scripts and other clients.
 
 ## Architecture
 
@@ -63,19 +63,30 @@ Or omit `--can` and select via startup API:
 python3 main.py
 ```
 
+Output:
+```
+============================================================
+SERVER RUNNING
+============================================================
+Bound to:    http://127.0.0.1:8080/
+REST API:    http://localhost:8080/api/
+Health:      http://localhost:8080/api/health
+Status:      http://localhost:8080/api/status
+Mode:        selection  (waiting for the UI or POST /api/can/connect)
+------------------------------------------------------------
+Options:     --help lists them
+============================================================
+```
+
+In direct mode (`--can <iface>`) the `Mode:` line reads `direct (attached to <iface> at startup)` and the block ends with a hint pointing back at selection mode. A bind beyond loopback is refused without a token unless `--insecure-no-auth` is given, and then a `WARNING` line says so. HTTP requests are not logged unless the server runs with `--access-log`.
+
 In this mode, the server starts on port 8080 immediately. Use the REST API to connect:
 - `GET /api/status` (lists available CAN interfaces and connection state)
 - `POST /api/can/connect` with JSON body `{"interface":"vcan0"}`
 
 Once connected, CAN telemetry begins. Disconnect with `POST /api/can/disconnect`.
 
-By default the server binds to `127.0.0.1` (localhost only). To expose it on the network — for example to reach the dashboard from another host on a trusted LAN — pass `--bind`:
-
-```bash
-python3 main.py --can vcan0 --bind 0.0.0.0
-```
-
-When exposed on a non-loopback address, require a bearer token by setting the `CYNITOR_AUTH_TOKEN` environment variable:
+By default the server binds to `127.0.0.1` (localhost only). To reach it from another host, pass `--bind` with a bearer token set in the `CYNITOR_AUTH_TOKEN` environment variable; a bind beyond loopback without one is refused at start (exit 2) unless `--insecure-no-auth` is given:
 
 ```bash
 CYNITOR_AUTH_TOKEN=$(openssl rand -hex 24) python3 main.py --can vcan0 --bind 0.0.0.0
@@ -85,7 +96,9 @@ With the variable set, every REST and WebSocket request outside `/api/health` mu
 
 Protected requests must present the token as:
 - REST: `Authorization: Bearer <token>` header
-- WebSocket: `?token=<token>` query parameter (browsers can't attach custom headers on WS handshakes)
+- WebSocket and downloads: `?token=<token>` query parameter (browsers can't attach custom headers on WS handshakes or links); it is taken on `GET` requests only
+
+A wrong token waits a quarter of a second for its `401`. The server warns at start if the token is shorter than 16 characters.
 
 Unauthenticated requests get `HTTP 401 {"error": "missing or invalid token"}`. With the variable unset the server runs open — same behaviour as before this option existed. The frontend prompts the user to paste the token on the first 401 and stores it in `localStorage` under `cynitor.auth.token`.
 
@@ -96,7 +109,9 @@ When a terminal is attached, the server prints the token once at startup so it c
 The API commands nodes on the bus, and any website a user visits could otherwise send requests to `localhost:8080` through their browser. So requests to `/ws`, `/api` and `/api/...` are refused with `HTTP 403 {"error": "cross-origin request refused"}` when their `Origin` header names any page other than:
 
 - the dashboard this server serves itself (the `Origin` matches the `Host` it was reached at), or
-- a page served from this machine (`localhost`, `127.0.0.1` or `[::1]`, any port), such as the frontend dev server on `:5500`.
+- the frontend dev server on this machine (`localhost`, `127.0.0.1` or `[::1]`, port 5500), and any other origin listed in `CYNITOR_DEV_ORIGINS` (comma-separated, e.g. `http://localhost:3000`).
+
+A request the browser marks `Sec-Fetch-Site: cross-site` (sent by a page on another site, even one with no `Origin`, such as an `<img>`) is refused with `403`.
 
 Requests without an `Origin` header (curl, scripts, other non-browser clients) are not affected. `Origin: null`, which sandboxed frames and `file://` pages send, is refused. Allowed browser origins get `Access-Control-Allow-Origin` echoed back; nobody gets `*`.
 
@@ -158,40 +173,11 @@ While it is on:
 - The 24 h history, "save the last N seconds" and `GET /api/latest/*` hold values only for what was decoded at the time. Start a recording, or leave the switch off, for what must be kept.
 - Switching it off decodes every subject again at once.
 
-```bash
-python3 main.py
-```
-
-Output:
-```
-============================================================
-SERVER RUNNING
-============================================================
-Bound to:    http://127.0.0.1:8080/
-REST API:    http://localhost:8080/api/
-Health:      http://localhost:8080/api/health
-Status:      http://localhost:8080/api/status
-Mode:        selection  (waiting for the UI or POST /api/can/connect)
-------------------------------------------------------------
-Startup options:
-  --can <iface>    attach to a CAN interface at startup (e.g. vcan0, can0, gs_usb:0, pcan:PCAN_USBBUS1)
-  --bitrate <n>    bus speed in bit/s; required with --can for any adapter except SocketCAN
-  --data-bitrate <n>  CAN FD data-phase speed; opens PCAN/Kvaser/Vector/IXXAT/gs_usb/slcan as CAN FD
-  --allocator      give plug-and-play nodes their node-IDs; only for a bus with no allocator of its own
-  --decode-on-demand  decode only the subjects watched or recorded; for a bus too busy to decode whole
-  --bind <host>    bind HTTP server to <host>  (default 127.0.0.1; 0.0.0.0 to expose on the network)
-  --port <n>       listen on <n> instead of 8080
-  --data-dir <dir> keep history, recordings and raw logs in <dir>
-  --recompile      force DSDL recompilation via nnvg
-  --help           full reference
-============================================================
-```
-
-In direct mode (`--can <iface>`) the `Mode:` line reads `direct (attached to <iface> at startup)` and the block ends with a hint pointing back at selection mode. When `--bind 0.0.0.0` is passed, an additional `WARNING` line is emitted before the tips block to make the network-exposed posture obvious.
-
 ## Usage
 
 ### WebSocket Client (JavaScript/Browser)
+
+At most 64 streams (`/ws`) are open at once; another is refused with `503`.
 
 **Connect:**
 ```javascript
@@ -241,7 +227,7 @@ Telemetry events (filtered per client):
 ```json
 {
     "subject_id": 7509,
-    "timestamp": "2026-03-13T10:30:45",
+    "timestamp": "2026-03-13T10:30:45+01:00",
     "timestamp_unix": 1741949445.123,
     "rate": 1.0,
     "subject_rate": 5.0,
@@ -259,9 +245,11 @@ Telemetry events (filtered per client):
 
 `rate` is this publisher's message rate on the subject, in Hz (one decimal, over the last 10 s). `subject_rate` is the subject's total over its publishers still sending: with five nodes publishing Heartbeat at 1 Hz, each event carries `rate` 1.0 and `subject_rate` 5.0. A publisher whose last message is older than three of its periods (two seconds at least) no longer counts in it, the rule by which the dashboard calls a subject silent. Both are computed when a message arrives, so a subject that stops altogether sends no new value: the dashboard tells that from the time of its last message. Events recorded before `subject_rate` existed lack it, and there `rate` was the subject total.
 
+A service-ID mask, as `uavcan.node.port.List`'s `servers` and `clients` carry (512 bits), is the list of the service-IDs it sets: `{"attribute": "servers", "value": [430, 435]}`; a subject-ID list sent as a mask (8192 bits) likewise, as `publishers.mask`.
+
 A float that is NaN or infinite (sensors often send NaN for "not available") is `null` in `attributes`, in an array element by element: JSON has no NaN, and a browser cannot read a message that holds one. The same `null` reaches the REST API, history, recordings and their exports; replaying a recording made before this sends `null` too.
 
-`timestamp_unix` is when the transfer was received as stamped by the transport (for SocketCAN, the kernel's receive timestamp), not when the backend got round to processing it.
+`timestamp`, and a node's `last_seen` in `/api/nodes`, are the server's local time with its UTC offset, so a viewer in another timezone reads the same instant. `timestamp_unix` is when the transfer was received as stamped by the transport (for SocketCAN, the kernel's receive timestamp), not when the backend got round to processing it.
 
 `payload_bytes` is the size, in bytes, of the received transfer's serialized payload (sum of `transfer.fragmented_payload` fragment lengths). It is `null` if the transport did not expose the fragmented payload (best-effort field).
 
@@ -413,9 +401,15 @@ Response:
 
 `cyphal_v11` is `null` until Cyphal v1.1 traffic is seen on the bus, which Cynitor, a Cyphal v1.0 monitor, does not decode. Then it is `{"transfers", "nodes": [node-IDs], "subject_count", "subject_ids": [the first 16, sorted], "last_seen_unix"}`, counted over the CAN session; the dashboard shows it under the CAN status. A v1.1 transfer is recognised by its first frame: an extended CAN ID with bit 25 = 0, bit 24 = 0 and bit 7 = 1 (a 16-bit subject-ID; v1.0 keeps bit 7 at 0), and a tail byte with start-of-transfer and toggle set (which tells it from a DroneCAN service frame), every frame but a transfer's last being full. On SocketCAN a listen-only socket watches for it, filtered by the kernel to frames with those ID bits; behind the hub, the hub does. A v1.1 topic pinned to a v1.0 subject-ID (`name#1234`) travels as v1.0 and is decoded as usual.
 
-`bus_utilization` is the bus load in percent, here and in the `metrics` message and `/api/can/transport`. It is `null` when not connected to CAN, and when nothing can measure it: on SocketCAN it comes from `canbusload` (Linux can-utils), so a host without it reports `null`, not an idle 0.
+`history_error` says why history and recordings are not being written, such as `"disk I/O error"` on a full disk, until a write works again; otherwise `null`. What such a write loses counts in `dropped.logger`.
 
-`dropped` counts what was discarded since the CAN connection opened because a queue was full: `scanner` before reaching anything, `logger` messages missing from the 24 h history and from recordings, `clients` messages missing from some dashboard's live view (each open dashboard has its own 100-event queue). `scanner` counts decoded messages, and CAN frames let go before decoding: when a subject's messages come faster than they can be decoded, its frames wait, and once a message is more than a second old by the time it is decoded, all that waits behind it is let go at once and counted here, rather than put the live view ever further behind. A burst that is decoded within the second loses nothing. A raw log being played is decoded whole. `null` when not connected to CAN. The dashboard shows the total next to the CAN message rate.
+`own_node_id` is Cynitor's own node-ID on the bus, `null` when not connected or listening only (`listen_only`).
+
+`update` is a newer Cynitor release, `{"version": "1.4.0", "url": "https://github.com/OpenCyphal-Garage/cynitor/releases/tag/v1.4.0"}`, when the server's update check (GitHub, at start and once a day) found one; otherwise `null`, also when the check is off (`--no-update-check`, `CYNITOR_NO_UPDATE_CHECK=1`) or GitHub cannot be reached.
+
+`bus_utilization` is the bus load in percent, here and in the `metrics` message and `/api/can/transport`. It is `null` when not connected to CAN, and when nothing can measure it: on SocketCAN it comes from `canbusload` (Linux can-utils), so a host without it reports `null`, not an idle 0. So does a CAN FD bus when the host's `canbusload` counts Classic frames only (can-utils before mid-2021, such as Ubuntu 22.04's 2020.11), as it would read CAN FD traffic as an idle bus.
+
+`dropped` counts what was discarded since the CAN connection opened because a queue was full: `scanner` before reaching anything, `logger` messages missing from the 24 h history and from recordings (the queue full, or a write to the database failed), `clients` messages missing from some dashboard's live view (each open dashboard has its own 100-event queue). `scanner` counts decoded messages, and CAN frames let go before decoding: when a subject's messages come faster than they can be decoded, its frames wait, and once a message is more than a second old by the time it is decoded, all that waits behind it is let go at once and counted here, rather than put the live view ever further behind. A burst that is decoded within the second loses nothing. A raw log being played is decoded whole. On SocketCAN (Linux) it also counts the frames the kernel let go because the scanner's socket's receive queue was full, which is where most are lost past the decode ceiling; the server then logs a warning, at most once a minute, suggesting decode on demand. While it loses frames there, and for 3 s after, no node is marked offline for silence: its heartbeats may be among the frames lost, and a node marked offline would have its subjects unsubscribed and their frames discarded uncounted. Behind the hub nothing inside Cynitor is lost uncounted; an adapter's own overflow is not seen. `null` when not connected to CAN. The dashboard shows the total next to the CAN message rate.
 
 `status` is `"running"` when connected to CAN, `"idle"` otherwise. `last_error` contains the error message if CAN was auto-disconnected due to a bus fault. `can_bitrate` is the bitrate Cynitor opened the adapter at, or `null` for SocketCAN, whose bitrate the kernel sets. `can_data_bitrate` is the CAN FD data-phase bitrate it opened the adapter with, or `null` (Classic CAN, or SocketCAN). `can_fd` says whether the session runs Cyphal/CAN FD; for SocketCAN that follows the interface's own setup when it connects. A SocketCAN interface switched between CAN FD and Classic CAN while connected ends the session within a few seconds, `last_error` saying so ("Interface can0 was switched to Classic CAN; connect again to use it"); connecting again takes the new setup.
 
@@ -442,9 +436,11 @@ Response (success):
 
 `allocator` is as in `GET /api/status`: `null` unless the session runs Cynitor's node-ID allocator.
 
-`interface` is either a SocketCAN name, which must be one of `available_interfaces`, a python-can spec such as `gs_usb:0` or `pcan:PCAN_USBBUS1`, which is opened without that check, or a simulated bus: `sim:classic` (1 Mbit/s) or `sim:fd` (CAN FD, 1 and 4 Mbit/s), a bus inside Cynitor with demo nodes on it. A simulated bus runs at its own rates: a `bitrate` or `data_bitrate` given is checked, then ignored. `bitrate` (integer, 1–1000000 bit/s) is the bus speed, required for every adapter except SocketCAN, which ignores it. It may be left out only if the server was started with `--bitrate`, which then applies.
+`interface` is either a SocketCAN name, which must be one of `available_interfaces`, a python-can spec such as `gs_usb:0` or `pcan:PCAN_USBBUS1`, which is opened without that check (its interface one of `socketcan`, `pcan`, `kvaser`, `vector`, `ixxat`, `gs_usb`, `slcan`, `virtual`, and an `slcan` channel a serial port name such as `COM5`, `/dev/ttyACM0` or `/dev/serial/by-id/...`; any other is refused with `400` unless the server was started with `--allow-any-interface`), or a simulated bus: `sim:classic` (1 Mbit/s) or `sim:fd` (CAN FD, 1 and 4 Mbit/s), a bus inside Cynitor with demo nodes on it. A simulated bus runs at its own rates: a `bitrate` or `data_bitrate` given is checked, then ignored. `bitrate` (integer, 1–1000000 bit/s) is the bus speed, required for every adapter except SocketCAN, which ignores it. It may be left out only if the server was started with `--bitrate`, which then applies.
 
 `data_bitrate` (integer, 1–12000000 bit/s, optional) opens the adapter as CAN FD with that data-phase bitrate; left out, the session is Classic CAN unless the server was started with `--data-bitrate`. Only adapters whose `supports_fd` is true take it (PEAK, Kvaser, Vector, IXXAT, candleLight with CAN FD firmware, slcan), at one of their `data_bitrates` where those are given (slcan: 2000000 or 5000000); SocketCAN ignores it and runs CAN FD when the interface is set up for it. `can_fd` in the response says which it became.
+
+`listen_only` (boolean, optional) has the session send nothing on the bus: no node-ID, heartbeat, GetInfo or register reads, no allocator and no test nodes; subjects decode from their fixed IDs and the types the user set. Left out, it does only if the server was started with `--listen-only`. Meanwhile `GET /api/registers/{id}`, `POST /api/registers/{id}/set`, service calls and firmware updates answer `409` saying the session listens only. `listen_only` in the response, and in `GET /api/status`, says whether the session sends nothing. The CAN controller still acknowledges frames unless the interface itself is in listen-only mode.
 
 `allocator` (boolean, optional) has Cynitor give plug-and-play nodes their node-IDs in this session (see [Allocator Behavior](#4-allocator-behavior)); left out, it does only if the server was started with `--allocator`. Turn it on only for a bus with no allocator of its own.
 
@@ -830,6 +826,7 @@ Response:
 ```json
 {
     "status": "healthy",
+    "can_error": null,
     "can_status": "running",
     "can_interface": "vcan0",
     "connected_clients": 3,
@@ -839,6 +836,8 @@ Response:
     }
 }
 ```
+
+A server started with `--can` answers `503`, `"status": "degraded"` and `can_error` saying why, while that bus is down, until it is attached again (`--reconnect` does that by itself) or the operator disconnects it with `POST /api/can/disconnect`.
 
 **Get recent application logs (all levels):**
 ```bash
@@ -1049,7 +1048,7 @@ Response:
 }
 ```
 
-Event types: `first_seen`, `reappeared`, `disappeared`, `restart_suspected` (the uptime dropped, then counted on), `health_change`, `mode_change`, `port_change`, `service_call`, `got_node_id`, `lost_node_id`, `node_id_migration`, `node_id_conflict` (heartbeats on this node-ID alternate between two uptimes: two nodes share it; or, with `"own_node_id": true` in its detail, another node uses Cynitor's own node-ID, which `/api/status`'s `last_error` then says too; reported at most once a minute) and `type_conflict` (the node publishes a subject with another type than the one it is decoded as, which an earlier publisher advertised).
+Event types: `first_seen`, `reappeared`, `disappeared`, `restart_suspected` (the uptime dropped, then counted on), `health_change`, `mode_change`, `port_change`, `service_call`, `register_write` (Cynitor wrote a register: `name`, `value` as sent, `status` `ok` with `read_back`, or `timeout`), `firmware_update` (Cynitor told the node to update from `file`), `got_node_id`, `lost_node_id`, `node_id_migration`, `node_id_conflict` (heartbeats on this node-ID alternate between two uptimes: two nodes share it; or, with `"own_node_id": true` in its detail, another node uses Cynitor's own node-ID, which `/api/status`'s `last_error` then says too; reported at most once a minute) and `type_conflict` (the node publishes a subject with another type than the one it is decoded as, which an earlier publisher advertised).
 
 Returns `400` for invalid node_id or limit, `503` if the event logger is not available.
 
@@ -1146,7 +1145,7 @@ Response (success):
 {"status": "ok", "name": "uavcan.node.id", "value": "42"}
 ```
 
-Returns `400` if required fields (`name`, `value`, `type`) are missing, the register is read-only, or the type is incompatible. Returns `503` if CAN is not connected.
+A number given for a register of another numeric type is converted to the register's type before it is sent. Returns `400` if required fields (`name`, `value`, `type`) are missing, the register is read-only, or the type is incompatible; `409` if the node answered with another value than the one written (it kept its own, as Cyphal allows; the error names what it holds), compared in the register's own precision; `504` if the node did not answer. Returns `503` if CAN is not connected.
 
 ### Recordings (`/api/recordings*`)
 
@@ -1187,7 +1186,7 @@ Auto-stop is checked both on each matching event (during ingest) and via a 5-sec
 POST   /api/recordings/quick   body: { name, last_seconds, filter?, notes? }
 ```
 
-Snapshots matching events from the global buffer in `[now - last_seconds, now]` into the recording's dedicated store at creation time. Useful workflow: "the bus just glitched, save the last 30 seconds." Returns `201` with the full recording row.
+Snapshots matching events from the global buffer in `[now - last_seconds, now]` into the recording's dedicated store at creation time. Useful workflow: "the bus just glitched, save the last 30 seconds." Returns `201` with the full recording row. `last_seconds` is at most 86400, the history kept. A recording's `name` holds at most 200 characters and its `notes` 10,000 (400 otherwise).
 
 #### Filter shape (OR-across-dimensions)
 
@@ -1232,11 +1231,11 @@ A browser download cannot send an `Authorization` header; with a token set, pass
 
 ### Raw CAN logs
 
-Every frame on the bus, in both directions, written to a candump `.log` file (python-can's `CanutilsLogWriter`). python-can (`can.LogReader`), SavvyCAN and can-utils (`canplayer`, `log2asc`, which also converts to Vector ASC) read it. It holds Classic and CAN FD frames and error frames, each with its direction (`R`/`T`). Separate from recordings, which hold decoded events: one raw log runs at a time, and it stops when CAN disconnects. Files live in the data folder under `raw/`, named `cynitor-YYYYMMDD-HHMMSS.log`.
+Every frame on the bus, in both directions, written to a candump `.log` file (python-can's `CanutilsLogWriter`). python-can (`can.LogReader`), SavvyCAN and can-utils (`canplayer`, `log2asc`, which also converts to Vector ASC) read it. It holds Classic and CAN FD frames and error frames, each with its direction (`R`/`T`). Separate from recordings, which hold decoded events: one raw log runs at a time, and it stops when CAN disconnects. It also stops by itself at 4 GiB, or when less than 512 MiB is left on the disk, and says why in `error`; a start with less than that free answers 409. Files live in the data folder under `raw/`, named `cynitor-YYYYMMDD-HHMMSS.log`.
 
 ```http
 GET    /api/rawlogs           → { active: {name, frames, bytes, started_unix, error} | null, logs: [{name, bytes, modified_unix}] }
-POST   /api/rawlogs           → 201 { name, frames, bytes, started_unix, error }   (409 if CAN is not connected or a log runs)
+POST   /api/rawlogs           → 201 { name, frames, bytes, started_unix, error }   (409 if CAN is not connected, a log runs, or the disk is nearly full)
 POST   /api/rawlogs/stop      → { name, frames, bytes, started_unix, error }       (409 if none runs)
 GET    /api/rawlogs/{name}    → the file, as an attachment                          (404 if no such log)
 DELETE /api/rawlogs/{name}    → { deleted }                                         (409 while it runs, 404 if no such log)
@@ -1404,7 +1403,7 @@ POST   /api/nodes/{node_id}/firmware { file } → update      (404 no such file,
 
 An `update` is `{ file, bytes, read, state, started_unix, updated_unix, mode }`: `read` is how far the node has read the file, `state` is `requested` (the node accepted the command), `reading`, or `transferred` (it read the last, short chunk), and `mode` the mode in its latest heartbeat (`SOFTWARE_UPDATE` in the bootloader, `OPERATIONAL` once the new firmware runs), or null. Updates are kept per session and end with it.
 
-Names are plain file names (letters, digits, `.`, `_`, `-`; up to 128 characters); a file holds 1 byte to 32 MiB (400 empty, 413 larger). Only `uavcan.file.Read` is served, and only for these files: other nodes cannot list, write or delete files on this computer. Nothing is served while a raw log plays or when Cynitor has no node-ID; then the update is refused with 409.
+Names are plain file names (letters, digits, `.`, `_`, `-`; up to 128 characters); a file holds 1 byte to 32 MiB (400 empty, 413 larger), and all of them together 256 MiB (413 "delete one first"). Only `uavcan.file.Read` is served, and only for these files: other nodes cannot list, write or delete files on this computer. Nothing is served while a raw log plays or when Cynitor has no node-ID; then the update is refused with 409.
 
 ### Event Logger (SQLite)
 
@@ -1443,39 +1442,15 @@ count = logger.get_event_count()
 
 ## Configuration
 
-### Port and Host
+### Port, host and data folder
 
-The host is controlled by the `--bind` CLI flag (default `127.0.0.1`):
+Set on the command line, as the README's Options table lists them: `--port <n>` (default 8080),
+`--bind <host>` (default `127.0.0.1`; beyond loopback only with `CYNITOR_AUTH_TOKEN` set, or with
+`--insecure-no-auth`), and `--data-dir <dir>` (or `CYNITOR_DATA_DIR`) for where history, recordings and raw
+logs are kept.
 
 ```bash
-python3 main.py --can vcan0 --bind 0.0.0.0
-```
-
-For non-default ports, edit `main.py` directly:
-```python
-ws_server = WebSocketServer(
-    session=session,
-    host=bind,
-    port=9000,          # Change port
-    log_store=_log_store,
-)
-```
-
-### Database Path
-
-Edit `main.py`:
-```python
-event_logger = EventLogger(
-    db_path="./logs/telemetry.db",  # Custom location
-    max_events=500000                # Retention limit
-)
-```
-
-### Event Queue Size
-
-Edit `telemetry_manager.py`:
-```python
-queue = telemetry.subscribe(max_queue=200)  # Increase from 100
+CYNITOR_AUTH_TOKEN=$(openssl rand -hex 24) python3 main.py --can vcan0 --bind 0.0.0.0 --port 9000
 ```
 
 ## Architecture Components
@@ -1521,7 +1496,7 @@ The server takes the bus's traffic on one core: every frame is handed to pycypha
 For scale, a 1 Mbit/s Classic CAN bus carries about 8,000 frames a second when full. A Raspberry Pi 4 core runs this several times slower (an estimate, not measured). SocketCAN, which needs no hub, was not measured.
 
 - `server_cpu` (in `/api/status` and the `metrics` message, shown in the dashboard's Server section) says how near the server is to its ceiling: near 100 % it cannot keep up.
-- Past the ceiling, the event logger loses messages first (`dropped.logger`): alone it writes about 30,000 rows a second, but it shares the core with the decoding. Then a subject whose decoding has fallen a second behind loses the frames it has waiting (`dropped.scanner`), all at once, so that the live view stays within about a second of the bus instead of falling ever further behind, and what is decoded is still whole.
+- Past the ceiling, the event logger loses messages first (`dropped.logger`): alone it writes about 30,000 rows a second, but it shares the core with the decoding. Then a subject whose decoding has fallen a second behind loses the frames it has waiting (`dropped.scanner`), all at once, so that the live view stays within about a second of the bus instead of falling ever further behind, and what is decoded is still whole. On SocketCAN, frames the kernel's receive queue had no room for are counted there too.
 - [Decode on demand](#5-decode-on-demand) is for a bus past the ceiling: what nobody watches is counted, not decoded.
 
 Use `max_events` in EventLogger to prevent database bloat.
@@ -1531,7 +1506,7 @@ Use `max_events` in EventLogger to prevent database bloat.
 **WebSocket connection refused:**
 - Ensure `main.py` is running
 - Check firewall (port 8080)
-- The server binds to `127.0.0.1` by default; if you need to reach it from another host, restart with `--bind 0.0.0.0` (no auth is enforced — only do this on a trusted network)
+- The server binds to `127.0.0.1` by default; if you need to reach it from another host, restart with `--bind 0.0.0.0` and `CYNITOR_AUTH_TOKEN` set (see the authentication section above)
 
 **High memory usage:**
 - Reduce TelemetryManager queue size
@@ -1584,4 +1559,4 @@ asyncio.run(main())
 
 ## License
 
-PyCyphal (UAVCAN) - MIT License
+MIT, as the repository's `LICENSE` file says.

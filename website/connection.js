@@ -123,12 +123,34 @@ const renderBusNotice = () => {
   // The counters, which change with every poll, only in the title: a screen
   // reader is told again when the state changes, not every few seconds.
   const what = ['Bus errors', errors.state].filter(Boolean).join(' · ');
-  const html = `${escapeHtml(what)}<span class="can-bus-notice-hint">Check 120 Ω termination and bitrate</span>`;
+  // Transmit errors alone: Cynitor's frames go unacknowledged, as when it is alone on the bus.
+  const hint = errors.tx_errors >= 128 && errors.rx_errors === 0
+    ? 'No other node acknowledges: check the bus is connected and a node is powered'
+    : 'Check 120 Ω termination and bitrate';
+  const html = `${escapeHtml(what)}<span class="can-bus-notice-hint">${escapeHtml(hint)}</span>`;
   if (notice.innerHTML !== html) notice.innerHTML = html;
   const counted = errors.tx_errors != null && errors.rx_errors != null
     ? ` The controller's error counters: TX ${errors.tx_errors}, RX ${errors.rx_errors} (128 or more is error-passive).`
     : '';
   notice.title = `Errors on the bus since ${formatPlotTime(errors.since_unix)}.${counted} ${BUS_ERROR_CAUSES}`;
+};
+
+// Listen only: the choice in the connect form, and while connected whether
+// the session sends nothing, which is why nodes then have no names or registers.
+const LISTEN_ONLY_HINT = 'Connect without sending anything on the bus: no node-ID, no heartbeat, no requests. '
+  + 'Nodes then show no names, versions or registers, and nothing can be written or called; '
+  + 'subjects decode from their fixed IDs and the types you set.';
+const renderListenOnly = () => {
+  const row = el('canListenOnlyRow');
+  if (!row) return;
+  const idle = !state.canConnected && !state.canDisconnecting;
+  const listening = state.canConnected && state.listenOnly;
+  row.classList.toggle('hidden', !(idle || listening));
+  const toggle = el('canListenOnlyToggle');
+  toggle.checked = idle ? state.canListenOnly : listening;
+  toggle.disabled = !idle || !state.dashboardConnected || state.canConnecting;
+  row.classList.toggle('is-locked', toggle.disabled);
+  row.title = listening ? 'This session sends nothing on the bus: nodes show no names or registers.' : LISTEN_ONLY_HINT;
 };
 
 // Cynitor's node-ID allocator: the choice in the connect form, and while
@@ -228,6 +250,7 @@ const syncWatchedSubjects = () => {
 const updateSemaphores = () => {
   renderV11Notice();
   renderBusNotice();
+  renderListenOnly();
   renderAllocator();
   renderDecodeSwitch();
   const serverDot = el('serverSemaphore');
@@ -289,7 +312,8 @@ const updateSemaphores = () => {
       const dropped = state.droppedEvents;
       const droppedTotal = dropped ? dropped.scanner + dropped.logger + dropped.clients : 0;
       const dropStr = droppedTotal > 0 ? ` · ${droppedTotal} dropped` : '';
-      canInfo.textContent = `${rate.toFixed(1)} msg/s${utilStr}${dropStr}`;
+      const selfStr = state.listenOnly ? ' · listening only' : state.ownNodeId != null ? ` · as node ${state.ownNodeId}` : '';
+      canInfo.textContent = `${rate.toFixed(1)} msg/s${utilStr}${dropStr}${selfStr}`;
       canInfo.title = droppedTotal > 0
         ? `Messages lost because the backend could not keep up — before decoding: ${dropped.scanner}, `
           + `from history/recordings: ${dropped.logger}, from dashboard views: ${dropped.clients}`
@@ -731,7 +755,7 @@ const selectInterface = async () => {
   if (!target.interface) {
     return null;
   }
-  const body = { interface: target.interface, allocator: state.canAllocator };
+  const body = { interface: target.interface, allocator: state.canAllocator, listen_only: state.canListenOnly };
   if (target.needsBitrate) {
     body.bitrate = selectedCanBitrate();
     if (body.bitrate === null) {
@@ -752,6 +776,7 @@ const selectInterface = async () => {
     });
     state.preferredCanInterface = el('interfacesSelect').value;
     state.allocatorStatus = data?.allocator ?? null;
+    state.listenOnly = data?.listen_only === true;
     if (body.bitrate) {
       state.canBitrates[target.interface] = body.bitrate;
       if (body.data_bitrate) {
@@ -785,6 +810,7 @@ const clearCanSession = () => {
   state.busUtilization = null;
   state.droppedEvents = null;
   state.allocatorStatus = null;
+  state.listenOnly = false;
   state.busLoadHistory.length = 0;
   drawBusLoadSparkline();
   renderNodesTable();
@@ -851,8 +877,12 @@ const pollStatus = async () => {
   state.cyphalV11 = data.cyphal_v11 ?? null;
   state.busErrors = data.bus_errors ?? null;
   state.allocatorStatus = data.allocator ?? null;
+  state.listenOnly = data.listen_only === true;
+  state.ownNodeId = Number.isInteger(data.own_node_id) ? data.own_node_id : null;
   state.serverCpu = data.server_cpu ?? state.serverCpu;
   state.decodeOnDemand = data.decode_on_demand === true;
+  state.update = data.update ?? null;
+  renderVersionTag();
 
   const backendCanRunning = data.status === 'running' && !!data.can_interface;
 
@@ -884,6 +914,12 @@ const pollStatus = async () => {
       showToast(`CAN disconnected: ${data.last_error}`, 'error');
       setCanError(`Disconnected: ${data.last_error}`);
     }
+  } else if (backendCanRunning) {
+    // A problem the session goes on with: another node using Cynitor's
+    // node-ID, or a database that cannot be written (a full disk).
+    const problem = data.last_error
+      || (data.history_error ? `History and recordings are not being saved: ${data.history_error}` : null);
+    if (problem !== state.canError) setCanError(problem);
   }
 
   updateSemaphores();
@@ -1037,6 +1073,7 @@ const openDashboard = async () => {
     state.canAdapters = statusData.available_adapters || [];
     state.canConnected = true;
     state.allocatorStatus = statusData.allocator ?? null;
+    state.listenOnly = statusData.listen_only === true;
     setCanError(null);
     showConnectedCanInterface(statusData.can_interface, statusData.can_bitrate,
       statusData.can_data_bitrate, statusData.can_fd);

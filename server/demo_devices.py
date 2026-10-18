@@ -30,6 +30,7 @@ DSDL, imported when this module is.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import math
 import time
@@ -75,7 +76,11 @@ def make_node(name: str, make_transport: MakeTransport, node_id: int, minor: int
         "UAVCAN__PUB__TEMPERATURE__ID": str(TEMPERATURE_SUBJECT_ID),
         "UAVCAN__PUB__STATUS__ID": str(STATUS_SUBJECT_ID),
     }
-    info = uavcan.node.GetInfo_1_0.Response(name=name, software_version=uavcan.node.Version_1_0(major=1, minor=minor))
+    # The same unique-ID every start, as a real device has: a fresh one each time
+    # made every connect leave the previous one behind as an offline device.
+    unique_id = hashlib.md5(f"cynitor demo {name} {node_id}".encode()).digest()
+    info = uavcan.node.GetInfo_1_0.Response(name=name, software_version=uavcan.node.Version_1_0(major=1, minor=minor),
+                                            unique_id=unique_id)
     node = pycyphal.application.make_node(
         info, pycyphal.application.make_registry(None, environment_variables=registers),
         transport=make_transport(node_id),
@@ -96,10 +101,11 @@ async def run_bootloader(make_transport: MakeTransport, node_id: int, minor: int
         size = 0
         while True:
             result = await client.call(uavcan.file.Read_1_1.Request(offset=size, path=uavcan.file.Path_2_0(path)))
-            if result is None or result[0].error.value != 0:
+            response: Optional[uavcan.file.Read_1_1.Response] = result[0] if result is not None else None  # type: ignore[assignment]
+            if response is None or response.error.value != 0:
                 logger.warning("demo.sensor: bootloader read failed at byte %d: %s", size, result)
                 return False
-            chunk = len(result[0].data.value)
+            chunk = len(response.data.value)
             size += chunk
             if chunk < 256:
                 logger.info("demo.sensor: bootloader read %d bytes; starting the new firmware", size)
@@ -137,7 +143,7 @@ async def _sense(node: pycyphal.application.Node, node_id: int) -> Optional[tupl
     restart = asyncio.Event()
     update = None
 
-    async def on_command(request: Command.Request, meta) -> Command.Response:
+    async def on_command(request: uavcan.node.ExecuteCommand_1_3.Request, meta) -> uavcan.node.ExecuteCommand_1_3.Response:
         nonlocal update
         if request.command == Command.Request.COMMAND_RESTART:
             asyncio.get_running_loop().call_later(0.2, restart.set)  # answer first, then restart

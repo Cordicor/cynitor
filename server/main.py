@@ -5,6 +5,7 @@ import argparse
 import asyncio
 import json
 import logging
+import ipaddress
 import os
 import re
 import shutil
@@ -13,7 +14,7 @@ import subprocess
 import sys
 import threading
 from pathlib import Path
-from typing import Callable, Optional
+from typing import TYPE_CHECKING, Callable, Optional
 
 from can_config import (
     FD_MTU,
@@ -36,15 +37,25 @@ from cyphal_v11 import SOCKETCAN_FILTER, V11Traffic
 from data_dir import (EVENTS_DB, SCANNER_DB, SUBJECT_TYPES_FILE, TEST_NODES_FILE, prepare_data_dir,
                       resolve_data_dir)
 from firmware import COMMAND_STATUS, FIRMWARE_DIR, FirmwareServer, firmware_path, send_update_command
-from log_store import InMemoryLogStore, APILogHandler
-from raw_log import (RAW_LOG_DIR, LogPlayer, RawLog, SocketcanTap, log_has_fd_frames, log_path,
-                     new_log_name, read_sidecar, write_sidecar)
+from log_store import InMemoryLogStore, APILogHandler, TokenRedactingFilter
+from raw_log import (END_OF_LOG, RAW_LOG_DIR, LogPlayer, RawLog, SocketcanTap, free_space_problem, log_has_fd_frames,
+                     log_path, new_log_name, read_sidecar, write_sidecar)
 from simulation import SimulatedBus
 from testnodes import TestNodeBus, TestNodeManager
 from transfer_rates import TransferRates
+from update_check import DISABLE_ENV as DISABLE_UPDATE_CHECK_ENV, UpdateCheck
 from type_guess import load_candidates, rank_types
 from startup_setup import ensure_libusb_on_path, prepare_runtime, resolve_project_root
 from version import __version__
+
+if TYPE_CHECKING:  # for the type checker only: at run time these load on connect, once the compiled DSDL is on the path
+    from allocator import NodeIdAllocator
+    from event_logger import EventLogger
+    from frame_capture import FrameCaptureManager
+    from replay import ReplayManager
+    from scanner_node import ScannerNode
+    from service_calls import ServiceCallRecorder
+    from telemetry_manager import TelemetryManager
 
 IS_LINUX = sys.platform.startswith("linux")
 IS_WINDOWS = sys.platform == "win32"
@@ -58,6 +69,8 @@ logger = logging.getLogger(__name__)
 
 _log_store = InMemoryLogStore(max_entries=5000)
 _root_logger = logging.getLogger()
+for _handler in _root_logger.handlers:  # the console: the journal under systemd
+    _handler.addFilter(TokenRedactingFilter())
 if not any(isinstance(handler, APILogHandler) for handler in _root_logger.handlers):
     _root_logger.addHandler(APILogHandler(_log_store))
 
@@ -138,6 +151,20 @@ def _get_can_bitrates(iface: str) -> tuple[int, Optional[int]]:
     return bitrate, dbitrate
 
 
+def _canbusload_counts_can_fd() -> bool:
+    """Whether the canbusload on PATH counts CAN FD frames.
+
+    Releases before mid-2021 (Ubuntu 22.04 ships 2020.11) accept a data
+    bitrate but count Classic CAN frames only; their usage text gives the
+    interface as ``<ifname>@<bitrate>``, later ones as ``<ifname>@<bitrate>[,<dbitrate>]``.
+    """
+    try:
+        result = subprocess.run(["canbusload"], check=False, capture_output=True, text=True, timeout=5)
+        return "dbitrate" in result.stdout + result.stderr
+    except Exception:
+        return False
+
+
 class BusLoadMonitor:
     """Runs canbusload as a subprocess and exposes the latest utilization %.
 
@@ -153,16 +180,21 @@ class BusLoadMonitor:
         self._bitrate, self._dbitrate = _get_can_bitrates(iface)
         self._proc: Optional[asyncio.subprocess.Process] = None
         self._task: Optional[asyncio.Task] = None
-        self._disabled = shutil.which("canbusload") is None
+        self._disabled_why: Optional[str] = None
+        if shutil.which("canbusload") is None:
+            self._disabled_why = "'canbusload' not on PATH (install can-utils on Linux for bus-load metrics)"
+        elif self._dbitrate and not _canbusload_counts_can_fd():
+            # It would read CAN FD traffic as an idle bus: the load is unknown instead.
+            self._disabled_why = ("this canbusload counts Classic CAN frames only, and the bus is CAN FD "
+                                  "(a newer can-utils counts both)")
+        self._disabled = self._disabled_why is not None
         self.utilization: Optional[float] = None if self._disabled else 0.0
 
     async def start(self) -> None:
         if self._disabled:
-            logger.info("BusLoadMonitor disabled: 'canbusload' not on PATH (install can-utils on Linux for bus-load metrics)")
+            logger.info("BusLoadMonitor disabled: %s", self._disabled_why)
             return
-        # canbusload counts CAN FD frames' data phase at ",<dbitrate>". Releases
-        # before mid-2021 (Ubuntu 22.04 ships 2020.11) accept the suffix but
-        # count Classic CAN frames only, so CAN FD load reads low with them.
+        # canbusload counts CAN FD frames' data phase at ",<dbitrate>".
         rates = f"{self._bitrate},{self._dbitrate}" if self._dbitrate else str(self._bitrate)
         self._proc = await asyncio.create_subprocess_exec(
             "canbusload", f"{self._iface}@{rates}", "-b",
@@ -217,6 +249,16 @@ class BusLoadMonitor:
             raise
 
 
+def is_loopback(bind: str) -> bool:
+    """Whether ``bind`` listens on this machine only: a loopback address, or localhost."""
+    if bind.strip().lower() == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(bind.strip("[]")).is_loopback
+    except ValueError:
+        return False  # a host name: whatever it resolves to, assume the network
+
+
 def bound_address(bind: str, port: int) -> str:
     """Where the server listens, as a link a terminal lets the user click.
 
@@ -232,12 +274,16 @@ def bound_address(bind: str, port: int) -> str:
 # CAN session lifecycle
 # ---------------------------------------------------------------------------
 
+class SessionBusy(RuntimeError):
+    """A connect refused because a session or a replay already runs: the caller's to resolve (409)."""
+
+
 class CANSession:
     """Manages the lifecycle of all CAN-dependent components."""
 
     def __init__(self, default_bitrate: Optional[int] = None, data_dir: Path = Path("."),
                  default_data_bitrate: Optional[int] = None, default_allocator: bool = False,
-                 decode_on_demand: bool = False) -> None:
+                 decode_on_demand: bool = False, default_listen_only: bool = False) -> None:
         # Where the databases live; main() passes the resolved data folder.
         self.data_dir = Path(data_dir)
         # --bitrate, used when connect() is not given one. There is no built-in
@@ -249,6 +295,12 @@ class CANSession:
         # --allocator, likewise: whether Cynitor gives plug-and-play nodes
         # their node-IDs. Off unless asked for: a bus may have one allocator only.
         self.default_allocator = default_allocator
+        # --listen-only, likewise: watch the bus without sending anything.
+        self.default_listen_only = default_listen_only
+        self.listen_only = False  # whether the session that runs sends nothing
+        # The interface the server was started with (--can), while the operator
+        # has not disconnected it: down, the server is not healthy.
+        self.wanted_can: Optional[str] = None
         # --decode-on-demand, and the dashboard's switch: decode only the
         # subjects a dashboard watches or a recording takes, and count the rest
         # from their frames (see transfer_rates). For a bus that carries more
@@ -278,13 +330,13 @@ class CANSession:
         # Serves firmware files to nodes being updated; None when Cynitor has
         # no node-ID or plays a raw log, since nothing can be sent then.
         self.firmware: Optional[FirmwareServer] = None
-        self.scanner = None
-        self.telemetry = None
-        self.allocator = None  # Cynitor's node-ID allocator, while it is on (see allocator)
-        self.event_logger = None
-        self.frame_capture = None
-        self.service_calls = None  # every service call on the bus, for the recordings
-        self.bus_load: Optional[BusLoadMonitor] = None
+        self.scanner: Optional["ScannerNode"] = None
+        self.telemetry: Optional["TelemetryManager"] = None
+        self.allocator: Optional["NodeIdAllocator"] = None  # Cynitor's node-ID allocator, while it is on (see allocator)
+        self.event_logger: Optional["EventLogger"] = None
+        self.frame_capture: Optional["FrameCaptureManager"] = None
+        self.service_calls: Optional["ServiceCallRecorder"] = None  # every service call on the bus, for the recordings
+        self.bus_load: "Optional[BusLoadMonitor | HubBusLoad]" = None
         # Shares a non-SocketCAN adapter among the components; see can_hub.
         self.hub: Optional[CANHub] = None
         self.registered_nodes: set[int] = set()
@@ -296,19 +348,28 @@ class CANSession:
         # Whether UAVCAN__NODE__ID is one this session picked, and so is
         # forgotten when it ends: the next bus may have a node on it.
         self._picked_node_id = False
+        self._node_id_before: Optional[str] = None  # UAVCAN__NODE__ID as it was, while listening only
         # Recording-replay engine. None unless a replay session is in progress.
         # Mutually exclusive with scanner — the WS handler chooses telemetry
         # vs replay based on which is non-None, and connect()/start_replay()
         # refuse to run while the other side is active.
-        self.replay = None
+        self.replay: Optional["ReplayManager"] = None
 
     @property
     def is_running(self) -> bool:
         return self.scanner is not None
 
+    @property
+    def _live_scanner(self) -> "ScannerNode":
+        """The scanner; RuntimeError if CAN is not connected, which the API answers as 409."""
+        if self.scanner is None:
+            raise RuntimeError("CAN is not connected")
+        return self.scanner
+
     async def connect(self, can_iface: str, force_compile: bool = False,
                       bitrate: Optional[int] = None, data_bitrate: Optional[int] = None,
-                      *, allocator: Optional[bool] = None, open_bus=None, offline: Optional[dict] = None) -> None:
+                      *, allocator: Optional[bool] = None, open_bus=None, offline: Optional[dict] = None,
+                      listen_only: Optional[bool] = None) -> None:
         """Start all CAN components.
 
         `bitrate` is ignored by SocketCAN (set it with `ip link`) and required
@@ -321,7 +382,12 @@ class CANSession:
 
         `allocator` has Cynitor give plug-and-play nodes their node-IDs for
         this session; None means `default_allocator`.
+
+        `listen_only` has the session send nothing: no node-ID, no heartbeat,
+        no requests, so no names or registers either; None means
+        `default_listen_only`.
         """
+        listen_only = self.default_listen_only if listen_only is None else bool(listen_only)
         bitrate = resolve_bitrate(can_iface, self.default_bitrate if bitrate is None else bitrate)
         data_bitrate = resolve_data_bitrate(
             can_iface, self.default_data_bitrate if data_bitrate is None else data_bitrate)
@@ -329,9 +395,9 @@ class CANSession:
         # the lock guards against concurrent connect() calls that both passed
         # this check before prepare_runtime returned.
         if self.is_running:
-            raise RuntimeError("Already connected")
+            raise SessionBusy("Already connected")
         if self.replay is not None:
-            raise RuntimeError("Replay session is active — stop it before connecting CAN")
+            raise SessionBusy("Replay session is active — stop it before connecting CAN")
 
         spec = normalize_can_iface(can_iface)
         if is_socketcan(spec):
@@ -355,20 +421,21 @@ class CANSession:
         simulation: Optional[SimulatedBus] = None
         if is_socketcan(spec):
             device = socketcan_device(spec)
-            await self._pick_node_id(spec, fd=socketcan_supports_fd(device))
+            await self._pick_node_id(spec, fd=socketcan_supports_fd(device), listen_only=listen_only)
             await asyncio.to_thread(prepare_runtime, can_iface, force_compile, bitrate)
         else:
+            assert bitrate is not None  # resolve_bitrate gives one for all but SocketCAN
             if is_simulated(spec) and open_bus is None:
                 # The hub opens the simulated bus's wire as it would an adapter.
                 simulation = SimulatedBus(bitrate, data_bitrate)
                 open_bus = simulation.open_wire
-            hub = await self._open_hub(spec, bitrate, force_compile, data_bitrate, open_bus)
+            hub = await self._open_hub(spec, bitrate, force_compile, data_bitrate, open_bus, listen_only)
 
         async with self._lock:
             if self.is_running:
                 if hub is not None:
                     await asyncio.to_thread(hub.stop)
-                raise RuntimeError("Already connected")
+                raise SessionBusy("Already connected")
             self.last_error = None
             # From here on _teardown owns the hub, including on failure below.
             self.hub = hub
@@ -380,13 +447,14 @@ class CANSession:
                 logger.info("Initializing ScannerNode...")
                 self.scanner = ScannerNode(register_file=str(self.data_dir / SCANNER_DB))
                 self.scanner.offline = offline
+                self.scanner.listen_only = self.listen_only = listen_only
                 self.scanner.on_own_node_id_conflict = self._own_node_id_taken
                 self._apply_saved_subject_types()
                 if offline is None and self.scanner.node.id is not None:
                     self.firmware = FirmwareServer(self.firmware_folder)
                     self.firmware.serve_on(self.scanner.node)
                 # Nothing can be sent while a raw log plays, an answer neither.
-                if offline is None and (self.default_allocator if allocator is None else allocator):
+                if offline is None and not listen_only and (self.default_allocator if allocator is None else allocator):
                     self._start_allocator()
 
                 logger.info("Initializing TelemetryManager...")
@@ -403,18 +471,18 @@ class CANSession:
                     decode_errors=hub is None or hub.spec.partition(":")[0] in ("gs_usb", "rawlog"))
 
                 logger.info("Initializing EventLogger...")
-                await self.ensure_event_logger()
+                event_logger = await self.ensure_event_logger()
 
-                saved_identities = await self.event_logger.load_identity_map()
+                saved_identities = await event_logger.load_identity_map()
                 if saved_identities:
                     self.scanner.identity_map.load_snapshot(saved_identities)
 
-                saved_node_data = await self.event_logger.load_all_node_data()
+                saved_node_data = await event_logger.load_all_node_data()
                 if saved_node_data:
                     self.scanner.identity_map.load_node_data(saved_node_data)
 
-                self.scanner.on_node_event = self.event_logger.log_node_event
-                self.scanner.on_node_data_save = self.event_logger.save_node_data
+                self.scanner.on_node_event = event_logger.log_node_event
+                self.scanner.on_node_data_save = event_logger.save_node_data
 
                 logger_queue = self.telemetry.subscribe(max_queue=5000, label="logger")
                 self._tasks = [
@@ -425,11 +493,13 @@ class CANSession:
                 # canbusload reads a SocketCAN device; behind the hub, the
                 # hub counts the traffic itself.
                 logger.info("Initializing bus load monitor...")
+                bus_load: BusLoadMonitor | HubBusLoad
                 if hub is None:
-                    self.bus_load = BusLoadMonitor(socketcan_device(can_iface))
+                    bus_load = BusLoadMonitor(socketcan_device(can_iface))
                 else:
-                    self.bus_load = HubBusLoad(hub)
-                await self.bus_load.start()
+                    bus_load = HubBusLoad(hub)
+                self.bus_load = bus_load
+                await bus_load.start()
 
                 if hub is None:
                     self.v11 = V11Traffic()
@@ -460,7 +530,7 @@ class CANSession:
                     # Last, so that the devices join a bus Cynitor already watches.
                     self.simulation = simulation
                     simulation.start()
-                if offline is None:  # nothing can be sent while a raw log plays
+                if offline is None and not listen_only:  # nothing can be sent while a raw log plays
                     self.test_nodes.attach(TestNodeBus(self._test_node_transport, simulation is not None,
                                                        self._node_ids_in_use))
                 logger.info("CAN session started on %s", can_iface)
@@ -501,11 +571,11 @@ class CANSession:
 
     def _start_allocator(self) -> None:
         """Have Cynitor give node-IDs to the nodes that ask for one (see allocator)."""
-        if self.scanner.node.id is None:
+        if self._live_scanner.node.id is None:
             logger.warning("The allocator is not started: Cynitor has no node-ID of its own to answer from")
             return
         from allocator import NodeIdAllocator
-        self.allocator = NodeIdAllocator(self.scanner.node, self._node_ids_seen)
+        self.allocator = NodeIdAllocator(self._live_scanner.node, self._node_ids_seen)
 
     def allocator_status(self) -> Optional[dict]:
         """Cynitor's allocator as /api/status reports it (see NodeIdAllocator.status); None while it is off."""
@@ -570,7 +640,7 @@ class CANSession:
     def _wanted_subjects(self) -> set[int]:
         """The subjects some dashboard watches or some recording takes."""
         wanted: set[int] = set().union(*self._watched.values())
-        if self.event_logger is not None:
+        if self.event_logger is not None and self.scanner is not None:
             for subject_id, message_type in self.scanner.subject_types.items():
                 if subject_id not in wanted and self.event_logger.records_subject(
                         subject_id, self.scanner.active_publishers.get(subject_id, ()),
@@ -588,7 +658,8 @@ class CANSession:
             await asyncio.sleep(1.0)
             try:
                 self._apply_decoding()
-                await self.scanner.queue_rates(self._rates.sample())
+                if self.scanner is not None and self._rates is not None:
+                    await self.scanner.queue_rates(self._rates.sample())
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # a second's rates missed must not end the loop
@@ -611,11 +682,10 @@ class CANSession:
         from pycyphal.transport.can import CANTransport
         if self.hub is not None:
             from pycyphal.transport.can.media.pythoncan import PythonCANMedia
-            media = PythonCANMedia(self.hub.local_spec, media_bitrate(self.hub.local_spec), media_mtu())
-        else:
-            from pycyphal.transport.can.media.socketcan import SocketCANMedia
-            media = SocketCANMedia(socketcan_device(self.can_interface), media_mtu())
-        return CANTransport(media, node_id)
+            return CANTransport(PythonCANMedia(self.hub.local_spec, media_bitrate(self.hub.local_spec), media_mtu()),
+                                node_id)
+        from pycyphal.transport.can.media.socketcan import SocketCANMedia
+        return CANTransport(SocketCANMedia(socketcan_device(self.can_interface), media_mtu()), node_id)
 
     @staticmethod
     def _open_v11_tap(device: str, traffic: V11Traffic) -> Optional[SocketcanTap]:
@@ -627,13 +697,19 @@ class CANSession:
             logger.warning("Cannot watch %s for Cyphal v1.1 traffic: %s", device, exc)
             return None
 
-    async def _pick_node_id(self, local_spec: str, fd: bool = False) -> None:
+    async def _pick_node_id(self, local_spec: str, fd: bool = False, listen_only: bool = False) -> None:
         """Choose Cynitor's own node-ID from the heartbeats on the bus, unless one is set.
 
         The way `yakut accommodate` does it, without needing yakut: without a
         node-ID the scanner runs anonymously and can ask no node for its
-        GetInfo or registers.
+        GetInfo or registers. Listening only, it runs anonymously on purpose:
+        a node-ID out of range is none to pycyphal, which then sends nothing.
         """
+        if listen_only:
+            self._node_id_before = os.environ.get("UAVCAN__NODE__ID")
+            os.environ["UAVCAN__NODE__ID"] = "65535"
+            self._picked_node_id = True
+            return
         if "UAVCAN__NODE__ID" in os.environ:
             return
         node_id = await asyncio.to_thread(pick_free_node_id, local_spec, frozenset(), None, fd)
@@ -644,7 +720,7 @@ class CANSession:
             self._picked_node_id = True
 
     async def _open_hub(self, spec: str, bitrate: int, force_compile: bool,
-                        data_bitrate: Optional[int] = None, open_bus=None) -> CANHub:
+                        data_bitrate: Optional[int] = None, open_bus=None, listen_only: bool = False) -> CANHub:
         """Open a non-SocketCAN adapter once and point every component at the hub's channel.
 
         Most such adapters admit a single open handle, and the node-ID picker,
@@ -654,7 +730,7 @@ class CANSession:
         hub = CANHub(spec, bitrate, data_bitrate) if open_bus is None else CANHub(spec, bitrate, data_bitrate, open_bus)
         await asyncio.to_thread(hub.start)
         try:
-            await self._pick_node_id(hub.local_spec)
+            await self._pick_node_id(hub.local_spec, listen_only=listen_only)
             await asyncio.to_thread(
                 prepare_runtime, hub.local_spec, force_compile, bitrate, False, data_bitrate,
             )
@@ -713,7 +789,7 @@ class CANSession:
         """
         if not self.is_running:
             raise RuntimeError("CAN is not connected")
-        self.scanner.set_subject_type(subject_id, type_name)
+        self._live_scanner.set_subject_type(subject_id, type_name)
         saved = self.saved_subject_types()
         if type_name is None:
             saved.pop(subject_id, None)
@@ -728,7 +804,7 @@ class CANSession:
     def _apply_saved_subject_types(self) -> None:
         for subject_id, type_name in self.saved_subject_types().items():
             try:
-                self.scanner.set_subject_type(subject_id, type_name)
+                self._live_scanner.set_subject_type(subject_id, type_name)
             except (RuntimeError, ValueError) as exc:
                 logger.warning("Subject %d: not decoding it as %s, which was set earlier: %s",
                                subject_id, type_name, exc)
@@ -741,7 +817,7 @@ class CANSession:
         """
         if not self.is_running:
             raise RuntimeError("CAN is not connected")
-        payloads = await self.scanner.sample_subject(subject_id, self.GUESS_LISTEN_S)
+        payloads = await self._live_scanner.sample_subject(subject_id, self.GUESS_LISTEN_S)
         if not payloads:
             return {"samples": 0, "matches": 0, "candidates": []}
         ranked = await asyncio.to_thread(lambda: rank_types(payloads, load_candidates(types), self.can_fd))
@@ -768,7 +844,7 @@ class CANSession:
         # Followed from before the command: the node may start reading at once.
         update = self.firmware.begin(node_id, name, path.stat().st_size)
         try:
-            status = await send_update_command(self.scanner.node, node_id, name)
+            status = await send_update_command(self._live_scanner.node, node_id, name)
             if status is None:
                 raise TimeoutError(f"Node {node_id} did not answer the update command")
             if status != 0:
@@ -792,6 +868,9 @@ class CANSession:
         if self.raw_log is not None:
             raise RuntimeError("A raw log is already running")
         self.raw_log_folder.mkdir(parents=True, exist_ok=True)
+        problem = free_space_problem(self.raw_log_folder)
+        if problem is not None:
+            raise RuntimeError(problem)
         path = self.raw_log_folder / new_log_name()
         if self.hub is not None:
             log = RawLog(path, channel="can0")
@@ -827,11 +906,13 @@ class CANSession:
 
     def _bus_knowledge(self) -> dict:
         """What this session knows about the bus that a raw log cannot hold, for playing it."""
-        scanner = self.scanner
+        scanner = self._live_scanner
         publishers: dict[str, dict[str, str]] = {}
         for subject_id, node_ids in scanner.active_publishers.items():
             subject_type = scanner.subject_types.get(subject_id)
-            for node_id in node_ids if subject_type else ():
+            if not subject_type:
+                continue
+            for node_id in node_ids:
                 publishers.setdefault(str(node_id), {})[str(subject_id)] = subject_type
         names = {}
         for node_id, node in scanner.all_nodes.items():
@@ -841,7 +922,7 @@ class CANSession:
         own = os.environ.get("UAVCAN__NODE__ID")
         return {
             "version": 1,
-            "own_node_id": int(own) if own and own.isdigit() else None,
+            "own_node_id": int(own) if own and own.isdigit() and int(own) <= 127 else None,  # not listening only
             "bitrate": self.can_bitrate,
             "data_bitrate": self.can_data_bitrate,
             "fd": self.can_fd,
@@ -870,14 +951,18 @@ class CANSession:
             f"rawlog:{name}", bitrate=bitrate, data_bitrate=data_bitrate, offline=info,
             open_bus=lambda _spec, _bitrate, _data_bitrate: player,
         )
-        # Decode every subject the sidecar names from the first frame on,
-        # rather than once each node has registered, which may be too late.
-        for node_id, subjects in info.get("publishers", {}).items():
-            try:
-                await self.scanner.add_subscriptions(int(node_id), {int(s): t for s, t in subjects.items()})
-            except Exception as exc:  # e.g. a custom type that is no longer compiled
-                logger.warning("Raw log %s: cannot decode node %s's subjects: %s", name, node_id, exc)
-        player.play()
+        try:
+            # Decode every subject the sidecar names from the first frame on,
+            # rather than once each node has registered, which may be too late.
+            for node_id, subjects in info.get("publishers", {}).items():
+                try:
+                    await self._live_scanner.add_subscriptions(int(node_id), {int(s): t for s, t in subjects.items()})
+                except Exception as exc:  # e.g. a custom type that is no longer compiled
+                    logger.warning("Raw log %s: cannot decode node %s's subjects: %s", name, node_id, exc)
+            player.play()
+        except BaseException:
+            await self.disconnect()  # a session that would never play is not left running
+            raise
 
     def rescan_registrations(self) -> None:
         """Force the register loop to re-attempt every appeared node on its next tick.
@@ -896,7 +981,7 @@ class CANSession:
                 self.scanner.service_metadata.pop(key, None)
         logger.info("Cleared registration state — register loop will re-attempt all nodes")
 
-    async def ensure_event_logger(self):
+    async def ensure_event_logger(self) -> "EventLogger":
         """The event logger, started on first use.
 
         Recordings live in the data folder, so listing, exporting or replaying
@@ -904,7 +989,8 @@ class CANSession:
         it (flushing what it holds); the next use starts it again.
         """
         async with self._event_logger_lock:  # two first uses at once start one
-            if self.event_logger is None:
+            event_logger = self.event_logger
+            if event_logger is None:
                 from event_logger import EventLogger
                 event_logger = EventLogger(
                     db_path=self.data_dir / EVENTS_DB,
@@ -913,7 +999,7 @@ class CANSession:
                 )
                 await event_logger.start()
                 self.event_logger = event_logger
-        return self.event_logger
+        return event_logger
 
     async def start_replay(self, recording_id: int, speed: float = 1.0,
                              start_offset_s: float = 0.0) -> dict:
@@ -924,9 +1010,9 @@ class CANSession:
             raise RuntimeError("CAN is connected — disconnect before starting replay")
         if self.replay is not None:
             raise RuntimeError("Replay already in progress")
-        await self.ensure_event_logger()
+        event_logger = await self.ensure_event_logger()
         from replay import ReplayManager
-        self.replay = ReplayManager(self.event_logger.db_path,
+        self.replay = ReplayManager(event_logger.db_path,
                                     recording_id=recording_id, speed=speed)
 
         def _on_finish() -> None:
@@ -1008,7 +1094,11 @@ class CANSession:
         self.registered_nodes.clear()
         if self._picked_node_id:  # one the user set stays
             os.environ.pop("UAVCAN__NODE__ID", None)
+            if self._node_id_before is not None:  # set aside while listening only
+                os.environ["UAVCAN__NODE__ID"] = self._node_id_before
             self._picked_node_id = False
+            self._node_id_before = None
+        self.listen_only = False
         self.can_interface = None
         self.can_bitrate = None
         self.can_data_bitrate = None
@@ -1021,7 +1111,10 @@ class CANSession:
         if self._disconnect_task and not self._disconnect_task.done():
             logger.warning("Disconnect already in progress, ignoring duplicate")
             return
-        logger.error(f"CAN fatal error: {error_msg}")
+        if error_msg.endswith(END_OF_LOG):
+            logger.info("Raw log played to its end: %s", error_msg)
+        else:
+            logger.error(f"CAN fatal error: {error_msg}")
         self.last_error = error_msg
         self._disconnect_task = asyncio.create_task(self._deferred_disconnect())
 
@@ -1070,6 +1163,8 @@ async def register_nodes(scanner, registered_nodes_set: set[int],
         try:
             if isinstance(scanner.offline, dict):  # a raw log plays: nobody answers register reads
                 dsdl_pub_messages, dsdl_srv_messages = scanner.offline_ports(node.node_id)
+            elif scanner.listen_only is True:  # nothing is asked: the subjects' types are the user's, or guessed
+                dsdl_pub_messages, dsdl_srv_messages = {}, {}
             else:
                 dsdl_pub_messages, dsdl_srv_messages = await scanner.update_reg_list(node.node_id)
             scanner.node_service_types[node.node_id] = dict(dsdl_srv_messages)
@@ -1237,7 +1332,7 @@ async def _sample_bus_errors(session: 'CANSession') -> None:
         logger.debug("Bus error sample failed: %s", exc)
 
 
-async def _register_loop(scanner, registered_nodes: set[int], session: 'CANSession' = None) -> None:
+async def _register_loop(scanner, registered_nodes: set[int], session: Optional['CANSession'] = None) -> None:
     health_check_counter = 0
     registration_retry_at: dict[int, float] = {}
     try:
@@ -1254,8 +1349,10 @@ async def _register_loop(scanner, registered_nodes: set[int], session: 'CANSessi
                     session.schedule_fatal_disconnect(error)
                     return
                 await _sample_bus_errors(session)
+                scanner.report_kernel_drops()
 
             try:
+                scanner.hold_offline_while_losing_frames()
                 for node in scanner.all_nodes.values():
                     node.check_disappeared()
                 await register_nodes(scanner, registered_nodes, registration_retry_at)
@@ -1278,6 +1375,26 @@ async def _event_logger_loop(event_logger, queue: asyncio.Queue) -> None:
     except asyncio.CancelledError:
         logger.debug("Event logger loop cancelled")
         raise
+
+
+RECONNECT_BACKOFF_S = (5, 10, 20, 40, 60)  # waits between attempts; the last repeats
+
+
+async def _keep_attached(session, can_iface: str, force_compile: bool = False) -> None:
+    """--reconnect: attach `can_iface` again whenever its session is down, until the operator disconnects it."""
+    attempt = 0
+    while session.wanted_can == can_iface:
+        await asyncio.sleep(RECONNECT_BACKOFF_S[min(attempt, len(RECONNECT_BACKOFF_S) - 1)])
+        if session.is_running or session.replay is not None or session.wanted_can != can_iface:
+            attempt = 0
+            continue
+        try:
+            await session.connect(can_iface, force_compile=force_compile)
+            logger.info("Reconnected to %s", can_iface)
+            attempt = 0
+        except Exception as exc:
+            attempt += 1
+            logger.warning("Reconnecting to %s failed (%d): %s", can_iface, attempt, exc)
 
 
 async def attach_or_fall_back(session, can_iface: str, force_compile: bool = False) -> bool:
@@ -1321,7 +1438,7 @@ async def attach_or_fall_back(session, can_iface: str, force_compile: bool = Fal
         return False
 
 
-def show_token_on_terminal(token: str, stream=None) -> bool:
+def show_token_on_terminal(token: Optional[str], stream=None) -> bool:
     """Print the auth token where a person can copy it, and nowhere else.
 
     Deliberately not logged. The server's own log buffer is served through
@@ -1378,7 +1495,9 @@ async def main(can_iface: Optional[str] = None, force_compile: bool = False, bin
                port: int = 8080, serve_frontend: bool = True,
                can_bitrate: Optional[int] = None, data_dir: Optional[str] = None,
                can_data_bitrate: Optional[int] = None, allocator: bool = False,
-               decode_on_demand: bool = False) -> None:
+               decode_on_demand: bool = False, update_check: bool = True,
+               allow_any_interface: bool = False, listen_only: bool = False, access_log: bool = False,
+               reconnect: bool = False) -> None:
     from websocket_server import WebSocketServer
     from dsdl_manager import DsdlManager
 
@@ -1395,7 +1514,7 @@ async def main(can_iface: Optional[str] = None, force_compile: bool = False, bin
 
     session = CANSession(default_bitrate=can_bitrate, data_dir=data_path,
                          default_data_bitrate=can_data_bitrate, default_allocator=allocator,
-                         decode_on_demand=decode_on_demand)
+                         decode_on_demand=decode_on_demand, default_listen_only=listen_only)
     project_root = resolve_project_root()
     dsdl_mgr = DsdlManager(project_root, data_dir=data_path)
     dsdl_mgr.make_importable()
@@ -1405,6 +1524,9 @@ async def main(can_iface: Optional[str] = None, force_compile: bool = False, bin
     # the token. When unset, the server runs open. Strongly recommended
     # whenever --bind 0.0.0.0 is used.
     auth_token = os.environ.get("CYNITOR_AUTH_TOKEN", "").strip() or None
+    if auth_token is not None and len(auth_token) < 16:
+        logger.warning("CYNITOR_AUTH_TOKEN is %d characters long: a short token can be guessed. "
+                       "Use a long random one, such as $(openssl rand -hex 24)", len(auth_token))
 
     ws_server = WebSocketServer(
         session=session,
@@ -1420,7 +1542,12 @@ async def main(can_iface: Optional[str] = None, force_compile: bool = False, bin
         website_dir=(project_root / "website") if serve_frontend else None,
         adapter_catalog=adapter_catalog,
     )
+    ws_server.allow_any_interface = allow_any_interface
+    ws_server.access_log = access_log
     await ws_server.start()
+    if update_check and os.environ.get(DISABLE_UPDATE_CHECK_ENV, "").strip() not in ("1", "true", "yes"):
+        ws_server.update_check = UpdateCheck(__version__)
+        ws_server.update_check.start()
 
     logger.info("=" * 60)
     logger.info("SERVER RUNNING")
@@ -1429,10 +1556,12 @@ async def main(can_iface: Optional[str] = None, force_compile: bool = False, bin
     logger.info("Auth:        %s", "token required (CYNITOR_AUTH_TOKEN set)" if auth_token else "OPEN (no token)")
     logger.info("Data:        %s", data_path)
     show_token_on_terminal(auth_token)
-    if bind == "0.0.0.0" and not auth_token:
-        logger.warning("Server is bound to 0.0.0.0 with NO auth — reachable from any network peer. Set CYNITOR_AUTH_TOKEN to require a bearer token.")
-    elif bind == "0.0.0.0":
-        logger.info("Server is bound to 0.0.0.0 with token auth — clients must present Authorization: Bearer <token>.")
+    if not is_loopback(bind) and not auth_token:  # only with --insecure-no-auth
+        logger.warning("Server is bound to %s with NO auth (--insecure-no-auth): anyone who can reach it can "
+                       "command the nodes on the bus. Set CYNITOR_AUTH_TOKEN to require a bearer token.", bind)
+    elif not is_loopback(bind):
+        logger.info("Server is bound to %s with token auth: clients must present Authorization: Bearer <token>. "
+                    "The traffic is plain HTTP; put a TLS reverse proxy in front beyond a trusted network.", bind)
     logger.info("REST API:    http://localhost:%d/api/", port)
     logger.info("Health:      http://localhost:%d/api/health", port)
     logger.info("Status:      http://localhost:%d/api/status", port)
@@ -1445,26 +1574,17 @@ async def main(can_iface: Optional[str] = None, force_compile: bool = False, bin
     else:
         logger.info("Mode:        selection  (waiting for the UI or POST /api/can/connect)")
     logger.info("-" * 60)
-    logger.info("Startup options:")
-    logger.info("  --can <iface>    attach to a CAN interface at startup (e.g. vcan0, can0, gs_usb:0, pcan:PCAN_USBBUS1,")
-    logger.info("                   or sim:classic / sim:fd, a simulated bus with demo devices)")
-    logger.info("  --bitrate <n>    bus speed in bit/s; required with --can for any adapter except SocketCAN")
-    logger.info("  --data-bitrate <n>  CAN FD data-phase speed; opens PCAN/Kvaser/Vector/IXXAT/gs_usb/slcan as CAN FD")
-    logger.info("  --allocator      give plug-and-play nodes their node-IDs; only for a bus with no allocator of its own")
-    logger.info("  --decode-on-demand  decode only the subjects watched or recorded; for a bus too busy to decode whole")
-    logger.info("  --bind <host>    bind HTTP server to <host>  (default 127.0.0.1; 0.0.0.0 to expose on the network)")
-    logger.info("  --port <n>       listen on <n> instead of 8080")
-    logger.info("  --data-dir <dir> keep history, recordings and raw logs in <dir>")
-    logger.info("  --recompile      force DSDL recompilation via nnvg")
-    logger.info("  --no-frontend    serve only the API and WebSocket, not the dashboard")
-    logger.info("  --help           full reference")
+    logger.info("Options:     --help lists them")
     if not can_iface:
         logger.info("Selection-mode startup (no --can): connect from the UI or POST /api/can/connect")
     logger.info("=" * 60)
 
     try:
         if can_iface:
+            session.wanted_can = can_iface
             await attach_or_fall_back(session, can_iface, force_compile)
+            if reconnect:
+                asyncio.create_task(_keep_attached(session, can_iface, force_compile))
 
         await asyncio.Event().wait()
 
@@ -1476,6 +1596,8 @@ async def main(can_iface: Optional[str] = None, force_compile: bool = False, bin
         logger.info("Cleanup starting...")
         if session.is_running:
             await session.disconnect()
+        if ws_server.update_check is not None:
+            await ws_server.update_check.stop()
         await ws_server.stop()
         logger.info("Shutdown complete")
 
@@ -1498,8 +1620,12 @@ def _exit_when_parent_dies() -> None:
     started it and keeps holding port 8080. The next start would then find a
     stale server answering on the port it wanted.
 
-    Linux and Windows (see _exit_when_windows_parent_dies); a no-op elsewhere.
+    Linux and Windows (see _exit_when_windows_parent_dies); a no-op elsewhere,
+    and from source, which has no bootloader: there the parent is a shell, and
+    a server left running with nohup or & must outlive it.
     """
+    if not getattr(sys, "frozen", False):
+        return
     if not IS_LINUX:
         if IS_WINDOWS:
             _exit_when_windows_parent_dies()
@@ -1549,7 +1675,7 @@ def _exit_when_windows_parent_dies() -> None:
 
         SYNCHRONIZE = 0x00100000
         INFINITE = 0xFFFFFFFF
-        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)  # type: ignore[attr-defined]  # Windows only
         kernel32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
         kernel32.OpenProcess.restype = wintypes.HANDLE
         kernel32.WaitForSingleObject.argtypes = (wintypes.HANDLE, wintypes.DWORD)
@@ -1559,7 +1685,7 @@ def _exit_when_windows_parent_dies() -> None:
         logger.debug("Parent-death cleanup unavailable: %s", exc)
         return
     if not parent:
-        logger.debug("Parent-death cleanup unavailable: OpenProcess failed (%d)", ctypes.get_last_error())
+        logger.debug("Parent-death cleanup unavailable: OpenProcess failed (%d)", ctypes.get_last_error())  # type: ignore[attr-defined]
         return
 
     def wait_for_parent() -> None:
@@ -1656,7 +1782,46 @@ if __name__ == "__main__":
         action="store_true",
         help="Serve only the REST API and WebSocket; do not serve the dashboard",
     )
+    parser.add_argument(
+        "--reconnect",
+        action="store_true",
+        help="With --can: attach to it again whenever its session ends (an adapter unplugged, a bus fault), "
+             "waiting 5 s, then longer, up to a minute, between attempts",
+    )
+    parser.add_argument(
+        "--access-log",
+        action="store_true",
+        help="Log every HTTP request (a dashboard makes a few a second); off by default",
+    )
+    parser.add_argument(
+        "--listen-only",
+        action="store_true",
+        help="Watch the bus without sending anything: no node-ID, heartbeat or requests, so node names "
+             "and registers are not read. The dashboard's Listen only box does the same for one session",
+    )
+    parser.add_argument(
+        "--insecure-no-auth",
+        action="store_true",
+        help="Allow a --bind beyond loopback without CYNITOR_AUTH_TOKEN: anyone who can reach the "
+             "port can then command the nodes on the bus",
+    )
+    parser.add_argument(
+        "--allow-any-interface",
+        action="store_true",
+        help="Let the dashboard and API open any python-can interface, not only the CAN adapters "
+             "Cynitor knows; python-can also has network and serial back-ends",
+    )
+    parser.add_argument(
+        "--no-update-check",
+        action="store_true",
+        help="Do not ask GitHub, at start and once a day, whether a newer release is out "
+             f"(or set {DISABLE_UPDATE_CHECK_ENV}=1)",
+    )
     args = parser.parse_args()
+    if not is_loopback(args.bind) and not os.environ.get("CYNITOR_AUTH_TOKEN", "").strip() \
+            and not args.insecure_no_auth:
+        parser.error(f"--bind {args.bind} reaches beyond this machine, and the API commands the nodes on the bus: "
+                     "set CYNITOR_AUTH_TOKEN to require a token, or pass --insecure-no-auth on a network you trust")
     if args.can:
         # Refuse up front rather than start and fall back to selection mode:
         # the fix is on the command line, not in the dashboard.
@@ -1684,8 +1849,16 @@ if __name__ == "__main__":
             can_data_bitrate=args.data_bitrate,
             allocator=args.allocator,
             decode_on_demand=args.decode_on_demand,
+            update_check=not args.no_update_check,
+            allow_any_interface=args.allow_any_interface,
+            listen_only=args.listen_only,
+            access_log=args.access_log,
+            reconnect=args.reconnect,
         ))
     except KeyboardInterrupt:
         logger.info("Interrupted by user")
     except Exception as e:
         logger.error(f"Unexpected error: {e}", exc_info=True)
+        # A failed start (the port taken, an address not there yet) must not
+        # read as success: systemd's Restart=on-failure, scripts and CI go by it.
+        sys.exit(1)

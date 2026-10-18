@@ -9,7 +9,7 @@ from typing import Optional
 
 from aiohttp import web
 
-from api_helpers import _parse_int, logger, MAX_NODE_ID, MAX_SERVICE_ID, MAX_SUBJECT_ID
+from api_helpers import ApiHandlers, _parse_int, listen_only_refusal, logger, MAX_NODE_ID, MAX_SERVICE_ID, MAX_SUBJECT_ID
 
 
 def _synthesize_nodes_from_recording(db_path, recording_id: int) -> dict:
@@ -55,7 +55,7 @@ def _synthesize_nodes_from_recording(db_path, recording_id: int) -> dict:
     return {"node_count": len(nodes), "nodes": {k: v for k, v in nodes.items()}}
 
 
-class NodesApi:
+class NodesApi(ApiHandlers):
     """The nodes part of WebSocketServer, which has the session and the rest these use."""
 
     async def _set_subject_type(self, request: web.Request) -> web.Response:
@@ -136,6 +136,8 @@ class NodesApi:
 
         if not self.session.is_running:
             return web.json_response({"error": "CAN bus not connected"}, status=503)
+        if refused := listen_only_refusal(self.session):
+            return refused
 
         try:
             registers = await self.session.scanner.get_registers(node_id)
@@ -156,6 +158,8 @@ class NodesApi:
 
         if not self.session.is_running:
             return web.json_response({"error": "CAN bus not connected"}, status=503)
+        if refused := listen_only_refusal(self.session):
+            return refused
 
         try:
             body = await request.json()
@@ -168,20 +172,35 @@ class NodesApi:
         if not name or value is None or not reg_type:
             return web.json_response({"error": "Missing required fields: name, value, type"}, status=400)
 
+        from scanner_registers import RegisterNotApplied  # imports the compiled DSDL, ready once connected
         try:
             updated = await self.session.scanner.set_register(node_id, name, str(value), reg_type)
             if updated is None:
+                await self._note_in_node_history(node_id, "register_write", {
+                    "name": name, "value": str(value), "status": "timeout"})
                 return web.json_response({"error": "Write failed — no response from node"}, status=504)
             if isinstance(updated, list):
                 formatted = ', '.join(str(v) for v in updated)
             else:
                 formatted = str(updated)
+            await self._note_in_node_history(node_id, "register_write", {
+                "name": name, "value": str(value), "read_back": formatted, "status": "ok"})
             return web.json_response({"status": "ok", "name": name, "value": formatted})
+        except RegisterNotApplied as e:
+            await self._note_in_node_history(node_id, "register_write", {
+                "name": name, "value": str(value), "status": "not_applied"})
+            return web.json_response({"error": str(e)}, status=409)
         except ValueError as e:
             return web.json_response({"error": str(e)}, status=400)
         except Exception as e:
             logger.error(f"Error in POST /api/registers/{node_id}/set: {e}", exc_info=True)
             return web.json_response({"error": str(e)}, status=500)
+
+    async def _note_in_node_history(self, node_id: int, event_type: str, detail: dict) -> None:
+        """Record what Cynitor did to a node (a register write, a firmware update) in its history."""
+        if self.session.event_logger is not None:
+            uid = self.session.scanner._get_node_unique_id_hex(node_id) if self.session.scanner else None
+            await self.session.event_logger.log_node_event(node_id, event_type, detail, unique_id=uid)
 
     async def _call_service(self, request: web.Request) -> web.Response:
         """Invoke a service on a remote node and return the response."""
@@ -194,6 +213,8 @@ class NodesApi:
 
         if not self.session.is_running:
             return web.json_response({"error": "CAN bus not connected"}, status=503)
+        if refused := listen_only_refusal(self.session):
+            return refused
 
         try:
             body = await request.json()
@@ -244,6 +265,8 @@ class NodesApi:
             }, status=504)
         except ValueError as e:
             return web.json_response({"status": "error", "error": str(e)}, status=400)
+        except ConnectionError as e:  # the node went offline while the call waited
+            return web.json_response({"status": "error", "error": str(e)}, status=409)
         except Exception as e:
             latency_ms = round((time.monotonic() - t0) * 1000)
             if self.session.event_logger:
@@ -436,10 +459,18 @@ class NodesApi:
         scanner = self.session.scanner
         if not scanner:
             return web.json_response({"error": "Not connected"}, status=503)
-        scanner.identity_map.remove_identity(uid)
-        if self.session.event_logger:
-            await self.session.event_logger.delete_node_data(uid)
+        await self._forget_device(uid)
         return web.json_response({"status": "ok"})
+
+    async def _forget_device(self, unique_id: Optional[str]) -> None:
+        """Forget a device: its identity, and what was saved about it."""
+        if not unique_id:
+            return
+        scanner, event_logger = getattr(self.session, "scanner", None), getattr(self.session, "event_logger", None)
+        if scanner is not None:
+            scanner.identity_map.remove_identity(unique_id)
+        if event_logger:
+            await event_logger.delete_node_data(unique_id)
 
     async def _get_all_nodes(self, request: web.Request) -> web.Response:
         telemetry = self.session.telemetry

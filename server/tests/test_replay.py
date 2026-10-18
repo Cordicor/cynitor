@@ -277,6 +277,30 @@ class TestControl:
             await mgr.stop()
 
     @pytest.mark.asyncio
+    async def test_seek_while_paused_updates_events_emitted(self, replay_db):
+        for ts in (10.0, 10.1, 10.2, 10.3, 30.0):
+            _insert_event(replay_db, 1, t_unix=ts)
+        mgr = ReplayManager(replay_db, 1, speed=1.0)
+        sub = mgr.subscribe()
+        try:
+            await mgr.start()
+            await asyncio.wait_for(sub.get(), 2.0)
+            mgr.pause()
+            await asyncio.sleep(0.05)
+            mgr.seek(999)  # past the end: clamped to the last event
+            for _ in range(40):
+                if mgr.status()["events_emitted"] == 4:
+                    break
+                await asyncio.sleep(0.01)
+            assert mgr.status()["events_emitted"] == 4  # all but the last one
+            assert mgr.status()["paused"] is True
+            mgr.resume()
+            ev = await asyncio.wait_for(sub.get(), 2.0)
+            assert ev["timestamp_unix"] == 30.0
+        finally:
+            await mgr.stop()
+
+    @pytest.mark.asyncio
     async def test_speed_is_clamped(self, replay_db):
         _insert_event(replay_db, 1, 10.0)
         mgr = ReplayManager(replay_db, 1, speed=999.0)

@@ -15,6 +15,7 @@ from __future__ import annotations
 import datetime
 import logging
 import re
+import shutil
 import threading
 import time
 from pathlib import Path
@@ -27,6 +28,10 @@ import can
 logger = logging.getLogger(__name__)
 
 RAW_LOG_DIR = "raw"  # inside the data folder
+# What a played log raises when it has no frame left: its normal end, which
+# ends the session as a lost adapter would, but is no error.
+END_OF_LOG = "end of the raw log"
+
 _NAME = re.compile(r"^cynitor-\d{8}-\d{6}\.log$")
 
 
@@ -55,8 +60,28 @@ def list_logs(folder: Path) -> list[dict]:
     return sorted(logs, key=lambda log: log["name"], reverse=True)
 
 
+def free_space_problem(folder: Path) -> Optional[str]:
+    """Why a raw log should not be written into ``folder`` now, or None."""
+    try:
+        free = shutil.disk_usage(folder).free
+    except OSError:
+        return None  # not knowable here; a write that fails still stops the log
+    if free < RawLog.MIN_FREE_BYTES:
+        return f"Less than {RawLog.MIN_FREE_BYTES // 2**20} MiB free on the disk of {folder.name}"
+    return None
+
+
 class RawLog:
-    """One log file being written. Frames may arrive from several threads."""
+    """One log file being written. Frames may arrive from several threads.
+
+    It stops by itself at MAX_BYTES, or when the disk has less than
+    MIN_FREE_BYTES left: a busy bus writes gigabytes an hour, and a log left
+    running would otherwise fill the disk the database also lives on.
+    """
+
+    MAX_BYTES = 4 * 2**30
+    MIN_FREE_BYTES = 512 * 2**20
+    CHECK_EVERY_FRAMES = 1000  # a stat per frame would cost more than the write
 
     def __init__(self, path: Path, channel: str) -> None:
         self.path = path
@@ -78,18 +103,41 @@ class RawLog:
                 self._writer.on_message_received(msg)
                 self.frames += 1
             except Exception as exc:  # e.g. disk full: stop writing, say why
-                self.error = str(exc)
-                logger.error("Raw log %s stopped: %s", self.path.name, exc)
-                self._close_locked()
+                self._stop_locked(str(exc))
+                return
+            if self.frames % self.CHECK_EVERY_FRAMES == 0:
+                self._check_limits_locked()
+
+    def _check_limits_locked(self) -> None:
+        if self._writer is None:
+            return
+        try:
+            size = self._writer.file.tell()  # the file on disk lags by the write buffer
+        except (OSError, ValueError, AttributeError):
+            return
+        if size >= self.MAX_BYTES:
+            self._stop_locked(f"Size limit of {self.MAX_BYTES // 2**20} MiB reached")
+        else:
+            problem = free_space_problem(self.path.parent)
+            if problem is not None:
+                self._stop_locked(problem)
+
+    def _stop_locked(self, reason: str) -> None:
+        self.error = reason
+        logger.error("Raw log %s stopped: %s", self.path.name, reason)
+        self._close_locked()
 
     def close(self) -> None:
         with self._lock:
             self._close_locked()
 
     def _close_locked(self) -> None:
-        if self._writer is not None:
-            self._writer.stop()
-            self._writer = None
+        writer, self._writer = self._writer, None
+        if writer is not None:
+            try:
+                writer.stop()
+            except Exception as exc:  # a full disk fails the flush too; the error is already said
+                logger.debug("Raw log %s: closing failed: %s", self.path.name, exc)
 
     def status(self) -> dict:
         size = self.path.stat().st_size if self.path.exists() else 0
@@ -152,11 +200,39 @@ def write_sidecar(log: Path, info: dict) -> None:
 
 
 def read_sidecar(log: Path) -> dict:
-    """The sidecar of ``log``, or an empty one (logs from before sidecars, or a lost file)."""
+    """The sidecar of ``log``, or an empty one (logs from before sidecars, or a lost file).
+
+    Only what fits the shape Cynitor writes is kept: an edited or damaged
+    sidecar made playback fail half-way, leaving a session that never played.
+    """
     try:
-        return json.loads(sidecar_path(log).read_text(encoding="utf-8"))
+        info = json.loads(sidecar_path(log).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {}
+    if not isinstance(info, dict):
+        return {}
+    kept: dict = {}
+    for key in ("bitrate", "data_bitrate", "own_node_id"):
+        if isinstance(info.get(key), int) and not isinstance(info[key], bool) and info[key] >= 0:
+            kept[key] = info[key]
+    if isinstance(info.get("fd"), bool):
+        kept["fd"] = info["fd"]
+    for key in ("publishers", "servers"):
+        if key in info:
+            kept[key] = _port_types(info[key])
+    if isinstance(info.get("names"), dict):
+        kept["names"] = {str(k): v for k, v in info["names"].items() if str(k).isdigit() and isinstance(v, str)}
+    if any(key not in kept or kept[key] != info[key] for key in info if key != "version"):
+        logger.warning("Raw log %s: its sidecar has entries that do not fit; they are ignored", log.name)
+    return kept
+
+
+def _port_types(value: object) -> dict:
+    """{node-ID: {port-ID: type name}}, as a sidecar keeps them, without what is not."""
+    if not isinstance(value, dict):
+        return {}
+    return {str(node): {str(port): name for port, name in ports.items() if str(port).isdigit() and isinstance(name, str)}
+            for node, ports in value.items() if str(node).isdigit() and isinstance(ports, dict)}
 
 
 def log_has_fd_frames(log: Path) -> bool:
@@ -205,7 +281,7 @@ class LogPlayer(can.BusABC):
         msg = self._pending or self._next()
         self._pending = None
         if msg is None:
-            raise can.CanOperationError("end of the raw log")
+            raise can.CanOperationError(END_OF_LOG)
         if self._speed > 0:
             if self._start is None:
                 self._start = (msg.timestamp, time.monotonic())

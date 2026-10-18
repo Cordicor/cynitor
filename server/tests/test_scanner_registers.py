@@ -11,6 +11,7 @@ import numpy as np
 import pytest
 
 import scanner_node
+from scanner_registers import RegisterNotApplied
 from scanner_node import ScannerNode  # uavcan.* is stubbed in conftest.py
 
 
@@ -72,9 +73,22 @@ class Node:
         if request.value is not None and getattr(request.value, "empty", None) is None:
             self.written.append((name, request.value))
             (kind, sent), = vars(request.value).items()
-            value = np.array(sent.value) if kind != "string" else sent.value.decode("utf-8")
+            value = (np.array(sent.value, dtype=getattr(self, "precision", None)) if kind != "string"
+                     else sent.value.decode("utf-8"))
         if isinstance(value, Exception):
             raise value
+        return SimpleNamespace(value=(kind, value), mutable=mutable), None
+
+
+class KeepsItsValues(Node):
+    """A node that answers a write with the value it had: Cyphal lets a node refuse one."""
+
+    async def _access(self, request):
+        kept = dict(self.registers)
+        await super()._access(request)  # records the write
+        self.registers = kept
+        name = request.name.name.decode("utf-8")
+        kind, value, mutable = kept[name]
         return SimpleNamespace(value=(kind, value), mutable=mutable), None
 
 
@@ -103,6 +117,11 @@ class TestGetRegisters:
         ]
         node.list.close.assert_called_once_with()
         node.access.close.assert_called_once_with()
+
+    async def test_bits_read_true_and_false_as_dsdl_writes_them(self, uavcan_types):
+        # Python's True/False showed (audit F-046); writes take either spelling.
+        node = Node({"one": ("bit", np.array([True]), True), "flags": ("bit", np.array([True, False, True]), True)})
+        assert [r["value"] for r in await scanner_for(node).get_registers(7)] == ["true", "true, false, true"]
 
     async def test_a_name_asked_for_twice_in_vain_is_passed_over(self, uavcan_types):
         node = Node({"a": ("bit", np.array([True]), True), "b": ("bit", np.array([False]), True),
@@ -200,13 +219,35 @@ class TestSetRegister:
             await self.write(node, "serial", "2", "natural16")
         assert node.written == []
 
+    async def test_a_register_the_node_does_not_have_is_named(self, uavcan_types):
+        # A node answers an unknown name with an empty value: that is no type mismatch.
+        node = Node({"gian": ("empty", None, False)})
+        with pytest.raises(ValueError, match="Node 7 has no register 'gian'"):
+            await self.write(node, "gian", "5", "natural16")
+        assert node.written == []
+
     async def test_another_type_is_refused_unless_both_are_numbers(self, uavcan_types):
         node = Node({"name": ("string", "x", True), "gain": ("integer32", np.array([1]), True)})
         with pytest.raises(ValueError, match="Type mismatch: expected 'string', got 'natural16'"):
             await self.write(node, "name", "5", "natural16")
-        # Numbers for numbers: sent as the type that was given.
+        # Numbers for numbers: converted to the register's own type, which the
+        # node takes; as given, the node may keep its value (F-044).
         await self.write(node, "gain", "5", "natural16")
-        assert node.written[0][1].natural16.value == [5]
+        assert node.written[0][1].integer32.value == [5]
+
+    async def test_a_value_the_node_does_not_take_is_said_not_applied(self, uavcan_types):
+        node = KeepsItsValues({"gain": ("natural16", np.array([1234]), True)})
+        with pytest.raises(RegisterNotApplied, match="Node 7 did not take the value: 'gain' holds 1234"):
+            await self.write(node, "gain", "5", "natural16")
+
+    @pytest.mark.parametrize("reg_type, text", [("real32", "0.1"), ("real16", "0.3"), ("bit", "1 0"),
+                                                 ("natural8", "[1, 2]")])
+    async def test_a_value_read_back_in_the_registers_precision_was_taken(self, uavcan_types, reg_type, text):
+        # 0.1 as real32 reads back 0.100000001: the same value, in the register's precision.
+        dtype = {"real32": np.float32, "real16": np.float16, "bit": np.bool_, "natural8": np.uint8}[reg_type]
+        node = Node({"r": (reg_type, np.array([0], dtype=dtype), True)})
+        node.precision = dtype
+        await self.write(node, "r", text, reg_type)
 
     @pytest.mark.parametrize("reg_type, value, message", [
         ("natural16", "70000", r"Value 70000 out of range for natural16 \(0–65535\)"),
@@ -223,8 +264,8 @@ class TestSetRegister:
         assert node.written == []
 
     async def test_a_type_there_is_no_writing_of_is_refused(self, uavcan_types):
-        node = Node({"r": ("empty", None, True)})
-        with pytest.raises(ValueError, match="Invalid value '1' for type 'empty'"):
+        node = Node({"r": ("natural16", np.array([1]), True)})
+        with pytest.raises(ValueError, match="Type mismatch: expected 'natural16', got 'empty'"):
             await self.write(node, "r", "1", "empty")
 
     async def test_a_node_that_does_not_answer_gives_nothing(self, uavcan_types):

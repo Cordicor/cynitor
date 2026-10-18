@@ -111,6 +111,22 @@ class TestPrepareDataDir:
         assert (old / "telemetry_events.db-wal").read_text() == "wal"
         assert not (new / "telemetry_events.db").exists()
 
+    def test_a_move_that_cannot_be_put_back_does_not_stop_the_start(self, folders):
+        # The sandboxed service sees / read-only: a move from it fails, and so
+        # does putting back what was copied. That raised, and the server did not start.
+        old, new = folders
+        (old / "telemetry_events.db").write_text("db")
+        (old / "telemetry_events.db-wal").write_text("wal")
+        real_move = shutil.move
+
+        def move(src, dst):
+            if src.endswith("-wal") or str(dst).startswith(str(old)):
+                raise OSError(30, "Read-only file system")
+            return real_move(src, dst)
+
+        with patch.object(data_dir.shutil, "move", side_effect=move):
+            assert prepare_data_dir(new, legacy_dir=old) == []
+
 
 class TestSessionPaths:
     def test_session_keeps_its_data_folder(self, tmp_path):

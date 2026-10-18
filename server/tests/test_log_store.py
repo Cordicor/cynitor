@@ -2,7 +2,7 @@
 
 import logging
 import pytest
-from log_store import InMemoryLogStore, APILogHandler
+from log_store import InMemoryLogStore, APILogHandler, TokenRedactingFilter
 
 
 @pytest.fixture
@@ -131,3 +131,17 @@ class TestAPILogHandler:
         handler.handle(_make_record('127.0.0.1 "GET /api/nodes HTTP/1.1" 200 189', name="aiohttp.access"))
         handler.handle(_make_record("CAN connect failed", logging.ERROR, name="main"))
         assert [log["message"] for log in store.get_logs()] == ["CAN connect failed"]
+
+
+class TestTokenRedactingFilter:
+    """The auth token reached the console, the journal under systemd, in every ?token= request line (F-012)."""
+
+    @pytest.mark.parametrize("line, shown", [
+        ('"GET /ws?token=s3cr-et_7 HTTP/1.1" 101', '"GET /ws?token=*** HTTP/1.1" 101'),
+        ('"GET /api/recordings/3/export?format=csv&token=abc HTTP/1.1" 200',
+         '"GET /api/recordings/3/export?format=csv&token=*** HTTP/1.1" 200'),
+        ('"GET /api/status HTTP/1.1" 200', '"GET /api/status HTTP/1.1" 200'),
+    ])
+    def test_a_token_in_a_url_is_masked(self, line, shown):
+        record = logging.LogRecord("aiohttp.access", logging.INFO, "x.py", 1, "%s", (line,), None)
+        assert TokenRedactingFilter().filter(record) and record.getMessage() == shown

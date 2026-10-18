@@ -3,11 +3,10 @@
 import asyncio
 import time
 import pytest
-from decimal import Decimal
-from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
+import aiohttp
 from aiohttp import web
-from aiohttp.test_utils import AioHTTPTestCase, TestClient, TestServer
+from aiohttp.test_utils import TestClient, TestServer
 from websocket_server import WebSocketServer
 from dsdl_manager import DsdlManager
 import can
@@ -128,6 +127,53 @@ class TestStatus:
 class TestCANConnect:
 
     @pytest.mark.asyncio
+    async def test_connect_refuses_an_interface_cynitor_does_not_know(self, client, server, session):
+        body = {"interface": "slcan:/dev/pts/3@115200", "bitrate": 500000}
+        refused = await client.post("/api/can/connect", json=body)
+        assert refused.status == 400 and "not a serial port name" in (await refused.json())["error"]
+        session.connect.assert_not_awaited()
+        server.allow_any_interface = True  # --allow-any-interface
+        allowed = await client.post("/api/can/connect", json=body)
+        assert allowed.status == 200
+        session.connect.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_listen_only_reaches_the_session_and_must_be_true_or_false(self, client, session):
+        with patch("main.discover_can_interfaces", return_value=["vcan0"]):
+            bad = await client.post("/api/can/connect", json={"interface": "vcan0", "listen_only": "yes"})
+            ok = await client.post("/api/can/connect", json={"interface": "vcan0", "listen_only": True})
+        assert bad.status == 400 and ok.status == 200
+        session.connect.assert_awaited_once_with("vcan0", bitrate=None, data_bitrate=None, allocator=None,
+                                                 listen_only=True)
+
+    @pytest.mark.asyncio
+    async def test_nothing_is_sent_while_listening_only(self, client, session):
+        # Registers, service calls and firmware updates would transmit: refused with the reason.
+        session.is_running, session.listen_only = True, True
+        session.scanner = MagicMock(get_registers=AsyncMock(), set_register=AsyncMock(), make_service_call=AsyncMock())
+        session.begin_firmware_update = AsyncMock()
+        answers = [
+            await client.get("/api/registers/42"),
+            await client.post("/api/registers/42/set", json={"name": "x", "value": "1", "type": "natural16"}),
+            await client.post("/api/services/42/435/call", json={"attributes": {}}),
+            await client.post("/api/nodes/42/firmware", json={"file": "a.bin"}),
+        ]
+        assert [a.status for a in answers] == [409, 409, 409, 409]
+        assert "listens only" in (await answers[0].json())["error"]
+        session.scanner.get_registers.assert_not_awaited()
+        session.scanner.set_register.assert_not_awaited()
+        session.begin_firmware_update.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_connect_while_a_replay_runs_is_a_conflict(self, client, session):
+        # It was a 500 with a traceback in the log (F-018 b).
+        from main import SessionBusy
+        session.connect = AsyncMock(side_effect=SessionBusy("Replay session is active — stop it before connecting CAN"))
+        with patch("main.discover_can_interfaces", return_value=["vcan0"]):
+            resp = await client.post("/api/can/connect", json={"interface": "vcan0"})
+        assert resp.status == 409 and "Replay session is active" in (await resp.json())["error"]
+
+    @pytest.mark.asyncio
     async def test_connect_missing_interface_field(self, client):
         resp = await client.post("/api/can/connect", json={})
         assert resp.status == 400
@@ -163,8 +209,6 @@ class TestCANConnect:
     async def test_connect_success(self, client, session):
         """Test successful CAN connection via mocked handler."""
         # We need to mock the full handler because it imports discover_can_interfaces from main
-        original_handler = session.connect
-
         async def patched_connect(request):
             session.is_running = True
             session.can_interface = "vcan0"
@@ -195,7 +239,7 @@ class TestCANConnectSpecsAndBitrate:
         with patch("main.discover_can_interfaces", return_value=["vcan0"]):
             resp = await client.post("/api/can/connect", json={"interface": "vcan0"})
         assert resp.status == 200
-        session.connect.assert_awaited_once_with("vcan0", bitrate=None, data_bitrate=None, allocator=None)
+        session.connect.assert_awaited_once_with("vcan0", bitrate=None, data_bitrate=None, allocator=None, listen_only=None)
 
     @pytest.mark.asyncio
     async def test_explicit_spec_skips_discovery(self, client, session):
@@ -207,7 +251,7 @@ class TestCANConnectSpecsAndBitrate:
             )
         assert resp.status == 200
         discover.assert_not_called()
-        session.connect.assert_awaited_once_with("gs_usb:0", bitrate=250000, data_bitrate=None, allocator=None)
+        session.connect.assert_awaited_once_with("gs_usb:0", bitrate=250000, data_bitrate=None, allocator=None, listen_only=None)
 
     @pytest.mark.asyncio
     async def test_adapter_without_bitrate_is_refused(self, client, session):
@@ -222,7 +266,7 @@ class TestCANConnectSpecsAndBitrate:
         session.default_bitrate = 250_000
         resp = await client.post("/api/can/connect", json={"interface": "gs_usb:0"})
         assert resp.status == 200
-        session.connect.assert_awaited_once_with("gs_usb:0", bitrate=None, data_bitrate=None, allocator=None)
+        session.connect.assert_awaited_once_with("gs_usb:0", bitrate=None, data_bitrate=None, allocator=None, listen_only=None)
 
     @pytest.mark.asyncio
     async def test_data_bitrate_opens_can_fd(self, client, session):
@@ -231,7 +275,7 @@ class TestCANConnectSpecsAndBitrate:
         })
         assert resp.status == 200
         session.connect.assert_awaited_once_with("pcan:PCAN_USBBUS1", bitrate=500000, data_bitrate=2000000,
-                                                     allocator=None)
+                                                     allocator=None, listen_only=None)
         assert (await resp.json())["can_fd"] is False  # what the (mock) session reports
 
     @pytest.mark.asyncio
@@ -268,7 +312,7 @@ class TestCANConnectSpecsAndBitrate:
         with patch("main.discover_can_interfaces", return_value=["vcan0"]):
             resp = await client.post("/api/can/connect", json={"interface": "vcan0", "allocator": allocator})
         assert resp.status == 200
-        session.connect.assert_awaited_once_with("vcan0", bitrate=None, data_bitrate=None, allocator=allocator)
+        session.connect.assert_awaited_once_with("vcan0", bitrate=None, data_bitrate=None, allocator=allocator, listen_only=None)
         assert (await resp.json())["allocator"] is None  # what the (mock) session reports it runs
 
     @pytest.mark.asyncio
@@ -312,6 +356,33 @@ class TestCANConnectSpecsAndBitrate:
         with patch("main.discover_can_interfaces", return_value=[]):
             resp = await client.get("/api/status")
         assert (await resp.json())["server_cpu"] == 42.5
+
+    @pytest.mark.asyncio
+    async def test_status_says_why_history_is_not_written(self, client, session):
+        with patch("main.discover_can_interfaces", return_value=[]):
+            session.event_logger = MagicMock(write_error=None)
+            fine = (await (await client.get("/api/status")).json())["history_error"]
+            session.event_logger.write_error = "disk I/O error"
+            failing = (await (await client.get("/api/status")).json())["history_error"]
+        assert (fine, failing) == (None, "disk I/O error")
+
+    @pytest.mark.asyncio
+    async def test_status_names_cynitors_own_node_id(self, client, session):
+        # It was shown nowhere (F-039).
+        session.is_running = True
+        session._own_node_ids = MagicMock(return_value={127})
+        with patch("main.discover_can_interfaces", return_value=[]):
+            status = await (await client.get("/api/status")).json()
+        assert status["own_node_id"] == 127
+
+    @pytest.mark.asyncio
+    async def test_status_reports_a_newer_release(self, client, server, session):
+        with patch("main.discover_can_interfaces", return_value=[]):
+            unchecked = (await (await client.get("/api/status")).json())["update"]
+            newer = {"version": "1.4.0", "url": "https://github.com/OpenCyphal-Garage/cynitor/releases/tag/v1.4.0"}
+            server.update_check = MagicMock(available=newer)
+            found = (await (await client.get("/api/status")).json())["update"]
+        assert (unchecked, found) == (None, newer)
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("bitrate", [0, 5_000_000, "500000", True])
@@ -525,12 +596,133 @@ class TestWebSocket:
             assert resp["filter"]["subject_ids"] == [100]
 
     @pytest.mark.asyncio
+    async def test_the_stream_follows_a_new_can_session(self, client, session):
+        # A dashboard whose socket stayed open across a CAN disconnect and
+        # connect got nothing more: it stayed on the old session's telemetry (F-028).
+        class Source:
+            def __init__(self):
+                self.queues, self.gone = [], []
+
+            def subscribe(self, max_queue=100):
+                self.queues.append(asyncio.Queue())
+                return self.queues[-1]
+
+            def unsubscribe(self, queue):
+                self.gone.append(queue)
+
+        async def subscribed(source):
+            for _ in range(100):
+                if source.queues:
+                    return source.queues[-1]
+                await asyncio.sleep(0.05)
+            raise AssertionError("the stream never subscribed to the new session")
+
+        async def next_event(ws):
+            while True:
+                message = await asyncio.wait_for(ws.receive_json(), timeout=5)
+                if "subject_id" in message:
+                    return message
+
+        first, second = Source(), Source()
+        session.replay, session.telemetry = None, first
+        async with client.ws_connect("/ws") as ws:
+            (await subscribed(first)).put_nowait({"subject_id": 100, "publisher_node_id": 42})
+            got_first = await next_event(ws)
+            session.telemetry = None   # disconnected ...
+            await asyncio.sleep(1.5)
+            session.telemetry = second  # ... and connected again, within one status poll
+            (await subscribed(second)).put_nowait({"subject_id": 200, "publisher_node_id": 43})
+            got_second = await next_event(ws)
+        assert (got_first["subject_id"], got_second["subject_id"]) == (100, 200)
+        assert first.gone == first.queues
+
+    @pytest.mark.asyncio
+    async def test_a_message_that_is_no_object_is_answered_and_the_stream_goes_on(self, client, session):
+        # A JSON array ended the socket, though later frames are to be accepted (F-018 a).
+        session.telemetry = None
+        async with client.ws_connect("/ws") as ws:
+            await ws.send_str("[1, 2]")
+            first = await ws.receive_json()
+            await ws.send_json({"type": "ping"})
+            second = await ws.receive_json()
+        assert first == {"error": "A message must be a JSON object"} and second["type"] == "pong"
+
+    @pytest.mark.asyncio
+    async def test_streams_beyond_the_cap_are_refused(self, client, server, session):
+        # 500 sockets were accepted in 0.4 s, CPU 13 % to 45 % (F-035).
+        session.telemetry = None
+        server.MAX_CLIENTS = 1
+        async with client.ws_connect("/ws"):
+            with pytest.raises(aiohttp.WSServerHandshakeError) as refused:
+                await client.ws_connect("/ws")
+        assert refused.value.status == 503
+
+    @pytest.mark.asyncio
     async def test_ws_invalid_json(self, client, session):
         session.telemetry = None
         async with client.ws_connect("/ws") as ws:
             await ws.send_str("not json")
             resp = await ws.receive_json()
             assert "error" in resp
+
+
+class TestSecFetchSiteAndDevOrigins:
+    """F-033: what another page in the visitor's browser can still make the server do."""
+
+    @pytest.mark.asyncio
+    async def test_a_cross_site_get_without_origin_is_refused(self, client):
+        # An <img src=".../api/registers/50"> on any website: no Origin, but the browser says cross-site.
+        resp = await client.get("/api/status", headers={"Sec-Fetch-Site": "cross-site"})
+        assert resp.status == 403
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("site", ["same-origin", "same-site", "none"])
+    async def test_the_dashboards_own_requests_pass(self, client, site):
+        with patch("main.discover_can_interfaces", return_value=[]):
+            resp = await client.get("/api/status", headers={"Sec-Fetch-Site": site})
+        assert resp.status == 200
+
+    @pytest.mark.asyncio
+    async def test_a_page_on_another_local_port_is_refused_unless_named(self, client, monkeypatch):
+        refused = await client.post("/api/can/disconnect", headers={"Origin": "http://localhost:15500"})
+        monkeypatch.setenv("CYNITOR_DEV_ORIGINS", "http://localhost:15500")
+        named = await client.post("/api/can/disconnect", headers={"Origin": "http://localhost:15500"})
+        assert (refused.status, named.status) == (403, 409)  # 409: not connected, past the origin check
+
+
+class TestHealthOfAWantedBus:
+    """F-037: a server started with --can is not healthy while that bus is down."""
+
+    @pytest.mark.asyncio
+    async def test_a_lost_bus_is_a_503_until_the_operator_disconnects(self, client, session):
+        session.wanted_can, session.is_running, session.last_error = "can0", False, "Interface can0 no longer exists"
+        down = await client.get("/api/health")
+        body = await down.json()
+        session.wanted_can = None  # as POST /api/can/disconnect leaves it
+        chosen = await client.get("/api/health")
+        assert (down.status, body["status"], body["can_error"]) == (503, "degraded", "Interface can0 no longer exists")
+        assert chosen.status == 200
+
+    @pytest.mark.asyncio
+    async def test_disconnecting_clears_it(self, client, session):
+        session.is_running, session.wanted_can = True, "can0"
+        with patch("main.discover_can_interfaces", return_value=[]):
+            await client.post("/api/can/disconnect")
+        assert session.wanted_can is None
+
+
+class TestSecurityHeaders:
+    """No page may frame the dashboard, nor run a script it did not serve; no version banner (F-019)."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("path", ["/api/health", "/api"])
+    async def test_every_response_carries_them(self, client, path):
+        resp = await client.get(path)
+        csp = resp.headers.get("Content-Security-Policy", "")
+        assert "frame-ancestors 'none'" in csp and "script-src 'self';" in csp
+        assert resp.headers.get("X-Frame-Options") == "DENY"
+        assert resp.headers.get("X-Content-Type-Options") == "nosniff"
+        assert resp.headers.get("Server") == "Cynitor"
 
 
 class TestCORS:
@@ -790,6 +982,20 @@ class TestSetRegister:
         assert data["value"] == "42"
 
     @pytest.mark.asyncio
+    async def test_a_register_write_is_written_to_the_nodes_history(self, client, session):
+        # It left no record that Cynitor changed the node (F-024).
+        session.is_running = True
+        session.scanner = MagicMock(set_register=AsyncMock(side_effect=[[True], None]),
+                                    _get_node_unique_id_hex=lambda node_id: None)
+        session.event_logger = MagicMock(log_node_event=AsyncMock())
+        await client.post("/api/registers/42/set", json={"name": "flag", "value": "1", "type": "bit"})
+        await client.post("/api/registers/42/set", json={"name": "flag", "value": "0", "type": "bit"})
+        assert [c.args for c in session.event_logger.log_node_event.await_args_list] == [
+            (42, "register_write", {"name": "flag", "value": "1", "read_back": "True", "status": "ok"}),
+            (42, "register_write", {"name": "flag", "value": "0", "status": "timeout"}),
+        ]
+
+    @pytest.mark.asyncio
     async def test_set_register_timeout(self, client, session):
         session.is_running = True
         scanner = MagicMock()
@@ -864,6 +1070,16 @@ class TestServiceCall:
         assert resp.status == 504
         data = await resp.json()
         assert data["status"] == "timeout"
+
+    @pytest.mark.asyncio
+    async def test_call_to_a_node_that_went_offline(self, client, session):
+        session.is_running = True
+        session.scanner = MagicMock(service_metadata={(42, 435): {"namespace": "uavcan.node",
+                                                                   "service_name": "ExecuteCommand_1_3"}})
+        session.scanner.make_service_call = AsyncMock(
+            side_effect=ConnectionError("Node 42 went offline while the call waited for its answer"))
+        resp = await client.post("/api/services/42/435/call", json={"attributes": {}})
+        assert resp.status == 409 and "went offline" in (await resp.json())["error"]
 
     @pytest.mark.asyncio
     async def test_call_invalid_json(self, client, session):

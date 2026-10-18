@@ -7,6 +7,8 @@ import logging
 import datetime
 import re
 import importlib
+import socket
+import struct
 import time
 import numpy as np
 from pycyphal.dsdl import get_model, to_builtin
@@ -21,7 +23,10 @@ import uavcan.node.port
 import uavcan.diagnostic
 import uavcan.pnp
 
+from local_time import local_isoformat
 from node_info import NodeInfo
+from update_check import parse_version
+from version import __version__
 from node_identity_map import NodeIdentityMap
 from scanner_registers import ScannerRegisters
 from scanner_services import ScannerServices
@@ -30,6 +35,13 @@ from scanner_services import ScannerServices
 # lines a second from a bus that outruns the decoding. They are counted
 # instead (ScannerNode.dropped_frames).
 logging.getLogger("pycyphal.transport.can._session._input").setLevel(logging.WARNING)
+
+NODE_NAME = "org.opencyphal.cynitor"  # Cynitor's name on the bus (uavcan.node.GetInfo)
+
+# Linux's getsockopt(SOL_SOCKET, SO_MEMINFO): unsigned ints, of which the
+# ninth (SK_MEMINFO_DROPS) counts what the socket's full receive queue let go.
+_SO_MEMINFO = 55
+_SK_MEMINFO_DROPS = 8
 
 
 def _fire_and_log(coro, context: str = "background task"):
@@ -71,6 +83,10 @@ class ScannerNode(ScannerRegisters, ScannerServices):
     INFO_REFRESH_S = 60.0   # GetInfo refresh period once a node has answered
     INFO_RETRY_S = 10.0     # retry period while it has not
     NODE_ID_CONFLICT_REPORT_S = 60.0  # report a shared node-ID at most this often
+    KERNEL_DROPS_REPORT_S = 60.0      # warn of frames lost in the kernel at most this often
+    _kernel_drops_seen = 0            # the kernel's drop count at the last offline sweep
+    _kernel_drops_reported = 0        # the kernel's drop count at the last warning ...
+    _kernel_drops_reported_at = float("-inf")  # ... and when it was given
     # The furthest the decoding of a subject may fall behind the bus. pycyphal
     # keeps the frames that wait to be decoded without limit, so a subject that
     # outran the decoding put the live view ever further behind, with nothing
@@ -80,6 +96,7 @@ class ScannerNode(ScannerRegisters, ScannerServices):
     # arrive would leave no transfer of several frames whole.
     MAX_DECODING_LAG_S = 1.0
     offline: Optional[dict] = None    # set per session while a raw log plays (see __init__)
+    listen_only = False               # set per session that sends nothing: no GetInfo then
     # Called with a message when another node uses Cynitor's own node-ID (the session's last_error).
     on_own_node_id_conflict: Optional[Callable[[str], None]] = None
     _dropped_frames_closed = 0        # frames dropped on subjects no longer decoded (see dropped_frames)
@@ -112,9 +129,12 @@ class ScannerNode(ScannerRegisters, ScannerServices):
     def __init__(self, register_file: Optional[str] = None) -> None:
         """``register_file`` is where the node's registers persist; the session
         puts it in the data folder (see data_dir). Defaults to REGISTER_FILE."""
+        # Cynitor's own name and version, as another tool on the bus sees them
+        # (it named itself after the pycyphal example it began as).
+        major, minor = (parse_version(__version__) or (0, 0))[:2]
         node_information = uavcan.node.GetInfo_1.Response(
-            software_version=uavcan.node.Version_1(major=1, minor=0),
-            name="org.dontpanic.pycyphal.utility.monitor_app",
+            software_version=uavcan.node.Version_1(major=major, minor=minor),
+            name=NODE_NAME,
         )
 
         self._node = pycyphal.application.make_node(node_information, register_file or ScannerNode.REGISTER_FILE)
@@ -136,7 +156,7 @@ class ScannerNode(ScannerRegisters, ScannerServices):
         self.all_nodes: dict[int, NodeInfo] = {node_id: NodeInfo(node_id=node_id) for node_id in range(self.NUM_NODES)}
         self.identity_map = NodeIdentityMap()
         self.subject_attributes: dict[int, list[str]] = {}                # Maps subject_id to list of attribute names
-        self.publishers_subscribers: dict[int, pycyphal.application.Subscriber] = {}
+        self.publishers_subscribers: dict[int, Any] = {}  # pycyphal Subscribers
         self.message_queue: asyncio.Queue = asyncio.Queue(maxsize=self.MESSAGE_QUEUE_SIZE)
         self.dropped_events = 0  # events discarded because message_queue was full
         self.active_publishers: dict[int, set] = {}                        # Maps subject_id to set of publisher node_ids
@@ -151,7 +171,7 @@ class ScannerNode(ScannerRegisters, ScannerServices):
         self._prev_uptime: dict[int, int] = {}
         self._prev_ports: dict[int, dict] = {}  # node_id -> {publishers: [...], ...}
         self._info_in_flight: set[int] = set()  # node_ids with a GetInfo running
-        self._rate_timestamps: dict[int, dict[int, collections.deque]] = {}  # subject_id -> node_id -> times
+        self._rate_timestamps: dict[int, dict[Optional[int], collections.deque]] = {}  # subject_id -> node_id (None: anonymous) -> times
         self.subject_types: dict[int, str] = {}           # subject_id -> the type it is decoded as
         # Those of subject_types the user set, for subjects no register names.
         self.user_subject_types: dict[int, str] = {}
@@ -248,7 +268,7 @@ class ScannerNode(ScannerRegisters, ScannerServices):
     def offline_ports(self, node_id: int) -> tuple[dict[int, str], dict[int, str]]:
         """(publishers, servers) of a node as a raw log's sidecar recorded them."""
         def ports(kind: str) -> dict[int, str]:
-            return {int(k): v for k, v in self.offline.get(kind, {}).get(str(node_id), {}).items()}
+            return {int(k): v for k, v in (self.offline or {}).get(kind, {}).get(str(node_id), {}).items()}
         return ports("publishers"), ports("servers")
 
     async def add_subscriptions(self, node_id: int, dsdl_pub_messages: dict[int, str]) -> None:
@@ -291,7 +311,7 @@ class ScannerNode(ScannerRegisters, ScannerServices):
             self._unsubscribe(subject_id)
             self.subject_types.pop(subject_id, None)
             del self.user_subject_types[subject_id]
-        if data_type_class is not None:
+        if data_type_class is not None and message_type is not None:
             self._subscribe(subject_id, data_type_class, message_type)
             self.user_subject_types[subject_id] = message_type
 
@@ -388,9 +408,48 @@ class ScannerNode(ScannerRegisters, ScannerServices):
             return 0
 
     def dropped_frames(self) -> int:
-        """CAN frames let go before decoding: their subject's messages came faster than they were decoded."""
-        return self._dropped_frames_closed + sum(
+        """CAN frames let go before decoding: their subject's messages came faster than they were decoded,
+        or the bus faster than they were read (kernel_dropped_frames)."""
+        return self._dropped_frames_closed + self.kernel_dropped_frames() + sum(
             self._frames_dropped(subscriber) for subscriber in self.publishers_subscribers.values())
+
+    def kernel_dropped_frames(self) -> int:
+        """CAN frames the kernel let go, its receive queue for the scanner's SocketCAN socket being full.
+
+        Past what can be decoded, most frames are lost there, before pycyphal
+        sees them. The socket is pycyphal's own (its media's ``_sock``); 0 when
+        there is none, behind the hub or off Linux.
+        """
+        try:
+            sock = self._node.presentation.transport._maybe_media._sock
+            meminfo = sock.getsockopt(socket.SOL_SOCKET, _SO_MEMINFO, 4 * (_SK_MEMINFO_DROPS + 1))
+            return struct.unpack_from(f"{_SK_MEMINFO_DROPS + 1}I", meminfo)[_SK_MEMINFO_DROPS]
+        except (AttributeError, OSError, struct.error):
+            return 0
+
+    def hold_offline_while_losing_frames(self) -> None:
+        """Call no node offline while the kernel drops the scanner's frames, nor for a threshold after.
+
+        Its heartbeats are lost with the rest: a node declared gone had its
+        subjects unsubscribed, and the kernel then discarded their frames
+        before any counter saw them (F-042: 13 % of a 12,000/s flood).
+        """
+        drops = self.kernel_dropped_frames()
+        if drops > self._kernel_drops_seen:
+            until = time.monotonic() + NodeInfo.OFFLINE_THRESHOLD_S
+            for node in self.all_nodes.values():
+                node.silence_unreliable_until = until
+        self._kernel_drops_seen = drops
+
+    def report_kernel_drops(self) -> None:
+        """Warn of frames the kernel let go since the last warning, at most once a KERNEL_DROPS_REPORT_S."""
+        drops = self.kernel_dropped_frames()
+        now = time.monotonic()
+        if drops <= self._kernel_drops_reported or now - self._kernel_drops_reported_at < self.KERNEL_DROPS_REPORT_S:
+            return
+        logging.warning(f"{drops - self._kernel_drops_reported} CAN frames lost in the kernel's receive queue: "
+                        "the bus carries more than Cynitor decodes. Decode on demand handles such a bus.")
+        self._kernel_drops_reported, self._kernel_drops_reported_at = drops, now
 
     @staticmethod
     def _major_type(type_name: str) -> str:
@@ -440,6 +499,9 @@ class ScannerNode(ScannerRegisters, ScannerServices):
             results.append({"attribute": name, "value": [
                 next(iter(item.values())) if isinstance(item, dict) and len(item) == 1 else item for item in items
             ]})
+        # A port list's SubjectIDList as a mask (8192 bits): the IDs it sets.
+        elif isinstance(val, np.ndarray) and val.dtype == bool and name.endswith(".mask"):
+            results.append({"attribute": name, "value": np.flatnonzero(val).tolist()})
         elif isinstance(val, np.ndarray):
             results.append({"attribute": name, "value": val.tolist()})
         # Primitives
@@ -454,7 +516,10 @@ class ScannerNode(ScannerRegisters, ScannerServices):
                 if len(nested_fields) == 1:
                     field_name = nested_fields[0]
                     sub_val = getattr(val, field_name, None)
-                    if sub_val is not None:
+                    # A mask (port.ServiceIDList's 512 bits): the IDs it sets, not 512 booleans.
+                    if field_name == "mask" and isinstance(sub_val, np.ndarray) and sub_val.dtype == bool:
+                        results.append({"attribute": name, "value": np.flatnonzero(sub_val).tolist()})
+                    elif sub_val is not None:
                         self._extract_value(name, sub_val, results)
                         # Add unit hint from field name (skip generic "value")
                         if field_name != "value" and results and results[-1]["attribute"] == name:
@@ -497,7 +562,7 @@ class ScannerNode(ScannerRegisters, ScannerServices):
         period = 1.0 / rate if rate > 0 else 0.0
         return bool(times) and now - times[-1] <= max(self.PUBLISHING_MIN_SECONDS, self.PUBLISHING_PERIODS * period)
 
-    def _track_rate(self, subject_id: int, node_id: int, timestamp: float) -> tuple[float, float]:
+    def _track_rate(self, subject_id: int, node_id: Optional[int], timestamp: float) -> tuple[float, float]:
         """Record one message and return (this publisher's rate, the whole subject's rate).
 
         Rates are kept per publisher: several nodes publish the same subject
@@ -527,7 +592,7 @@ class ScannerNode(ScannerRegisters, ScannerServices):
         """
         stamp = getattr(transfer, "timestamp", None)
         try:
-            return float(stamp.system), float(stamp.monotonic)
+            return float(stamp.system), float(stamp.monotonic)  # type: ignore[union-attr]  # None: below
         except (AttributeError, TypeError, ValueError):
             return time.time(), time.monotonic()
 
@@ -543,14 +608,14 @@ class ScannerNode(ScannerRegisters, ScannerServices):
             return None
 
     async def _queue_event(self, subject_id: int, message_type: str, attributes: list,
-                           publisher_node_id: int, payload_bytes: Optional[int] = None,
+                           publisher_node_id: Optional[int], payload_bytes: Optional[int] = None,
                            transfer=None) -> None:
         """Build a standardized event dict and put it on the message queue."""
         timestamp, monotonic = self._transfer_times(transfer)
         rate, subject_rate = self._track_rate(subject_id, publisher_node_id, monotonic)
         event = {
             "subject_id": subject_id,
-            "timestamp": datetime.datetime.fromtimestamp(timestamp).isoformat(timespec="seconds"),
+            "timestamp": local_isoformat(timestamp, timespec="seconds"),
             "timestamp_unix": timestamp,
             "rate": rate,
             "subject_rate": subject_rate,
@@ -589,7 +654,7 @@ class ScannerNode(ScannerRegisters, ScannerServices):
         for (subject_id, node_id), (rate, last_seen) in reported.items():
             await self._enqueue({
                 "subject_id": subject_id,
-                "timestamp": datetime.datetime.fromtimestamp(last_seen).isoformat(timespec="seconds"),
+                "timestamp": local_isoformat(last_seen, timespec="seconds"),
                 "timestamp_unix": last_seen,
                 "rate": round(rate, 1),
                 "subject_rate": round(subject_rates[subject_id], 1),
@@ -684,8 +749,8 @@ class ScannerNode(ScannerRegisters, ScannerServices):
     MODE_NAMES = {0: "OPERATIONAL", 1: "INITIALIZATION", 2: "MAINTENANCE", 3: "SOFTWARE_UPDATE"}
     MODE_SOFTWARE_UPDATE = 3
 
-    def _get_node_unique_id_hex(self, node_id: int) -> Optional[str]:
-        node = self.all_nodes.get(node_id)
+    def _get_node_unique_id_hex(self, node_id: Optional[int]) -> Optional[str]:
+        node = None if node_id is None else self.all_nodes.get(node_id)
         if node and node.has_responded_to_getInfo and node.unique_id.size > 0:
             uid = bytes(node.unique_id).hex()  # run for every message: no loop in Python over its bytes
             if uid.strip('0'):
@@ -698,21 +763,15 @@ class ScannerNode(ScannerRegisters, ScannerServices):
             _fire_and_log(self.on_node_event(node_id, event_type, detail, unique_id=uid), f"node_event({event_type})")
 
     async def port_callback(self, msg: uavcan.node.port.List_1_0, transfer: pycyphal.transport.TransferFrom):
-        node_id: int = transfer.source_node_id
+        node_id = transfer.source_node_id
+        if node_id is None:
+            return  # an anonymous node may not send one
 
-        # Snapshot ports before update for change detection
         node = self.all_nodes[node_id]
         def _port_ids(ids):
             return sorted(self._make_json_serializable(s.value) if hasattr(s, 'value') else int(s) for s in ids)
 
-        old_ports = {
-            "publishers": _port_ids(node.publisher_SubjectIDs) if node.has_publishers else [],
-            "subscribers": _port_ids(node.subscriber_SubjectIDs) if node.has_subscribers else [],
-            "servers": _port_ids(node.server_ServiceIDs) if node.has_servers else [],
-            "clients": _port_ids(node.client_ServiceIDs) if node.has_clients else [],
-        }
-
-        self.all_nodes[node_id].set_port_list(port_list=msg)
+        node.set_port_list(port_list=msg)
 
         # Detect port changes
         new_ports = {
@@ -746,6 +805,8 @@ class ScannerNode(ScannerRegisters, ScannerServices):
 
     async def heartbeat_callback(self, msg: uavcan.node.Heartbeat_1_0, transfer: pycyphal.transport.TransferFrom):
         node_id = transfer.source_node_id
+        if node_id is None:
+            return  # an anonymous node may not send one; it would be no node in the list
         node    = self.all_nodes[node_id]
         now     = datetime.datetime.now()
 
@@ -889,7 +950,7 @@ class ScannerNode(ScannerRegisters, ScannerServices):
                 "servers": _ids("server_ServiceIDs") if getattr(node, 'has_servers', False) else [],
                 "clients": _ids("client_ServiceIDs") if getattr(node, 'has_clients', False) else [],
                 "uptime": self._make_json_serializable(node.uptime) if getattr(node, 'uptime', None) else None,
-                "last_seen": node.last_seen[-1].isoformat() if getattr(node, 'last_seen', None) and len(node.last_seen) else None,
+                "last_seen": local_isoformat(node.last_seen[-1]) if getattr(node, 'last_seen', None) and len(node.last_seen) else None,
             }
             self.identity_map.save_node_snapshot(uid, snapshot)
             if self.on_node_data_save:
@@ -955,7 +1016,7 @@ class ScannerNode(ScannerRegisters, ScannerServices):
         elif prev is not None and uptime < prev and prev > 5:
             self._uptime_before_drop[node_id] = prev
 
-    def _report_node_id_conflict(self, node_id: int, uptime_a: int, uptime_b: int) -> None:
+    def _report_node_id_conflict(self, node_id: int, uptime_a: Optional[int], uptime_b: int) -> None:
         now = time.monotonic()
         last = self._node_id_conflict_reported.get(node_id)
         if last is not None and now - last < self.NODE_ID_CONFLICT_REPORT_S:
@@ -996,7 +1057,7 @@ class ScannerNode(ScannerRegisters, ScannerServices):
         GetInfo can take up to the response timeout. Awaiting it inside the
         heartbeat callback would hold up every other node's heartbeats behind it.
         """
-        if node_id in self._info_in_flight or self.offline is not None:
+        if node_id in self._info_in_flight or self.offline is not None or self.listen_only:
             return False
         self._info_in_flight.add(node_id)
         self.all_nodes[node_id].last_info_attempt = datetime.datetime.now()
@@ -1012,7 +1073,7 @@ class ScannerNode(ScannerRegisters, ScannerServices):
             new_unique_id = ''.join(f'{byte:02x}' for byte in node.unique_id) if node.has_responded_to_getInfo else None
 
             is_replacement = old_unique_id and new_unique_id and old_unique_id != new_unique_id
-            if is_replacement:
+            if is_replacement and new_unique_id:
                 known_nid = self.identity_map.get_nid(new_unique_id)
                 if known_nid is None or known_nid == node_id:
                     logging.info(f"Node {node_id} identity changed: {old_unique_id} -> {new_unique_id}. Resetting node state.")

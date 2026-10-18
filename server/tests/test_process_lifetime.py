@@ -26,7 +26,19 @@ class TestShutdownOnSigterm:
             main._shutdown_on_sigterm(signal.SIGTERM, None)
 
 
+@pytest.fixture
+def frozen(monkeypatch):
+    """Run as the PyInstaller binary does: the only case the parent watch is armed in."""
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+
+
 class TestExitWhenParentDies:
+    def test_not_armed_from_source(self):
+        # A source server left running with nohup or & died with its shell (F-017).
+        with patch.object(main, "IS_LINUX", True), patch("ctypes.CDLL") as cdll:
+            main._exit_when_parent_dies()
+        cdll.assert_not_called()
+
     def test_noop_off_linux(self):
         with patch.object(main, "IS_LINUX", False), \
              patch.object(main, "IS_WINDOWS", False), \
@@ -34,14 +46,14 @@ class TestExitWhenParentDies:
             main._exit_when_parent_dies()
         cdll.assert_not_called()
 
-    def test_windows_watches_the_parent(self):
+    def test_windows_watches_the_parent(self, frozen):
         with patch.object(main, "IS_LINUX", False), \
              patch.object(main, "IS_WINDOWS", True), \
              patch.object(main, "_exit_when_windows_parent_dies") as watch:
             main._exit_when_parent_dies()
         watch.assert_called_once()
 
-    def test_requests_sigterm_on_parent_death(self):
+    def test_requests_sigterm_on_parent_death(self, frozen):
         libc = MagicMock()
         libc.prctl.return_value = 0
         with patch.object(main, "IS_LINUX", True), \
@@ -51,7 +63,7 @@ class TestExitWhenParentDies:
         # PR_SET_PDEATHSIG is 1.
         libc.prctl.assert_called_once_with(1, signal.SIGTERM, 0, 0, 0)
 
-    def test_exits_when_parent_died_during_startup(self):
+    def test_exits_when_parent_died_during_startup(self, frozen):
         # The parent changing between the two reads means it exited before
         # prctl landed, so the signal will never arrive. Note the new parent
         # is not pid 1: orphans go to the nearest subreaper, so comparing
@@ -165,6 +177,7 @@ class TestParentDeathEndToEnd:
             "import sys, time\n"
             f"sys.path.insert(0, {str(server_dir)!r})\n"
             "import main\n"
+            "sys.frozen = True  # as the PyInstaller binary, for which it is armed\n"
             "main._exit_when_parent_dies()\n"
             "print('armed', flush=True)\n"
             "time.sleep(60)\n"
@@ -232,3 +245,34 @@ def _wait_for_exit(pid, timeout):
             return
         time.sleep(0.1)
     raise AssertionError(f"server pid {pid} outlived its parent")
+
+
+class TestFailedStart:
+    def test_a_port_taken_exits_with_failure(self, tmp_path):
+        # It exited 0, which systemd's Restart=on-failure takes for success (F-013).
+        import socket
+        with socket.socket() as taken:
+            taken.bind(("127.0.0.1", 0))
+            taken.listen()
+            port = taken.getsockname()[1]
+            result = subprocess.run(
+                [sys.executable, "main.py", "--port", str(port), "--data-dir", str(tmp_path), "--no-update-check"],
+                cwd=Path(main.__file__).parent, capture_output=True, text=True, timeout=60)
+        assert result.returncode == 1, result.stderr[-500:]
+
+    def test_a_network_bind_without_a_token_is_refused(self, tmp_path):
+        # It started open to the network with one warning, and none for :: or a LAN address (F-031).
+        env = {k: v for k, v in os.environ.items() if k != "CYNITOR_AUTH_TOKEN"}
+        result = subprocess.run(
+            [sys.executable, "main.py", "--bind", "::", "--port", "0", "--data-dir", str(tmp_path)],
+            cwd=Path(main.__file__).parent, capture_output=True, text=True, timeout=60, env=env)
+        assert result.returncode == 2 and "--insecure-no-auth" in result.stderr
+
+
+class TestIsLoopback:
+    @pytest.mark.parametrize("bind, loopback", [
+        ("127.0.0.1", True), ("127.0.0.2", True), ("::1", True), ("[::1]", True), ("localhost", True),
+        ("0.0.0.0", False), ("::", False), ("192.168.1.20", False), ("cynitor.lan", False),
+    ])
+    def test_binds(self, bind, loopback):
+        assert main.is_loopback(bind) is loopback

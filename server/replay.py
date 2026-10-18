@@ -257,15 +257,24 @@ class ReplayManager:
         while not self._stop.is_set():
             # If paused, block until resumed (or stop)
             if not self._paused.is_set():
+                self._control.clear()
                 stop_wait = asyncio.create_task(self._stop.wait())
                 resume_wait = asyncio.create_task(self._paused.wait())
+                control_wait = asyncio.create_task(self._control.wait())
                 done, pending = await asyncio.wait(
-                    [stop_wait, resume_wait], return_when=asyncio.FIRST_COMPLETED,
+                    [stop_wait, resume_wait, control_wait], return_when=asyncio.FIRST_COMPLETED,
                 )
                 for p in pending:
                     p.cancel()
                 if self._stop.is_set():
                     break
+                if not self._paused.is_set():
+                    # A seek while paused: the status counts what lies before
+                    # the new position now; the cursor moves on resume.
+                    if self._reanchor.is_set():
+                        self._events_emitted = await asyncio.to_thread(
+                            self._count_before_sync, self._first_event_unix + self._position_s)
+                    continue
             self._control.clear()  # acted on below, or by the checks in the row loop
 
             # Honor any pending seek / speed change before reading the next batch

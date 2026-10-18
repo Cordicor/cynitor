@@ -1,0 +1,3 @@
+[run]
+# The server code, not the tests that exercise it.
+omit = tests/*

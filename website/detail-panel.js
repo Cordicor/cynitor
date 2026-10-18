@@ -8,10 +8,21 @@ const _metricNumber = (v) => (typeof v === 'number' && !Number.isInteger(v) ? v.
 const metricText = (value) => (Array.isArray(value) ? `[${value.map(_metricNumber).join(', ')}]` : _metricNumber(value));
 const metricTitle = (value) => (Array.isArray(value) ? `[${value.join(', ')}]` : String(value ?? '-'));
 
-const renderMetric = (a, subjectId) => {
+// Values a card names rather than shows as a number: a diagnostic's severity
+// (as the log panel names it), and a Cyphal timestamp of 0, which means unknown.
+const namedMetric = (messageType, a) => {
+  if (a.attribute === 'severity' && messageType?.startsWith('uavcan.diagnostic.Record')) {
+    return SEVERITY_LABELS[a.value] ?? null;
+  }
+  if (a.unit === 'microsecond' && a.value === 0 && a.attribute.endsWith('timestamp')) return 'unknown';
+  return null;
+};
+const cardMetricText = (messageType, a) => namedMetric(messageType, a) ?? metricText(a.value);
+
+const renderMetric = (a, subjectId, messageType) => {
   const statusCls = getStatusClass(a.attribute, a.value);
   const rawStr = metricTitle(a.value);
-  const displayStr = metricText(a.value);
+  const displayStr = cardMetricText(messageType, a);
   const minW = getMetricMinWidth(subjectId, a.attribute, displayStr);
   const unitStr = a.unit ? `<span class="metric-unit">${escapeHtml(a.unit)}</span>` : '';
   const valCls = `metric-val${statusCls ? ' ' + statusCls : ''}`;
@@ -32,7 +43,7 @@ const renderSubjectTable = (title, subjects) => {
   }
   const cards = subjects.map((s) => {
     const metrics = s.attributes.length
-      ? `<div class="card-metrics">${s.attributes.map((a) => renderMetric(a, s.subjectId)).join('')}</div>`
+      ? `<div class="card-metrics">${s.attributes.map((a) => renderMetric(a, s.subjectId, s.messageType)).join('')}</div>`
       : '<div class="card-metrics"><span class="metrics-empty">no message yet</span></div>';
 
     return `<div class="subject-card" data-subject="${s.subjectId}" tabindex="0" role="button">
@@ -76,7 +87,7 @@ const updateSubjectTableInPlace = (container, subjects) => {
       if (!valText) return false;
 
       const rawStr = metricTitle(a.value);
-      const displayStr = metricText(a.value);
+      const displayStr = cardMetricText(s.messageType, a);
 
       if (valText.textContent !== displayStr) {
         const minW = getMetricMinWidth(s.subjectId, a.attribute, displayStr);

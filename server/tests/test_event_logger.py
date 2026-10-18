@@ -1,9 +1,8 @@
 """Tests for EventLogger (SQLite persistence)."""
 
 import asyncio
-import os
 import time
-import tempfile
+import sqlite3
 import pytest
 from event_logger import EventLogger, FilterMatcher
 
@@ -31,6 +30,32 @@ def logger(db_path):
     el = EventLogger(db_path=db_path, max_events=1000)
     el.init_db_sync()
     return el
+
+
+class TestSchemaVersion:
+
+    def test_new_database_gets_the_schema_version(self, logger, db_path):
+        with sqlite3.connect(db_path) as conn:
+            assert conn.execute("PRAGMA user_version").fetchone()[0] == EventLogger.SCHEMA_VERSION
+
+    def test_database_from_before_is_versioned(self, db_path):
+        with sqlite3.connect(db_path) as conn:
+            conn.execute("CREATE TABLE events (id INTEGER PRIMARY KEY, subject_id INTEGER NOT NULL, "
+                         "timestamp TEXT NOT NULL, timestamp_unix REAL NOT NULL, rate INTEGER, "
+                         "message_type TEXT NOT NULL, publisher_node_id INTEGER, attributes TEXT)")
+        EventLogger(db_path=db_path).init_db_sync()
+        with sqlite3.connect(db_path) as conn:
+            assert conn.execute("PRAGMA user_version").fetchone()[0] == EventLogger.SCHEMA_VERSION
+
+    def test_newer_database_is_warned_of_and_kept(self, db_path, caplog):
+        with sqlite3.connect(db_path) as conn:
+            conn.execute("PRAGMA user_version = 99")
+        el = EventLogger(db_path=db_path)
+        el.init_db_sync()
+        assert el._db_initialized
+        assert "newer Cynitor" in caplog.text
+        with sqlite3.connect(db_path) as conn:
+            assert conn.execute("PRAGMA user_version").fetchone()[0] == 99
 
 
 class TestEventLogger:
@@ -841,3 +866,55 @@ class TestLoggerThroughput:
         el._running = False  # drain what is queued, then exit
         await el._log_loop()
         assert batches == [EventLogger.BATCH_SIZE, EventLogger.BATCH_SIZE, 200]
+
+
+class TestWriteFailures:
+    """A full disk or a damaged file (F-026): what is lost is counted, said once a while, and reported."""
+
+    @pytest.mark.asyncio
+    async def test_a_failed_write_is_counted_reported_and_logged_now_and_then(self, db_path, caplog, monkeypatch):
+        import event_logger
+        clock = [100.0]
+        monkeypatch.setattr(event_logger.time, "monotonic", lambda: clock[0])
+        el = EventLogger(db_path=db_path)
+        el.init_db_sync()
+
+        def full_disk(events):
+            raise sqlite3.OperationalError("disk I/O error")
+        el._write_events_sync = full_disk
+        with caplog.at_level("ERROR", logger="event_logger"):
+            for _ in range(30):  # 30 batches of 10 in a second: a line, not 30 tracebacks
+                await el._write_events([_sample_event()] * 10)
+            clock[0] += EventLogger.DROP_WARNING_INTERVAL_S
+            await el._write_events([_sample_event()] * 10)
+        lines = [r for r in caplog.records if "Failed to write events" in r.getMessage()]
+        assert el.dropped_events == 310 and el.write_error == "disk I/O error"
+        assert len(lines) == 2 and lines[0].exc_info and not lines[1].exc_info
+        assert "(310 events dropped so far)" in lines[1].getMessage()
+
+    @pytest.mark.asyncio
+    async def test_a_write_that_works_again_clears_the_error(self, db_path):
+        el = EventLogger(db_path=db_path)
+        el.init_db_sync()
+        real = el._write_events_sync
+
+        def full_disk(events):
+            raise sqlite3.OperationalError("database or disk is full")
+        el._write_events_sync = full_disk
+        await el._write_events([_sample_event()])
+        el._write_events_sync = real
+        await el._write_events([_sample_event()])
+        assert el.write_error is None and el.dropped_events == 1
+
+    @pytest.mark.asyncio
+    async def test_failed_service_calls_and_node_events_are_reported_too(self, db_path):
+        el = EventLogger(db_path=db_path)
+        el.init_db_sync()
+
+        def full_disk(*args):
+            raise sqlite3.OperationalError("disk I/O error")
+        el._log_service_calls_sync = full_disk
+        el._log_node_event_sync = full_disk
+        await el.log_service_calls([{"service_id": 430}] * 3)
+        await el.log_node_event(42, "first_seen")
+        assert el.dropped_events == 3 and el.write_error == "disk I/O error"

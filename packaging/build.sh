@@ -53,6 +53,9 @@ install -m 0644 ../README.md               "${ROOT}/usr/share/doc/cynitor-server
 # The env file carries the auth token, so keep it out of world-readable view.
 chmod 0640 "${ROOT}/etc/default/cynitor-server"
 echo "/etc/default/cynitor-server" > "${ROOT}/DEBIAN/conffiles"
+for script in postinst prerm postrm; do  # systemd learns of the unit, and stops it on removal
+    install -m 0755 "deb/${script}" "${ROOT}/DEBIAN/${script}"
+done
 fakeroot dpkg-deb --build "${ROOT}" >/dev/null
 mv "${ROOT}.deb" "out/cynitor-server_${VERSION}_amd64.deb"
 echo "Package: out/cynitor-server_${VERSION}_amd64.deb"
@@ -60,14 +63,27 @@ echo "Package: out/cynitor-server_${VERSION}_amd64.deb"
 # ── .AppImage ──
 echo ""
 echo "── AppImage ──"
-TOOL="build/appimagetool"
-if [ ! -x "${TOOL}" ]; then
-    echo "Fetching appimagetool..."
-    mkdir -p build
-    curl -fsSL -o "${TOOL}" \
-      https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage
-    chmod +x "${TOOL}"
-fi
+# Fixed releases, checked against their SHA-256 before use: what goes into the
+# AppImage must not depend on what a moving "continuous" tag holds that day.
+# appimagetool would also download its runtime; it is given this one instead.
+TOOL="build/appimagetool-1.9.1"
+TOOL_SHA256="ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0"
+RUNTIME="build/type2-runtime-20251108"
+RUNTIME_SHA256="2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d"
+fetch_checked() {  # <url> <file> <sha256>
+    if [ ! -f "$2" ] || ! echo "$3  $2" | sha256sum -c --status; then
+        echo "Fetching $1..."
+        mkdir -p build
+        curl -fsSL -o "$2.part" "$1"
+        echo "$3  $2.part" | sha256sum -c --quiet || { rm -f "$2.part"; echo "Checksum mismatch: $1" >&2; exit 1; }
+        mv "$2.part" "$2"
+    fi
+}
+fetch_checked https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage \
+    "${TOOL}" "${TOOL_SHA256}"
+fetch_checked https://github.com/AppImage/type2-runtime/releases/download/20251108/runtime-x86_64 \
+    "${RUNTIME}" "${RUNTIME_SHA256}"
+chmod +x "${TOOL}"
 APPDIR="build/Cynitor.AppDir"
 rm -rf "${APPDIR}"
 mkdir -p "${APPDIR}/usr/bin"
@@ -77,7 +93,7 @@ install -m 0644 appimage/cynitor-server.desktop "${APPDIR}/cynitor-server.deskto
 install -m 0644 appimage/cynitor.png            "${APPDIR}/cynitor.png"
 cp "${APPDIR}/cynitor.png" "${APPDIR}/.DirIcon"
 # Extraction rather than FUSE: CI runners and many containers have no fuse.
-ARCH=x86_64 "${TOOL}" --appimage-extract-and-run "${APPDIR}" \
+ARCH=x86_64 "${TOOL}" --appimage-extract-and-run --runtime-file "${RUNTIME}" "${APPDIR}" \
     "out/cynitor-server-${VERSION}-x86_64.AppImage" >/dev/null 2>&1
 chmod +x "out/cynitor-server-${VERSION}-x86_64.AppImage"
 echo "AppImage: out/cynitor-server-${VERSION}-x86_64.AppImage"

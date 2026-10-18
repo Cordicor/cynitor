@@ -48,6 +48,10 @@ const bind = () => {
     state.canAllocator = el('canAllocatorToggle').checked;
     saveSettings();
   });
+  el('canListenOnlyToggle').addEventListener('change', () => {
+    state.canListenOnly = el('canListenOnlyToggle').checked;
+    saveSettings();
+  });
   el('decodeOnDemandToggle').addEventListener('change', () => {
     setDecodeOnDemand(el('decodeOnDemandToggle').checked);
   });
@@ -252,7 +256,19 @@ const bind = () => {
 loadSettings();
 bind();
 // The server serving the page names its version; a plain static server does not.
-el('versionTag').textContent = serverConfig().version ? `v${serverConfig().version}` : '';
+// The server's version, and a newer release if the server found one (update_check.py).
+const RELEASE_PAGE_PREFIX = 'https://github.com/OpenCyphal-Garage/cynitor/releases/';
+const renderVersionTag = () => {
+  const { version } = serverConfig();
+  const update = state.update?.url?.startsWith(RELEASE_PAGE_PREFIX) ? state.update : null;
+  const html = (version ? `v${escapeHtml(version)}` : '') + (update
+    ? `<a class="version-update" href="${escapeHtml(update.url)}" target="_blank" rel="noopener"`
+      + ` title="A newer Cynitor is out: open its release page">v${escapeHtml(update.version)} available</a>`
+    : '');
+  const tag = el('versionTag');
+  if (tag.innerHTML !== html) tag.innerHTML = html;
+};
+renderVersionTag();
 if (state.activeView !== 'nodes') {
   const saved = state.activeView;
   state.activeView = 'nodes';

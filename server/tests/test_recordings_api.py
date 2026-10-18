@@ -93,6 +93,17 @@ class TestRecordingsCRUD:
         assert resp.status == 400
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("path, body", [
+        # 200,000 characters of name were stored (F-035).
+        ("/api/recordings", {"name": "x" * 201}),
+        ("/api/recordings", {"name": "ok", "notes": "x" * 10_001}),
+        ("/api/recordings/quick", {"name": "ok", "last_seconds": 1e9}),
+    ])
+    async def test_what_a_recording_cannot_hold_is_refused(self, client, path, body):
+        resp = await client.post(path, json=body)
+        assert resp.status == 400
+
+    @pytest.mark.asyncio
     async def test_create_invalid_json(self, client):
         resp = await client.post("/api/recordings", data="not json", headers={"Content-Type": "application/json"})
         assert resp.status == 400

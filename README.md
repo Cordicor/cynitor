@@ -1,6 +1,8 @@
 # Cynitor
 
-[![Tests](https://github.com/OpenCyphal-Garage/cynitor/actions/workflows/test.yml/badge.svg?branch=dev)](https://github.com/OpenCyphal-Garage/cynitor/actions/workflows/test.yml)
+![Ubuntu 22.04: passing](https://img.shields.io/badge/Ubuntu_22.04-passing-brightgreen "On real hardware: a gs_usb CAN FD adapter and an STM32 Cyphal node; release binaries are built here")
+![Ubuntu 24.04: passing](https://img.shields.io/badge/Ubuntu_24.04-passing-brightgreen "CI: unit tests (Python 3.10, 3.11, 3.12), integration, browser end-to-end")
+![Windows Server 2022, 2025: passing](https://img.shields.io/badge/Windows_Server_2022%2C_2025-passing-brightgreen "CI: unit tests and integration on a virtual bus; the release build's smoke test (2022)")
 [![Latest release](https://img.shields.io/github/v/release/OpenCyphal-Garage/cynitor)](https://github.com/OpenCyphal-Garage/cynitor/releases/latest)
 
 A dashboard for [Cyphal](https://opencyphal.org/) (UAVCAN) networks on CAN and
@@ -45,11 +47,21 @@ No Python needed. Take the file for your system from the
 
 - All of them are for x86-64, hold the same server and open no window: you
   use it from a browser.
+- Each file has a `<file>.sha256` beside it: `sha256sum -c <file>.sha256`
+  checks a download. From 1.4.0 each is also signed as built by this
+  repository's release workflow:
+  `gh attestation verify <file> --repo OpenCyphal-Garage/cynitor`.
+- The licences of the third-party code inside are in the release's
+  `*.THIRD-PARTY-NOTICES.txt`, and the versions in `*.requirements.txt`.
 - The Linux builds are made on Ubuntu 22.04 and run on it and anything newer.
 - The Windows build includes what CANable (candleLight) adapters need. PEAK,
   Kvaser, Vector and IXXAT adapters need their vendor's driver. Windows may
   warn about an unrecognised app the first time, as the executable is not
   code-signed.
+- Cynitor asks GitHub once a day whether a newer release is out, and if so the
+  version under the sidebar links to it. Nothing about you or the bus is sent.
+  `--no-update-check` (or `CYNITOR_NO_UPDATE_CHECK=1`) turns it off; without
+  internet access it fails quietly.
 
 ### From source
 
@@ -111,7 +123,7 @@ Then connect Cynitor to `vcan0`. There the demo takes options:
 |---|---|
 | `--conflict` | A second node on the same node-ID after 10 s, which Cynitor flags |
 | `--node-id 51`, in a second terminal | A second demo: every subject then has two publishers, which the plots and Compare show apart |
-| `--fd` | Needed on a CAN FD vcan (`cat /sys/class/net/vcan0/mtu` says 72). Cynitor runs CAN FD there, and a demo without `--fd` gets none of its requests: no name, no services |
+| `--fd` | Runs Cyphal/CAN FD. On a SocketCAN interface set up for CAN FD (a new vcan is one on current kernels: `cat /sys/class/net/vcan0/mtu` says 72) the demo does so by itself, as Cynitor does there |
 
 ## Features
 
@@ -138,11 +150,13 @@ your layout in the browser, and needs no internet access.
 
 ## CAN adapters
 
-| System | Status | Adapters the dashboard finds |
-|---|---|---|
-| **Linux** | The primary platform: release builds, tested in CI | SocketCAN interfaces: `can0`, `vcan0`, `slcan0`, … |
-| **Windows** | Release build, tested in CI | PEAK, Kvaser, Vector and IXXAT through their vendor drivers; CANable with candleLight firmware over USB, or with slcan firmware by its serial port |
-| **macOS** | From source only, and not tested: no build, no CI run | Takes the same path as Windows, but `requirements.txt` installs the USB packages for candleLight adapters on Windows only |
+What each system was tested on is under [Tested on](#tested-on).
+
+| System | Adapters the dashboard finds |
+|---|---|
+| **Linux** | SocketCAN interfaces: `can0`, `vcan0`, `slcan0`, … |
+| **Windows** | PEAK, Kvaser, Vector and IXXAT through their vendor drivers; CANable with candleLight firmware over USB, or with slcan firmware by its serial port |
+| **macOS** | Takes the same path as Windows, but `requirements.txt` installs the USB packages for candleLight adapters on Windows only |
 
 An adapter that is not found can be named, with `--can` or under **Other…**:
 
@@ -153,7 +167,7 @@ An adapter that is not found can be named, with `--can` or under **Other…**:
 | Kvaser, Vector, IXXAT | `kvaser:<channel>`, `vector:<channel>`, `ixxat:<channel>` | Yes |
 | CANable, candleLight firmware | `gs_usb:0`. On Linux it is a SocketCAN interface | If its firmware does CAN FD; a CANable 1.0's does not |
 | CANable, slcan firmware | `slcan:COM5@115200`. On Linux, `slcan:/dev/ttyACM0` with no `slcand` attached | CANable 2.0, at 2 or 5 Mbit/s only |
-| Anything else python-can drives | `<interface>:<channel>` | No |
+| Anything else python-can drives | `<interface>:<channel>`; from the dashboard only if the server runs with `--allow-any-interface` | No |
 | The [simulated bus](#try-it-without-hardware), no hardware | `sim:classic`, `sim:fd`; listed on every system | `sim:fd` |
 
 A name with a `:` in it is passed on as it is, without being checked against
@@ -181,7 +195,7 @@ bus with error frames.
   sudo ip link set can0 down
   sudo ip link set can0 type can bitrate 500000 dbitrate 2000000 fd on
   sudo ip link set can0 up
-  # a virtual interface only needs the CAN FD frame size:
+  # a vcan is CAN FD as made on current kernels (mtu 72); to switch one to it:
   sudo ip link set vcan0 down && sudo ip link set vcan0 mtu 72 && sudo ip link set vcan0 up
   ```
 
@@ -215,8 +229,14 @@ topics to v1.0 subject-IDs on the device (`name#1234`).
 | `--bitrate <n>` | Bus speed in bit/s. Required with `--can` for every adapter but SocketCAN and the simulated bus |
 | `--data-bitrate <n>` | CAN FD data-phase speed in bit/s; leave it out for Classic CAN. Ignored for SocketCAN |
 | `--decode-on-demand` | Decode only the subjects a dashboard shows or a recording takes, and count the rest: for a bus that carries more than the server can decode. The dashboard's **Decode on demand** box does the same at any time |
+| `--listen-only` | Watch the bus without sending anything: no node-ID, heartbeat or requests, so node names, versions and registers are not read. The dashboard's **Listen only** box does the same for one session. The CAN controller still acknowledges frames unless the interface itself is in listen-only mode (SocketCAN: `ip link set can0 type can ... listen-only on`) |
 | `--allocator` | Give plug-and-play nodes their node-IDs. Off by default: only for a bus with no allocator of its own. The dashboard's **Node-ID allocator** box does the same for one session |
-| `--bind <host>` | Listen on `<host>`. Default `127.0.0.1`; `0.0.0.0` for the whole network |
+| `--bind <host>` | Listen on `<host>`. Default `127.0.0.1`; `0.0.0.0` for the whole network, which needs `CYNITOR_AUTH_TOKEN` set |
+| `--insecure-no-auth` | Allow a `--bind` beyond loopback without a token, on a network you trust |
+| `--allow-any-interface` | Let the dashboard open any python-can interface, not only the CAN adapters Cynitor knows |
+| `--no-update-check` | Do not ask GitHub whether a newer release is out |
+| `--reconnect` | With `--can`: attach to it again whenever its session ends (an adapter unplugged, a bus fault), waiting 5 s, then longer, up to a minute. Without it, `/api/health` answers 503 while that bus is down, for a supervisor to see |
+| `--access-log` | Log every HTTP request; off by default, as a dashboard makes a few a second |
 | `--port <n>` | Listen on `<n>`. Default 8080 |
 | `--data-dir <dir>` | Keep the data in `<dir>` |
 | `--no-frontend` | Serve only the API and the WebSocket, not the dashboard |
@@ -261,8 +281,10 @@ CYNITOR_AUTH_TOKEN=$(openssl rand -hex 24) cynitor-server --bind 0.0.0.0
 Open `http://<that-machine>:8080`: the dashboard asks for the token once and
 remembers it.
 
-- **Set a token whenever you bind beyond loopback.** Without one, anyone who
-  can reach the port can command the nodes on the bus.
+- **A token is needed to bind beyond loopback.** Without one, anyone who can
+  reach the port can command the nodes on the bus, so Cynitor refuses to start
+  that way unless `--insecure-no-auth` says the network is trusted.
+- It is plain HTTP: beyond a trusted network, put a TLS reverse proxy in front.
 - Cynitor prints the token on the terminal at startup and keeps it out of its
   log, so it does not end up in the system journal.
 - The token protects the API and the event stream. The dashboard's own files
@@ -281,8 +303,11 @@ beyond loopback, then:
 sudo systemctl enable --now cynitor-server
 ```
 
-The unit runs as root, because raw SocketCAN sockets need `CAP_NET_RAW`; its
-comments show how to narrow that to a dedicated user.
+The unit does not run as root: systemd gives it a user of its own
+(`DynamicUser`), in the `dialout` group for slcan adapters, which can write
+only to `/var/lib/cynitor`. SocketCAN needs nothing more. An adapter that
+needs other device access (a vendor driver's device files) needs a drop-in
+that grants it, made with `sudo systemctl edit cynitor-server`.
 
 ## Troubleshooting
 

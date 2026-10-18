@@ -1,0 +1,11 @@
+#!/bin/sh
+# After install or upgrade: systemd learns of the unit; one that runs is
+# restarted on the new binary. The unit stays disabled until enabled by hand.
+set -e
+if [ "$1" = "configure" ] && [ -d /run/systemd/system ]; then
+    systemctl daemon-reload >/dev/null 2>&1 || true
+    if systemctl is-active --quiet cynitor-server; then
+        systemctl restart cynitor-server || true
+    fi
+fi
+exit 0

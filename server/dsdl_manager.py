@@ -103,9 +103,9 @@ class DsdlManager:
     def _read_status(self) -> dict[str, Any]:
         paths: list[dict] = []
         if self.public_types_dir.is_dir():
-            paths.append({"path": str(self.public_types_dir), "label": "Public regulated types", "source": "regulated"})
+            paths.append({"path": self.public_types_dir.name, "label": "Public regulated types", "source": "regulated"})
         if self.custom_dir.is_dir():
-            paths.append({"path": str(self.custom_dir), "label": "Custom types", "source": "custom"})
+            paths.append({"path": "dsdl/custom", "label": "Custom types", "source": "custom"})
 
         compiled_ok = all((self.compiled_dir / ns).is_dir() for ns in _PUBLIC_ROOTS)
 
@@ -212,7 +212,7 @@ class DsdlManager:
             "kind": parsed["kind"],
             "fixed_port_id": fixed_port_id,
             "source": "custom" if is_custom else "regulated",
-            "source_file": str(path),
+            "source_file": self._shown_path(path),
             "source_text": parsed["source_text"],
             "fields": parsed["fields"],
             "constants": parsed["constants"],
@@ -319,6 +319,15 @@ class DsdlManager:
         with self._status_lock:
             self._status_cache = None
 
+    def _shown_path(self, path: Path) -> str:
+        """``path`` as an API reply gives it: within its types folder, not where the server keeps it."""
+        for root in (self.custom_dir, self.public_types_dir):
+            try:
+                return Path(path).relative_to(root).as_posix()
+            except ValueError:
+                continue
+        return Path(path).name
+
     def create_namespace(self, namespace: str) -> dict[str, Any]:
         self._validate_custom_namespace(namespace)
         ns_dir = self.custom_dir / Path(*namespace.split("."))
@@ -326,7 +335,7 @@ class DsdlManager:
             raise ValueError(f"Namespace '{namespace}' already exists")
         ns_dir.mkdir(parents=True, exist_ok=True)
         self.invalidate_cache()
-        return {"namespace": namespace, "path": str(ns_dir)}
+        return {"namespace": namespace, "path": self._shown_path(ns_dir)}
 
     def delete_namespace(self, namespace: str) -> dict[str, Any]:
         """Remove a custom namespace with no types left in it, with its empty
@@ -373,7 +382,7 @@ class DsdlManager:
         self.invalidate_cache()
 
         full_name = f"{namespace}.{type_name}.{version}"
-        return {"full_name": full_name, "path": str(file_path)}
+        return {"full_name": full_name, "path": self._shown_path(file_path)}
 
     def delete_type(self, namespace: str, type_name: str, version: str) -> dict[str, Any]:
         self._validate_namespace(namespace)
@@ -742,7 +751,7 @@ class DsdlManager:
                 continue
             relative = path.relative_to(folder)
             type_name, version, _ = DsdlManager._parse_filename(relative.name)
-            if type_name:
+            if type_name and version:
                 where = ".".join([*relative.parts[:-1], type_name, version])
                 break
         line = f", line {exc.line}" if exc.line else ""

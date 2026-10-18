@@ -6,13 +6,13 @@ import asyncio
 
 from aiohttp import web
 
-from api_helpers import logger
+from api_helpers import ApiHandlers, logger
 from bus_errors import BusErrors
-from can_config import is_explicit_spec, is_socketcan, resolve_bitrate, resolve_data_bitrate, socketcan_device
+from can_config import api_interface_error, is_explicit_spec, is_socketcan, resolve_bitrate, resolve_data_bitrate, socketcan_device
 from cyphal_v11 import V11Traffic
 
 
-class CanApi:
+class CanApi(ApiHandlers):
     """The can part of WebSocketServer, which has the session and the rest these use."""
 
     async def _list_adapters(self, refresh: bool = False) -> list[dict]:
@@ -42,6 +42,8 @@ class CanApi:
             "available_adapters": await self._list_adapters(),
             "bus_utilization": bus_load.utilization if bus_load else None,
             "dropped": self.session.dropped_events(),
+            # Why history and recordings are not being written (a full disk), until a write works again.
+            "history_error": getattr(getattr(self.session, "event_logger", None), "write_error", None),
             "last_error": self.session.last_error,
             "cyphal_v11": v11.status() if isinstance(v11 := getattr(self.session, "v11", None), V11Traffic) else None,
             "bus_errors": (errors.status() if isinstance(errors := getattr(self.session, "bus_errors", None), BusErrors)
@@ -52,6 +54,12 @@ class CanApi:
             "server_cpu": self.cpu.read(),
             # Whether only the subjects watched or recorded are decoded (POST /api/decoding).
             "decode_on_demand": self.session.decode_on_demand,
+            # Cynitor's own node-ID on the bus; None when not connected, or anonymous (listening only).
+            "own_node_id": next(iter(self.session._own_node_ids()), None) if self.session.is_running else None,
+            # Whether the session that runs sends nothing on the bus (connect's listen_only).
+            "listen_only": self.session.is_running and self.session.listen_only is True,
+            # A newer release, {"version", "url"}, if the update check found one; else None.
+            "update": self.update_check.available if self.update_check is not None else None,
         })
 
     async def _set_decoding(self, request: web.Request) -> web.Response:
@@ -96,6 +104,13 @@ class CanApi:
         allocator = payload.get("allocator")
         if allocator is not None and not isinstance(allocator, bool):
             return web.json_response({"error": "Field 'allocator' must be true or false"}, status=400)
+        # Optional; the session sends nothing. --listen-only stands in likewise.
+        listen_only = payload.get("listen_only")
+        if listen_only is not None and not isinstance(listen_only, bool):
+            return web.json_response({"error": "Field 'listen_only' must be true or false"}, status=400)
+
+        if is_explicit_spec(iface) and not self.allow_any_interface and (refused := api_interface_error(iface)):
+            return web.json_response({"error": refused}, status=400)
 
         if self.session.is_running:
             return web.json_response({"error": "Already connected"}, status=409)
@@ -112,11 +127,17 @@ class CanApi:
                 )
 
         try:
-            await self.session.connect(iface, bitrate=bitrate, data_bitrate=data_bitrate, allocator=allocator)
+            await self.session.connect(iface, bitrate=bitrate, data_bitrate=data_bitrate, allocator=allocator,
+                                       listen_only=listen_only)
             return web.json_response({"status": "running", "can_interface": iface,
                                       "can_fd": self.session.can_fd,
-                                      "allocator": self.session.allocator_status()})
+                                      "allocator": self.session.allocator_status(),
+                                      "listen_only": self.session.listen_only is True})
         except Exception as e:
+            from main import SessionBusy
+            if isinstance(e, SessionBusy):  # a session or a replay runs: the caller's to resolve
+                logger.info("CAN connect refused: %s", e)
+                return web.json_response({"error": str(e)}, status=409)
             logger.error(f"Failed to connect CAN: {e}", exc_info=True)
             return web.json_response({"error": str(e)}, status=500)
 
@@ -125,6 +146,7 @@ class CanApi:
         if not self.session.is_running:
             return web.json_response({"error": "Not connected"}, status=409)
 
+        self.session.wanted_can = None  # the operator's choice: no longer down, and not reconnected
         await self.session.disconnect()
         available = await asyncio.to_thread(discover_can_interfaces)
         return web.json_response({

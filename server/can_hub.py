@@ -29,6 +29,8 @@ from typing import Callable, Optional
 
 import can
 
+from raw_log import END_OF_LOG
+
 from can_config import FD_DATA_SAMPLE_POINT, FD_NOMINAL_SAMPLE_POINT
 from cyphal_v11 import V11Traffic
 from gs_usb_fd import GsUsbFdBus
@@ -60,7 +62,7 @@ def _no_filters_on_virtual_channels() -> None:
         if not media.interface_name.startswith("virtual:"):
             configure(media, configuration)
 
-    PythonCANMedia.configure_acceptance_filters = configure_unless_virtual
+    PythonCANMedia.configure_acceptance_filters = configure_unless_virtual  # type: ignore[method-assign,assignment]
 
 
 _no_filters_on_virtual_channels()
@@ -103,7 +105,7 @@ def open_adapter(spec: str, bitrate: int, data_bitrate: Optional[int] = None) ->
         # python-can compares the channel with the number of devices found.
         kwargs["index"] = int(channel)
     elif channel.isdigit():
-        channel = int(channel)
+        channel = int(channel)  # type: ignore[assignment]  # python-can takes a number for these
     if data_bitrate is not None:
         if interface == "pcan":
             kwargs = {"timing": can.BitTimingFd.from_sample_point(
@@ -243,8 +245,8 @@ class CANHub:
             raise
         self._still_present = presence_check(self._adapter)
         self._threads = [
-            threading.Thread(target=self._pump_from_bus, name=f"{self.channel}-rx", daemon=True),
-            threading.Thread(target=self._pump_to_bus, name=f"{self.channel}-tx", daemon=True),
+            threading.Thread(target=self._pump, args=(self._pump_from_bus,), name=f"{self.channel}-rx", daemon=True),
+            threading.Thread(target=self._pump, args=(self._pump_to_bus,), name=f"{self.channel}-tx", daemon=True),
         ]
         for thread in self._threads:
             thread.start()
@@ -306,14 +308,27 @@ class CANHub:
 
     def _tell(self, msg: can.Message) -> None:
         for listener in self._listeners:
-            listener(msg)
+            try:
+                listener(msg)
+            except Exception as exc:  # it must not end the pump: drop it, say why
+                self.remove_listener(listener)
+                logger.error("CAN hub: a frame listener failed and was removed: %s", exc, exc_info=True)
 
     def _fail(self, message: str) -> None:
         if self._stop.is_set():
             return  # shutting down; errors from closing buses are expected
         self.error = message
-        logger.error("CAN hub stopped: %s", message)
+        # A played raw log's end is its normal stop (raw_log.END_OF_LOG).
+        logger.log(logging.INFO if message.endswith(END_OF_LOG) else logging.ERROR, "CAN hub stopped: %s", message)
         self._stop.set()
+
+    def _pump(self, forward: Callable[[], None]) -> None:
+        """Run a pump thread; an error that ends it ends the hub, which the session's health check sees."""
+        try:
+            forward()
+        except Exception as exc:
+            logger.error("CAN hub: forwarding failed", exc_info=True)
+            self._fail(f"{self.spec}: forwarding stopped: {exc}")
 
     def _pump_from_bus(self) -> None:
         assert self._adapter is not None and self._local is not None

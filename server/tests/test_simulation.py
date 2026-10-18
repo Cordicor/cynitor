@@ -7,7 +7,6 @@ and run in the integration test (tests/integration/hub_session.py).
 import asyncio
 
 import can
-import pytest
 
 from simulation import SimulatedBus
 

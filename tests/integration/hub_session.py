@@ -26,6 +26,9 @@ Checks, in order:
      its payloads offers the right one, and setting it decodes the subject;
   4c. Cyphal v1.1 transfers on the wire (16-bit subject-IDs) are noticed,
      though not decoded;
+  4e. broken and random frames (anonymous heartbeats, short payloads,
+     unfinished transfers, a wrong CRC, non-Cyphal frames, noise) leave the
+     session running and the device decoded, and log no error;
   4d. decoding on demand: a subject nobody watches is counted from its
      frames, not decoded, until a dashboard watches it;
   5. an adapter that disappears ends the session with an error;
@@ -323,6 +326,67 @@ async def run() -> None:
         v11 = session.v11.status()
         check(seen and v11["nodes"] == [77] and v11["subject_ids"] == [0x1234, 0xBEEF],
               f"Cyphal v1.1 traffic noticed: {v11}")
+
+        # Hostile and broken frames, as a faulty or foreign device sends them:
+        # the session runs on, the device's data keeps coming, nothing is
+        # logged as an error.
+        import logging
+        import random
+
+        class Errors(logging.Handler):
+            def __init__(self):
+                super().__init__(logging.ERROR)
+                self.records = []
+
+            def emit(self, record):
+                self.records.append(f"{record.name}: {record.getMessage()}")
+        errors = Errors()
+        logging.getLogger().addHandler(errors)
+        heartbeat = 7509
+        broken = [
+            # an anonymous heartbeat (anonymous nodes may not send one)
+            can.Message(arbitration_id=(4 << 26) | (1 << 24) | (3 << 21) | (heartbeat << 8) | 99,
+                        data=bytes(7) + b"\xe0"),
+            # a heartbeat one byte long
+            can.Message(arbitration_id=(4 << 26) | (3 << 21) | (heartbeat << 8) | 99, data=b"\x01\xe0"),
+            # the start of a transfer that never ends
+            can.Message(arbitration_id=(4 << 26) | (3 << 21) | (heartbeat << 8) | 98, data=bytes(7) + b"\xa1"),
+            # a two-frame transfer whose CRC is wrong
+            can.Message(arbitration_id=(4 << 26) | (3 << 21) | (heartbeat << 8) | 97, data=bytes(7) + b"\xa2"),
+            can.Message(arbitration_id=(4 << 26) | (3 << 21) | (heartbeat << 8) | 97, data=b"\x00\x00\x00\x42"),
+            # a GetInfo request to Cynitor that carries bytes it should not
+            can.Message(arbitration_id=(4 << 26) | (1 << 25) | (1 << 24) | (430 << 14) | (int(own_id) << 7) | 96,
+                        data=b"\xff" * 7 + b"\xe3"),
+            # what is not Cyphal/CAN: an 11-bit frame, a remote frame, an error frame, an empty frame
+            can.Message(arbitration_id=0x123, is_extended_id=False, data=b"\x01\x02"),
+            can.Message(arbitration_id=0x1ABCDE, is_remote_frame=True, dlc=4),
+            can.Message(arbitration_id=0x4, is_error_frame=True, data=bytes(8)),
+            can.Message(arbitration_id=0x10000000 | 95, data=b""),
+        ]
+        noise = random.Random(1)
+        keep_clear = {DEVICE_NODE_ID, int(own_id)}
+        while len(broken) < 300:  # and noise, from node-IDs and subjects the checks below don't use
+            can_id = noise.getrandbits(29)
+            subject = (can_id >> 8) & 0x1FFF
+            if can_id & 0x7F in keep_clear or (not can_id >> 25 & 1 and subject in
+                                                (heartbeat, TEMPERATURE_SUBJECT_ID, UNNAMED_SUBJECT_ID)):
+                continue
+            size = noise.choice([1, 2, 5, 8, 12, 16, 32, 64] if FD else range(9))
+            broken.append(can.Message(arbitration_id=can_id, data=noise.randbytes(size), is_fd=FD and size > 8))
+        received_before = session.telemetry.latest_by_subject[TEMPERATURE_SUBJECT_ID]["timestamp_unix"]
+        for msg in broken:
+            msg.is_fd = msg.is_fd or (FD and not msg.is_error_frame and not msg.is_remote_frame
+                                      and msg.is_extended_id)
+            tap.send(msg)
+            await asyncio.sleep(0.002)
+        await asyncio.sleep(1.0)
+        logging.getLogger().removeHandler(errors)
+        check(session.is_running, f"{len(broken)} broken and random frames leave the session running")
+        check(await wait_for(lambda: session.telemetry.latest_by_subject[TEMPERATURE_SUBJECT_ID]["timestamp_unix"]
+                             > received_before, timeout=5)
+              and not session.telemetry.get_all_nodes_info()["nodes"][DEVICE_NODE_ID].get("has_disappeared"),
+              f"node {DEVICE_NODE_ID}'s temperature is still decoded")
+        check(not errors.records, f"and none of them is logged as an error: {errors.records[:5]}")
 
         # Decoding on demand: a subject nobody watches is counted from its
         # frames, not decoded, until a dashboard shows its values.

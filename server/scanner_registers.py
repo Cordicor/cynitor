@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 import numpy as np
 
@@ -18,9 +18,25 @@ import uavcan.primitive
 import uavcan.register
 
 
+class RegisterNotApplied(Exception):
+    """A register write the node answered with another value than the one sent: it kept its own."""
+
+
 class ScannerRegisters:
     """The register part of ScannerNode, which has the pycyphal node (``_node``),
     the limits (REGISTER_TIMEOUT, MAX_REGISTERS, ...) and the type-name helpers these use."""
+
+    # Set by ScannerNode, declared here for the type checker.
+    _node: Any
+    REGISTER_TIMEOUT: float
+    MAX_REGISTERS: int
+    MAX_UNANSWERED_INDEXES: int
+    MAX_SUBJECT_ID: int
+    MAX_SERVICE_ID: int
+    UNSET_PORT_ID: int
+    STANDARD_SERVICES: dict[int, str]
+    _dsdl_type_to_module_name: Callable[[str], str]
+    _canonical_type_name: Callable[[str], str]
 
     async def _read_register(self, register_access_client, reg_name: str,
                              node_id: int) -> tuple[str | None, Any | None] | None:
@@ -61,7 +77,7 @@ class ScannerRegisters:
             return None
 
         try:
-            port_id = int(value[0])  # Natural16 is an array with one element
+            port_id = int(value[0])  # type: ignore[index]  # Natural16 is an array with one element
         except (TypeError, ValueError, IndexError) as e:
             logging.warning(f"Invalid {label}-ID in register '{reg_name}': {value}, error: {e}")
             return None
@@ -190,6 +206,8 @@ class ScannerRegisters:
         if value is None:
             return "N/A"
         if isinstance(value, np.ndarray):
+            if value.dtype == bool:  # true/false, as DSDL and yakut write them, not Python's True/False
+                return ', '.join('true' if v else 'false' for v in value.tolist())
             if value.size == 1:
                 return str(value.item())
             return ', '.join(str(v) for v in value.tolist())
@@ -391,11 +409,16 @@ class ScannerRegisters:
 
             access_response = access_response_tuple[0]
             current_field_name, _current_value = self._find_non_none_field(access_response.value)
+            if current_field_name is None or current_field_name == 'empty':  # Cyphal's answer for a name it does not have
+                raise ValueError(f"Node {node_id} has no register '{register_name}'")
             if not access_response.mutable:
-                logging.error(f"Register '{register_name}' on node_id={node_id} is read-only")
+                logging.info(f"Register '{register_name}' on node_id={node_id} is read-only: not written")
                 raise ValueError(f"Register '{register_name}' is read-only")
 
             self._check_register_type(reg_type, current_field_name)
+            # A number for a number register goes as the register's own type: one
+            # of another type the node may keep its value for, as Cyphal allows.
+            reg_type = current_field_name
             self._check_register_range(reg_type, value)
             access_request.value = self._register_value(reg_type, value)
 
@@ -413,12 +436,17 @@ class ScannerRegisters:
             elif updated_value is None:
                 updated_value = "N/A"
 
+            if not self._holds(reg_type, value, updated_value):
+                raise RegisterNotApplied(f"Node {node_id} did not take the value: '{register_name}' holds "
+                                         f"{self._format_register_value(np.array(updated_value)) if isinstance(updated_value, list) else updated_value}")
             logging.info(f"Successfully set register '{register_name}' on node_id={node_id} to '{updated_value}' (type: {updated_field_name})")
             return updated_value
 
         except asyncio.TimeoutError:
             logging.error(f"Timeout while setting register '{register_name}' on node_id={node_id}")
             return None
+        except (ValueError, RegisterNotApplied):  # the request's or the node's say: the API answers it
+            raise
         except Exception as e:
             logging.error(f"Error setting register '{register_name}' on node_id={node_id}: {str(e)}")
             raise
@@ -442,6 +470,28 @@ class ScannerRegisters:
         'real32': (-3.4028235e+38, 3.4028235e+38),
     }
 
+    # The precision a numeric register holds its values in, to compare what was
+    # written with what the node reads back: 0.1 as real32 reads back 0.100000001.
+    _DTYPE_OF = {'real16': np.float16, 'real32': np.float32, 'real64': np.float64, 'bit': np.bool_}
+
+    def _holds(self, reg_type: str, written: str, read_back: Any) -> bool:
+        """Whether ``read_back`` (as set_register reports it) is the value ``written`` (as typed) was sent as."""
+        if reg_type == 'string':
+            return read_back == written
+        if reg_type == 'unstructured':
+            return str(read_back).lower() == bytes.fromhex(written).hex()
+        if reg_type == 'bit' or reg_type in self._NUMBER_OF:
+            sent = self._register_value(reg_type, written)
+            sent_values = list(getattr(sent, reg_type).value)
+            back = read_back if isinstance(read_back, list) else [read_back]
+            dtype = self._DTYPE_OF.get(reg_type, np.int64 if reg_type.startswith('integer') else np.uint64)
+            try:
+                return len(back) == len(sent_values) and bool(np.all(
+                    np.array(sent_values, dtype=dtype) == np.array(back, dtype=dtype)))
+            except (TypeError, ValueError, OverflowError):
+                return False
+        return True  # 'empty': nothing to compare
+
     def _check_register_type(self, reg_type: str, current_field_name: str) -> None:
         """ValueError unless a value of ``reg_type`` may go to a register that holds ``current_field_name``:
         the same type, or a number for a number."""
@@ -462,11 +512,11 @@ class ScannerRegisters:
                 if n < lo or n > hi:
                     raise ValueError(f"Value {n} out of range for {reg_type} ({lo}–{hi})")
         elif reg_type in self._REAL_RANGES:
-            lo, hi = self._REAL_RANGES[reg_type]
+            low, high = self._REAL_RANGES[reg_type]
             for v in self._parse_array_value(value):
-                n = float(v)
-                if n < lo or n > hi:
-                    raise ValueError(f"Value {n} out of range for {reg_type}")
+                x = float(v)
+                if x < low or x > high:
+                    raise ValueError(f"Value {x} out of range for {reg_type}")
 
     def _register_value(self, reg_type: str, value: str):
         """``value``, as typed, as the uavcan.register.Value of ``reg_type`` to send; ValueError if it is none."""

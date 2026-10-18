@@ -1,0 +1,4 @@
+# Lint: what is surely wrong (syntax errors, undefined names, unused imports
+# and variables). CI runs `ruff check server tools tests`; style is not checked.
+[lint]
+select = ["E9", "F"]

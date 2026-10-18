@@ -6,7 +6,9 @@ API, as classes this server inherits; _setup_routes below has every route.
 """
 
 import asyncio
+import hmac
 import json
+import os
 from pathlib import Path
 from typing import Optional, Set, Any
 from urllib.parse import urlsplit
@@ -76,6 +78,9 @@ class WebSocketServer(CanApi, RawLogsApi, TestNodesApi, FirmwareApi, NodesApi, R
         # Client management
         self.clients: Set[web.WebSocketResponse] = set()
         self.cpu = ProcessCpu()  # the server's own CPU use, for the dashboard
+        self.update_check = None  # update_check.UpdateCheck, unless turned off (main sets it)
+        self.allow_any_interface = False  # --allow-any-interface: a request may open any python-can interface
+        self.access_log = False  # --access-log: log every HTTP request
         self.client_filters: dict[web.WebSocketResponse, dict[str, Any]] = {}
         # Clients that opted into the raw frame-capture stream → their per-client
         # subscriber queue on the FrameCaptureManager. Empty unless a Debugging
@@ -87,10 +92,29 @@ class WebSocketServer(CanApi, RawLogsApi, TestNodesApi, FirmwareApi, NodesApi, R
         self.app = web.Application(middlewares=[
             self._auth_middleware, self._cors_middleware, self._dashboard_cache_middleware,
         ])
+        self.app.on_response_prepare.append(self._add_security_headers)
         self.runner: Optional[web.AppRunner] = None
         self._running = False
 
         self._setup_routes()
+
+    # What a page from this server may load and do. The dashboard has no inline
+    # script and no eval; its cards and Tabulator set style attributes; the
+    # graph exports through a blob: image; and its Backend URL may name another
+    # server, so it may connect anywhere. No page may frame it (click-jacking).
+    _CONTENT_SECURITY_POLICY = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
+                                "img-src 'self' data: blob:; font-src 'self' data:; "
+                                "connect-src 'self' http: https: ws: wss:; object-src 'none'; base-uri 'none'; "
+                                "form-action 'self'; frame-ancestors 'none'")
+
+    @classmethod
+    async def _add_security_headers(cls, request: web.Request, response: web.StreamResponse) -> None:
+        """Hardening on every response, before its headers go out; and no version banner."""
+        response.headers["Content-Security-Policy"] = cls._CONTENT_SECURITY_POLICY
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["Referrer-Policy"] = "no-referrer"
+        response.headers["Server"] = "Cynitor"
 
     @staticmethod
     def _is_protected_path(path: str) -> bool:
@@ -104,6 +128,8 @@ class WebSocketServer(CanApi, RawLogsApi, TestNodesApi, FirmwareApi, NodesApi, R
         """
         return path == "/ws" or path == "/api" or path.startswith("/api/")
 
+    _AUTH_FAILURE_DELAY_S = 0.25  # how long a request with a wrong token waits for its 401
+
     @web.middleware
     async def _auth_middleware(self, request: web.Request, handler: Any) -> web.StreamResponse:
         if self.auth_token is None or request.method == "OPTIONS":
@@ -113,7 +139,8 @@ class WebSocketServer(CanApi, RawLogsApi, TestNodesApi, FirmwareApi, NodesApi, R
         if not self._is_protected_path(request.path):
             return await handler(request)
         token = self._extract_token(request)
-        if token != self.auth_token:
+        if token is None or not hmac.compare_digest(token.encode(), self.auth_token.encode()):
+            await asyncio.sleep(self._AUTH_FAILURE_DELAY_S)  # slows guessing down
             return web.json_response({"error": "missing or invalid token"}, status=401)
         return await handler(request)
 
@@ -125,7 +152,9 @@ class WebSocketServer(CanApi, RawLogsApi, TestNodesApi, FirmwareApi, NodesApi, R
         header = request.headers.get("Authorization", "")
         if header.startswith("Bearer "):
             return header[7:].strip() or None
-        qs = request.query.get("token")
+        # Only where a header is impossible: the WebSocket handshake and a
+        # download link, both GETs. A request that changes something brings the header.
+        qs = request.query.get("token") if request.method == "GET" else None
         return qs.strip() if qs else None
 
     @web.middleware
@@ -142,6 +171,13 @@ class WebSocketServer(CanApi, RawLogsApi, TestNodesApi, FirmwareApi, NodesApi, R
         if not self._is_protected_path(request.path):
             response.headers.setdefault("Cache-Control", "no-cache")
         return response
+
+    _DEV_SERVER_PORTS = frozenset({5500})  # `python3 -m http.server 5500` in website/, as the docs say
+
+    @staticmethod
+    def _dev_origins() -> set[str]:
+        """Other origins a dashboard may be served from, in CYNITOR_DEV_ORIGINS (comma-separated)."""
+        return {o.strip().rstrip("/").lower() for o in os.environ.get("CYNITOR_DEV_ORIGINS", "").split(",") if o.strip()}
 
     def _browser_request_allowed(self, request: web.Request) -> bool:
         """Whether a request may come from the browser page that sent it.
@@ -160,13 +196,21 @@ class WebSocketServer(CanApi, RawLogsApi, TestNodesApi, FirmwareApi, NodesApi, R
         host = (urlsplit(f"//{request.host}").hostname or "").lower()
         if self.host in self._LOOPBACK_HOSTS and host not in self._LOOPBACK_HOSTS:
             return False
+        # Browsers say where a request comes from even when they send no Origin,
+        # as for an <img>: a GET that reads registers costs frames on the bus.
+        if request.headers.get("Sec-Fetch-Site") == "cross-site":
+            return False
         origin = request.headers.get("Origin")
         if origin is None:
             return True
         parts = urlsplit(origin)  # "null" (sandboxed frames, file://) has no host
         if parts.scheme not in ("http", "https") or not parts.hostname:
             return False
-        return parts.netloc.lower() == request.host.lower() or parts.hostname in self._LOOPBACK_HOSTS
+        if parts.netloc.lower() == request.host.lower():
+            return True
+        # Another page on this machine: the frontend dev server only, not any port.
+        return parts.hostname in self._LOOPBACK_HOSTS and (
+            parts.port in self._DEV_SERVER_PORTS or origin.rstrip("/").lower() in self._dev_origins())
 
     @web.middleware
     async def _cors_middleware(self, request: web.Request, handler: Any) -> web.StreamResponse:
@@ -274,6 +318,7 @@ class WebSocketServer(CanApi, RawLogsApi, TestNodesApi, FirmwareApi, NodesApi, R
             logger.info("Serving the dashboard from %s", self.website_dir)
 
     async def _serve_index(self, _request: web.Request) -> web.StreamResponse:
+        assert self.website_dir is not None  # routed only when there is one
         return web.FileResponse(self.website_dir / "index.html")
 
     async def _serve_config_js(self, request: web.Request) -> web.Response:
@@ -292,7 +337,9 @@ class WebSocketServer(CanApi, RawLogsApi, TestNodesApi, FirmwareApi, NodesApi, R
     async def start(self) -> None:
         """Start the WebSocket server."""
         try:
-            self.runner = web.AppRunner(self.app)
+            # A line per request is a few a second per open dashboard: only when asked for.
+            access: dict[str, Any] = {} if self.access_log else {"access_log": None}
+            self.runner = web.AppRunner(self.app, **access)
             await self.runner.setup()
             site = web.TCPSite(self.runner, self.host, self.port)
             await site.start()
@@ -315,21 +362,15 @@ class WebSocketServer(CanApi, RawLogsApi, TestNodesApi, FirmwareApi, NodesApi, R
         logger.info("WebSocket server stopped")
 
 
-    async def _read_json_body(self, request: web.Request) -> tuple[Optional[dict], Optional[web.Response]]:
-        try:
-            body = await request.json()
-        except Exception:
-            return None, web.json_response({"error": "Invalid JSON body"}, status=400)
-        if not isinstance(body, dict):
-            return None, web.json_response({"error": "JSON body must be an object"}, status=400)
-        return body, None
-
-
     # ------------------------------------------------------------------
     # WebSocket handler
     # ------------------------------------------------------------------
 
-    async def _websocket_handler(self, request: web.Request) -> web.WebSocketResponse:
+    MAX_CLIENTS = 64  # open dashboards and API streams; each costs CPU for every event
+
+    async def _websocket_handler(self, request: web.Request) -> web.StreamResponse:
+        if len(self.clients) >= self.MAX_CLIENTS:
+            return web.json_response({"error": f"At most {self.MAX_CLIENTS} streams are open at once"}, status=503)
         ws = web.WebSocketResponse()
         await ws.prepare(request)
 
@@ -345,12 +386,10 @@ class WebSocketServer(CanApi, RawLogsApi, TestNodesApi, FirmwareApi, NodesApi, R
             capture_task = asyncio.create_task(self._capture_loop(ws))
 
             while not ws.closed:
-                telemetry = self.session.telemetry
-                replay = self.session.replay
-                source = telemetry if telemetry is not None else replay
+                source = self._event_source()
                 if source is not None:
-                    queue = source.subscribe(max_queue=100)
-                    consume_task = asyncio.create_task(self._consume_and_send(ws, queue))
+                    queue = stream = source.subscribe(max_queue=100)
+                    consume_task = asyncio.create_task(self._consume_and_send(ws, stream, source))
                     done, pending = await asyncio.wait(
                         [consume_task, recv_task, metrics_task, capture_task],
                         return_when=asyncio.FIRST_COMPLETED
@@ -362,6 +401,12 @@ class WebSocketServer(CanApi, RawLogsApi, TestNodesApi, FirmwareApi, NodesApi, R
                                 "WebSocket subtask finished with exception",
                                 exc_info=(type(exc), exc, exc.__traceback__),
                             )
+                    if done == {consume_task} and consume_task.exception() is None and consume_task.result():
+                        # The session changed (CAN disconnected or connected
+                        # again): follow it on the same socket.
+                        source.unsubscribe(queue)
+                        queue = None
+                        continue
                     for task in pending:
                         task.cancel()
                         try:
@@ -424,12 +469,19 @@ class WebSocketServer(CanApi, RawLogsApi, TestNodesApi, FirmwareApi, NodesApi, R
     # any healthy peer's worst-case latency.
     _WS_SEND_TIMEOUT = 10.0
 
-    async def _consume_and_send(self, ws: web.WebSocketResponse, queue: asyncio.Queue) -> None:
+    def _event_source(self):
+        """What the stream comes from now: the CAN session's telemetry, else a replay, else nothing."""
+        return self.session.telemetry if self.session.telemetry is not None else self.session.replay
+
+    async def _consume_and_send(self, ws: web.WebSocketResponse, queue: asyncio.Queue, source=None) -> bool:
+        """Send ``queue``'s events to ``ws``. True once ``source`` is no longer the session's, to subscribe anew."""
         while self._running and not ws.closed:
             try:
-                event = await asyncio.wait_for(queue.get(), timeout=5.0)
+                event = await asyncio.wait_for(queue.get(), timeout=1.0)
             except asyncio.TimeoutError:
-                continue  # no events in the last 5s; loop back and re-check ws.closed
+                if source is not None and self._event_source() is not source:
+                    return True
+                continue  # no events in the last second; loop back and re-check ws.closed
             except asyncio.CancelledError:
                 break
 
@@ -461,6 +513,7 @@ class WebSocketServer(CanApi, RawLogsApi, TestNodesApi, FirmwareApi, NodesApi, R
             except Exception as e:
                 logger.error("Error sending to client: %s", e)
                 break
+        return False
 
     async def _send_metrics_loop(self, ws: web.WebSocketResponse) -> None:
         """Send the bus load and the server's CPU use to the client every second."""
@@ -563,6 +616,9 @@ class WebSocketServer(CanApi, RawLogsApi, TestNodesApi, FirmwareApi, NodesApi, R
             try:
                 if msg.type == web.WSMsgType.TEXT:
                     data = json.loads(msg.data)
+                    if not isinstance(data, dict):
+                        await ws.send_json({"error": "A message must be a JSON object"})
+                        continue
 
                     if data.get("type") == "filter":
                         self.client_filters[ws] = {
@@ -697,8 +753,12 @@ class WebSocketServer(CanApi, RawLogsApi, TestNodesApi, FirmwareApi, NodesApi, R
         })
 
     async def _health_check(self, request: web.Request) -> web.Response:
+        # Started with --can and that bus down (not by the operator's disconnect): 503, so a supervisor sees it.
+        wanted = getattr(self.session, "wanted_can", None)
+        can_down = isinstance(wanted, str) and not self.session.is_running
         return web.json_response({
-            "status": "healthy" if self._running else "degraded",
+            "status": "healthy" if self._running and not can_down else "degraded",
+            "can_error": (self.session.last_error or f"{wanted} is not connected") if can_down else None,
             "can_status": "running" if self.session.is_running else "idle",
             "can_interface": self.session.can_interface,
             "connected_clients": len(self.clients),
@@ -706,6 +766,6 @@ class WebSocketServer(CanApi, RawLogsApi, TestNodesApi, FirmwareApi, NodesApi, R
                 "host": self.host,
                 "port": self.port,
             }
-        })
+        }, status=503 if can_down else 200)
 
 

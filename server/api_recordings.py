@@ -9,7 +9,7 @@ from typing import Any, Optional
 
 from aiohttp import web
 
-from api_helpers import _parse_int, logger
+from api_helpers import ApiHandlers, _parse_int, logger
 
 
 def _csv_escape(value: Any) -> str:
@@ -22,7 +22,7 @@ def _csv_escape(value: Any) -> str:
     return s
 
 
-class RecordingsApi:
+class RecordingsApi(ApiHandlers):
     """The recordings part of WebSocketServer, which has the session and the rest these use."""
 
     _MAX_REC_ID = 2**31 - 1
@@ -57,6 +57,18 @@ class RecordingsApi:
         stop_on_limit = bool(body.get("stop_on_limit", False))
         return max_length, max_events, stop_on_limit, None
 
+    MAX_NAME_CHARS = 200
+    MAX_NOTES_CHARS = 10_000
+    MAX_QUICK_SAVE_S = 24 * 3600  # the history kept: quick save cannot reach further back
+
+    def _text_refusal(self, name, notes) -> Optional[web.Response]:
+        """400 for a name or notes longer than a recording keeps; None if they fit."""
+        if isinstance(name, str) and len(name) > self.MAX_NAME_CHARS:
+            return web.json_response({"error": f"A name holds at most {self.MAX_NAME_CHARS} characters"}, status=400)
+        if isinstance(notes, str) and len(notes) > self.MAX_NOTES_CHARS:
+            return web.json_response({"error": f"Notes hold at most {self.MAX_NOTES_CHARS} characters"}, status=400)
+        return None
+
     async def _post_recording(self, request: web.Request) -> web.Response:
         await self.session.ensure_event_logger()
         body, err = await self._read_json_body(request)
@@ -69,6 +81,8 @@ class RecordingsApi:
         if err:
             return err
         notes = body.get("notes")
+        if refused := self._text_refusal(name, notes):
+            return refused
         rec_id = await self.session.event_logger.create_recording(
             name=name.strip(),
             filter_spec=body.get("filter"),
@@ -91,7 +105,12 @@ class RecordingsApi:
         last_seconds = body.get("last_seconds")
         if not isinstance(last_seconds, (int, float)) or isinstance(last_seconds, bool) or last_seconds <= 0:
             return web.json_response({"error": "last_seconds must be a positive number"}, status=400)
+        if last_seconds > self.MAX_QUICK_SAVE_S:
+            return web.json_response({"error": f"last_seconds is at most {self.MAX_QUICK_SAVE_S}, "
+                                               "the history kept"}, status=400)
         notes = body.get("notes")
+        if refused := self._text_refusal(name, notes):
+            return refused
         now = time.time()
         rec_id = await self.session.event_logger.create_recording(
             name=name.strip(),
@@ -133,6 +152,8 @@ class RecordingsApi:
             return web.json_response({"error": "Name must be a non-empty string"}, status=400)
         if notes is not None and not isinstance(notes, str):
             return web.json_response({"error": "Notes must be a string"}, status=400)
+        if refused := self._text_refusal(name, notes):
+            return refused
 
         max_length = body.get("max_length_seconds")
         if max_length is not None:

@@ -7,11 +7,11 @@ from typing import Optional
 
 from aiohttp import web
 
-from api_helpers import logger
+from api_helpers import ApiHandlers, logger
 from raw_log import list_logs, log_path, sidecar_path
 
 
-class RawLogsApi:
+class RawLogsApi(ApiHandlers):
     """The rawlogs part of WebSocketServer, which has the session and the rest these use."""
 
     async def _get_raw_logs(self, request: web.Request) -> web.Response:

@@ -1,0 +1,23 @@
+name: Dependency audit
+
+# Known advisories in what server/requirements.txt resolves to today, once a
+# week and on demand: a release bundles what was current on its build day.
+on:
+  schedule:
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  pip-audit:
+    name: pip-audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6.3.0
+        with:
+          python-version: '3.12'
+      - run: pip install pip-audit==2.7.3
+      - run: pip-audit -r server/requirements.txt

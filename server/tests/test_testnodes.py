@@ -10,6 +10,7 @@ import random
 import re
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from aiohttp.test_utils import TestClient, TestServer
@@ -680,8 +681,13 @@ class TestAPI:
         resp = await client.post(f"/api/testnodes/{test_id}/stop")
         assert resp.status == 200 and not (await resp.json())["running"]
 
+        # Deleted, it is forgotten as a device too: it stayed as an offline one (F-015).
+        session.scanner = MagicMock()
+        session.event_logger = MagicMock(delete_node_data=AsyncMock())
         resp = await client.delete(f"/api/testnodes/{test_id}")
         assert resp.status == 200 and await resp.json() == {"deleted": test_id}
+        session.scanner.identity_map.remove_identity.assert_called_once_with(made["unique_id"])
+        session.event_logger.delete_node_data.assert_awaited_once_with(made["unique_id"])
         assert (await client.delete(f"/api/testnodes/{test_id}")).status == 404
         assert (await client.post(f"/api/testnodes/{test_id}/start")).status == 404
 

@@ -12,6 +12,7 @@ given for every interface except SocketCAN.
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 from typing import Optional, Union
 
@@ -92,8 +93,10 @@ def is_socketcan(iface: str) -> bool:
     return normalize_can_iface(iface).startswith("socketcan:")
 
 
-def socketcan_device(iface: str) -> str:
+def socketcan_device(iface: Optional[str]) -> str:
     """The kernel device name behind a SocketCAN ``iface`` (``socketcan:can0`` -> ``can0``)."""
+    if iface is None:
+        raise ValueError("No CAN interface")
     spec = normalize_can_iface(iface)
     if not spec.startswith("socketcan:"):
         raise ValueError(f"{iface!r} is not a SocketCAN interface")
@@ -103,6 +106,28 @@ def socketcan_device(iface: str) -> str:
 def _interface_name(iface: str) -> str:
     """The python-can interface that opens ``iface`` (``pcan:PCAN_USBBUS1`` -> ``pcan``)."""
     return normalize_can_iface(iface).split(":", 1)[0]
+
+
+# The python-can interfaces a request to the API may open: the adapters the
+# README names, the simulated bus and python-can's in-process virtual one.
+# Others (python-can has network and serial back-ends too) only with the
+# server's --allow-any-interface; --can on the command line opens any.
+API_INTERFACES = frozenset({"socketcan", "pcan", "kvaser", "vector", "ixxat", "gs_usb", "slcan", SIM_INTERFACE,
+                            "virtual"})
+# An slcan adapter's serial port, and its baud rate: not any terminal device.
+_SLCAN_PORT = re.compile(r"(COM\d+|/dev/tty(ACM|USB)\d+|/dev/serial/by-id/[\w.:+-]+|/dev/(tty|cu)\.usb[\w.-]+)(@\d+)?")
+
+
+def api_interface_error(iface: str) -> Optional[str]:
+    """Why a request may not open ``iface``, or None if it may."""
+    name = _interface_name(iface)
+    if name not in API_INTERFACES:
+        return (f"Interface type {name!r} is not one Cynitor opens on request; start the server with "
+                "--allow-any-interface to allow any python-can interface")
+    channel = normalize_can_iface(iface).split(":", 1)[1]
+    if name == "slcan" and not _SLCAN_PORT.fullmatch(channel):
+        return f"{channel!r} is not a serial port name such as COM5, /dev/ttyACM0 or /dev/serial/by-id/..."
+    return None
 
 
 def is_simulated(iface: str) -> bool:

@@ -9,6 +9,7 @@ import itertools
 import random
 import threading
 import time
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import can
@@ -186,6 +187,35 @@ class TestFiltering:
 
 
 class TestFailures:
+    def test_a_listener_that_raises_is_dropped_and_forwarding_goes_on(self, hub, other_node, caplog):
+        # A raw log on a full disk raised here, on the receive thread, which
+        # ended: nothing was forwarded while the session said "running" (F-027).
+        def full_disk(msg):
+            raise OSError(28, "No space left on device")
+        seen = []
+        hub.add_listener(full_disk)
+        hub.add_listener(seen.append)
+        a = _component(hub)
+        try:
+            for can_id in (0x700, 0x701):
+                other_node.send(_frame(can_id))
+                assert _recv_matching(a, can_id) is not None
+            assert [msg.arbitration_id for msg in seen] == [0x700, 0x701]
+            assert hub._listeners == (seen.append,)
+            assert hub.health() is None
+            assert "No space left on device" in caplog.text
+        finally:
+            a.shutdown()
+
+    def test_a_pump_that_fails_is_reported(self, hub, other_node):
+        # Any other error on a pump thread ends forwarding: the session is told, not left silent.
+        hub.v11 = SimpleNamespace(observe=lambda msg: 1 / 0)
+        other_node.send(_frame(0x710))
+        deadline = time.monotonic() + _TIMEOUT
+        while hub.health() is None and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert hub.health() is not None and "division by zero" in hub.health()
+
     def test_receive_failure_is_fatal_and_reported(self):
         h = _start_with(StubAdapter(recv_error=can.CanOperationError("device gone")))
         try:

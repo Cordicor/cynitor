@@ -3,6 +3,7 @@
 import pytest
 
 from can_config import (
+    api_interface_error,
     bitrate_env_value,
     bitrate_from_env,
     fd_data_bitrates,
@@ -233,3 +234,24 @@ class TestSocketcanSupportsFd:
 
     def test_missing_interface(self, sysfs):
         assert not socketcan_supports_fd("can9", sysfs)
+
+
+class TestApiInterfaces:
+    """A request opened any python-can interface and channel: a terminal device was written to (F-029)."""
+
+    @pytest.mark.parametrize("iface", ["can0", "socketcan:vcan0", "pcan:PCAN_USBBUS1", "kvaser:0", "gs_usb:0",
+                                       "slcan:COM5@115200", "slcan:/dev/ttyACM0", "slcan:/dev/ttyUSB1",
+                                       "slcan:/dev/serial/by-id/usb-CANable_2.0-if00", "slcan:/dev/cu.usbmodem14101",
+                                       "sim:classic", "virtual:test"])
+    def test_the_adapters_cynitor_knows_may_be_opened(self, iface):
+        assert api_interface_error(iface) is None
+
+    @pytest.mark.parametrize("iface, says", [
+        ("udp_multicast:239.74.163.2", "--allow-any-interface"),
+        ("serial:/dev/pts/3", "--allow-any-interface"),
+        ("slcan:/dev/pts/3", "not a serial port name"),
+        ("slcan:/dev/tty1", "not a serial port name"),
+        ("slcan:/etc/passwd", "not a serial port name"),
+    ])
+    def test_others_are_refused_and_why(self, iface, says):
+        assert says in api_interface_error(iface)

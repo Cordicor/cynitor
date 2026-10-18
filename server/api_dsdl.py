@@ -6,8 +6,10 @@ import asyncio
 
 from aiohttp import web
 
+from api_helpers import ApiHandlers
 
-class DsdlApi:
+
+class DsdlApi(ApiHandlers):
     """The dsdl part of WebSocketServer, which has the session and the rest these use."""
 
     async def _dsdl_status(self, request: web.Request) -> web.Response:

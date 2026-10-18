@@ -403,7 +403,9 @@ class TestDataFolderLayout:
     def test_saved_types_land_in_the_data_folder(self, project_root, data_dir):
         mgr = DsdlManager(project_root, data_dir=data_dir)
         result = mgr.save_type("myapp", "Reading", "1.0", "uint8 x\n@sealed\n")
-        assert Path(result["path"]).parent == data_dir / "dsdl" / "custom" / "myapp"
+        assert (data_dir / "dsdl" / "custom" / "myapp" / "Reading.1.0.dsdl").is_file()
+        # The reply names it within the custom types, not where the server keeps them (F-019).
+        assert result["path"] == "myapp/Reading.1.0.dsdl"
 
     def test_earlier_custom_types_are_copied_not_moved(self, project_root, data_dir):
         # In a source checkout they may be under version control.

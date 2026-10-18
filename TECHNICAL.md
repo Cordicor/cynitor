@@ -70,7 +70,7 @@ EventLogger.start()        SQLite persistence
 | `telemetry_manager.py` | Event router: maintains `latest_by_subject` and `latest_by_node` caches, broadcasts to subscriber queues |
 | `websocket_server.py` | aiohttp HTTP+WS server, REST endpoints, per-client WebSocket filtering, periodic metrics broadcast, node history and service call history endpoints; also serves `website/` so one binary hosts both the API and the dashboard; refuses API and event-stream requests from browser pages of other sites (`_browser_request_allowed`) |
 | `api_*.py` | The REST API's handlers, a module a part of the API, each a class `WebSocketServer` inherits: `api_can.py` (status, adapters, connect and disconnect, transport diagnostics), `api_rawlogs.py`, `api_testnodes.py`, `api_firmware.py`, `api_nodes.py` (nodes, latest messages, subject types, services, registers, history, identities), `api_recordings.py` (recordings, their export and replay), `api_dsdl.py`; `api_helpers.py` has what they share. Every route is still listed in one place, `websocket_server.py:_setup_routes`, and they log under one name, `websocket_server` |
-| `event_logger.py` | SQLite persistence with batch writes, `asyncio.to_thread` for non-blocking I/O, configurable retention, node lifecycle history (30-day), service call history with response bodies |
+| `event_logger.py` | SQLite persistence with batch writes, `asyncio.to_thread` for non-blocking I/O, configurable retention, node lifecycle history (30-day), service call history with response bodies; the layout's version in SQLite's `user_version` (a newer one is warned of) |
 | `allocator.py` | Cynitor's plug-and-play node-ID allocator (`NodeIdAllocator`), off unless asked for. Runs on the scanner's node, so it takes no node-ID of its own; gives a node-ID no node has used on the bus in the session (`CANSession._node_ids_seen`), the same one to a node that asks again; its table lasts for the session; answers no more once another allocator answers a request |
 | `cpu_load.py` | The server's own CPU use (`ProcessCpu`, from `time.process_time`), sent in the `metrics` message and `/api/status` for the dashboard to show |
 | `transfer_rates.py` | Message rates from CAN frames (`TransferRates`): each transfer's last frame is counted by the subject-ID and node-ID in its CAN ID, on the thread the frames come on (a hub listener, or a SocketCAN tap the kernel passes message frames only). Used while decoding on demand (`CANSession.set_decode_on_demand`), when the scanner listens only to the subjects watched or recorded (`ScannerNode.set_decoding`) and reports the others' rates as `undecoded` events |
@@ -106,7 +106,7 @@ EventLogger.start()        SQLite persistence
                   prepare_runtime then publishes UAVCAN__CAN__MTU=64 and "<bitrate> <data-bitrate>". SocketCAN
                   ignores it: its MTU follows the interface (72 in sysfs means CAN FD).
 --recompile       Force `nnvg` to regenerate Python from DSDL even if outputs exist.
---bind <host>     Host/IP to bind the HTTP server to (default 127.0.0.1; use 0.0.0.0 to expose on the network).
+--bind <host>     Host/IP to bind the HTTP server to (default 127.0.0.1; 0.0.0.0 exposes it on the network, which needs CYNITOR_AUTH_TOKEN or --insecure-no-auth).
 --port <n>        TCP port to listen on (default 8080).
 --data-dir <dir>  Folder for the databases (default: CYNITOR_DATA_DIR, else the per-user data folder; see data_dir.py).
 --version         Print the version and exit.
@@ -185,13 +185,14 @@ Page load → loadSettings() → bind() → updateSemaphores()
 
 The frontend never blocks on a single source. WebSocket is for live events; REST is for structural snapshots and connection metadata.
 
-Seven views share the same WebSocket and REST data:
+Eight views share the same WebSocket and REST data:
 - **Nodes view** — Tabulator table of nodes (with ghost rows, pinned to the bottom, for devices remembered from before that hold no node-ID now; Hide offline in its strip leaves every offline row out), detail panel below with tabs (Publishers, Subscribers, Servers, Clients, Registers, History).
 - **Subjects view** — Tabulator table of all subjects and services across the network. Services can be expanded inline with a node selector and request form. Both views use `services-panel.js` for service interaction but maintain isolated state via the `forSubjects` parameter pattern.
 - **Graph view** — D3 force-directed graph showing device nodes (circles) and subject nodes (diamonds) with directional pub/sub links and animated live-traffic indicators. Three view modes (nodes only / node-centric / subject-centric), drag-to-pin with persistent positions, zoom/pan, adjacency highlighting, hide-system / hide-offline / per-node-or-subject hide with a restore badge, inline device rename, gravity bias by total links / channels / rate / payload.
 - **Compare view** — independent graphs for side-by-side multi-series comparison.
 - **DSDL view** — namespace tree of loaded types with bus-activity badges, custom-type editor.
 - **Record view** — capture filtered events into per-recording SQLite stores with limits.
+- **Test nodes view** — Cyphal nodes of the user's own on the bus, each with publishers of any compiled type.
 - **Debug view** — the bus's health and transport diagnostics, and a raw CAN frame monitor (Trace, By ID).
 
 Independent of the views, the **Right log panel** (toggled from the right edge) is a unified timeline of Cyphal diagnostic messages, user-picked text subjects, and the backend's `/api/logs` stream.
@@ -332,7 +333,6 @@ cynitor/
   README.md                 User-facing intro
   TECHNICAL.md              This file
   WEBSOCKET_README.md       API contract reference
-  CLAUDE.md                 Project instructions for Claude Code
 ```
 
 ## Extending
@@ -421,7 +421,10 @@ The result is `packaging\dist\cynitor-server.exe`.
 The version lives in exactly one place, `server/version.py`, and the binary
 reports it with `--version`.
 
-To cut a release, bump that version first, then tag to match:
+Between releases it carries a `.dev0` suffix (`1.4.0.dev0` after 1.3.0), so a
+build from `dev` never reads as the release before it; the update check sorts
+it just below its release. To cut a release, drop the suffix first, then tag
+to match, and after the release set the next `.dev0`:
 
 ```bash
 # edit server/version.py -> __version__ = "0.8.0"

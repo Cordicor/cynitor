@@ -217,6 +217,46 @@ INGEST_DIAGNOSTIC = """([ago, severity, text]) => ingestLogEvent({
     attributes: [{attribute: 'severity', value: severity}, {attribute: 'text', value: text}]})"""
 
 
+@test("Cards: a diagnostic's severity by name, as the log panel names it, and a zero timestamp as unknown")
+async def _(page):
+    card = await page.evaluate("""() => {
+        const div = document.createElement('div');
+        div.innerHTML = renderSubjectTable('Publishers', [{subjectId: 8184, messageType: 'uavcan.diagnostic.Record.1.1',
+            rate: 0.3, attributes: [{attribute: 'timestamp', value: 0, unit: 'microsecond'},
+                                    {attribute: 'severity', value: 3}, {attribute: 'text', value: 'hi'}]}]);
+        const other = document.createElement('div');
+        other.innerHTML = renderSubjectTable('Publishers', [{subjectId: 1300, messageType: 'ns.Status.1.0', rate: 1,
+            attributes: [{attribute: 'severity', value: 3}, {attribute: 'timestamp', value: 5, unit: 'microsecond'}]}]);
+        const text = (d) => [...d.querySelectorAll('.metric')].map((m) =>
+            [m.querySelector('.metric-key').textContent, m.querySelector('.metric-val-text').textContent,
+             m.querySelector('.metric-val').title]);
+        return [text(div), text(other)];
+    }""")
+    assert card == [[["timestamp", "unknown", "0"], ["severity", "NOTICE", "3"], ["text", "hi", "hi"]],
+                    [["severity", "3", "3"], ["timestamp", "5", "5"]]], f"Cards: {card}"
+
+
+@test("History: Cynitor's register writes and firmware updates are rows of the node's history")
+async def _(page):
+    rows = await page.evaluate("""() => {
+        const div = document.createElement('div');
+        div.innerHTML = renderHistoryTimeline([
+            {timestamp_unix: Date.now() / 1000, event_type: 'register_write',
+             detail: {name: 'cordicor.test.bits', value: '1 0 1', read_back: 'true, false, true', status: 'ok'}},
+            {timestamp_unix: Date.now() / 1000, event_type: 'register_write',
+             detail: {name: 'limit', value: '<b>5</b>', status: 'timeout'}},
+            {timestamp_unix: Date.now() / 1000, event_type: 'register_write',
+             detail: {name: 'gain', value: '5', status: 'not_applied'}},
+            {timestamp_unix: Date.now() / 1000, event_type: 'firmware_update', detail: {file: 'motor-1.2.app.bin'}}]);
+        return [...div.querySelectorAll('.hist-row')].map((r) =>
+            [r.querySelector('.hist-badge').textContent, r.querySelector('.hist-detail').textContent]);
+    }""")
+    assert rows == [["Register write", "cordicor.test.bits = 1 0 1 · read back true, false, true"],
+                    ["Register write", "limit = <b>5</b> · no answer"],
+                    ["Register write", "gain = 5 · not taken by the node"],
+                    ["Firmware update", "from motor-1.2.app.bin"]], f"Rows: {rows}"
+
+
 @test("Log panel shows diagnostics' severity, in time order")
 async def _(page):
     await open_log_panel(page)
@@ -805,6 +845,28 @@ async def _(page):
         await page.locator('.detail-tab[data-tab="publishers"]').click()
 
 
+@test("Cards: a node's card shows its own message, not another publisher's of the subject")
+async def _(page):
+    # On a subject several nodes publish, the card showed whichever's came last
+    # until the node's own arrived (audit F-043).
+    shown = await page.evaluate("""() => {
+        const saved = [new Map(state.latestByNode), new Map(state.latestBySubject)];
+        const other = {subject_id: 7510, publisher_node_id: 100, timestamp_unix: Date.now() / 1000, rate: 1,
+                       message_type: 'List_1_0', attributes: [{attribute: 'servers', value: [3333]}]};
+        state.latestBySubject.set(7510, other);
+        state.latestByNode.set(100, new Map([[7510, other]]));
+        state.latestByNode.set(21, new Map());
+        const before = buildSubjectDetailData([7510], 21)[0];
+        const own = {...other, publisher_node_id: 21, attributes: [{attribute: 'servers', value: [430]}]};
+        state.latestByNode.get(21).set(7510, own);
+        const after = buildSubjectDetailData([7510], 21)[0];
+        const subscriber = buildSubjectDetailData([7510], null)[0];
+        state.latestByNode = saved[0]; state.latestBySubject = saved[1];
+        return [before.attributes, before.messageType, after.attributes[0].value, subscriber.attributes[0].value];
+    }""")
+    assert shown == [[], "uavcan.node.port.List.1.0", [430], [3333]], f"Cards: {shown}"
+
+
 @test("Tables: offline nodes that lost their node-ID stay last; health sorts by severity")
 async def _(page):
     ids = "nodesTabulator.getRows('active').map(r => r.getData().id)"
@@ -962,7 +1024,7 @@ async def _(page):
 
     await page.route("**/api/identity/*", identity)
     try:
-        await page.locator(f"#nodesTable .tabulator-row", has_text="old_sensor").locator(
+        await page.locator("#nodesTable .tabulator-row", has_text="old_sensor").locator(
             '.tabulator-cell[tabulator-field="name"]').dblclick()
         await page.locator(".name-input").fill("bench sensor")
         await page.keyboard.press("Enter")
@@ -5647,6 +5709,9 @@ class _SidebarServer:
         self.token = None          # the CYNITOR_AUTH_TOKEN it wants, if any
         self.connect_delay = 0     # seconds a CAN connect takes
         self.bus_errors = None     # what it says of errors on the bus, while connected
+        self.update = None         # a newer release its update check found
+        self.history_error = None  # why its database cannot be written, while connected
+        self.listen_only = False   # whether the session it runs sends nothing
         self.connect_body = None   # what the last CAN connect asked for
         self.allocator = None      # what it says of its node-ID allocator, while it runs one
         self.decode_on_demand = False  # whether it decodes only what is watched or recorded
@@ -5671,7 +5736,10 @@ class _SidebarServer:
                       "last_error": self.last_error, "cyphal_v11": None,
                       "bus_errors": self.bus_errors if self.can else None,
                       "allocator": self.allocator if self.can else None,
-                      "decode_on_demand": self.decode_on_demand}
+                      "decode_on_demand": self.decode_on_demand, "update": self.update,
+                      "history_error": self.history_error if self.can else None,
+                      "listen_only": bool(self.can) and self.listen_only,
+                      "own_node_id": None if not self.can or self.listen_only else 127}
         elif path == "/api/decoding" and self.decoding_error:
             await route.fulfill(json={"error": self.decoding_error}, status=500,
                                 headers={"Access-Control-Allow-Origin": "*"})
@@ -5689,7 +5757,9 @@ class _SidebarServer:
             self.can = self.connect_body["interface"]
             # As the backend: its allocator runs only in a session asked to run it.
             self.allocator = {"other_allocator": None, "allocated": 0} if self.connect_body.get("allocator") else None
-            answer = {"status": "running", "can_interface": self.can, "can_fd": False, "allocator": self.allocator}
+            self.listen_only = self.connect_body.get("listen_only") is True
+            answer = {"status": "running", "can_interface": self.can, "can_fd": False, "allocator": self.allocator,
+                      "listen_only": self.listen_only}
         elif path == "/api/can/disconnect":
             self.can, self.allocator, answer = None, None, {"status": "idle"}
         elif path == "/api/nodes" and self.can:
@@ -5798,6 +5868,81 @@ async def _(page):
         assert "120 Ω at each end" in title and "TX 0, RX 128" in title, f"Its title: {title}"
         assert (during, after) == ("semaphore warn", "semaphore ok"), f"The dot with errors, then without: {during}, {after}"
     finally:
+        await sidebar_close(page, server)
+
+
+@test("Sidebar: a newer release the server found is a link by the version, to its release page")
+async def _(page):
+    server = _SidebarServer()
+    page_url = "https://github.com/OpenCyphal-Garage/cynitor/releases/tag/v9.1.0"
+    await sidebar_open(page, server)
+    try:
+        await page.locator("#connectDashboardBtn").click()
+        await page.wait_for_function("state.dashboardConnected", timeout=WAIT_MS)
+        none = await page.locator("#versionTag .version-update").count()
+        server.update = {"version": "9.1.0", "url": page_url}
+        await page.evaluate("pollStatus()")
+        link = page.locator("#versionTag .version-update")
+        await link.wait_for(state="visible", timeout=WAIT_MS)
+        found = (await link.inner_text(), await link.get_attribute("href"), await link.get_attribute("target"))
+        if os.environ.get("CYNITOR_E2E_SHOTS"):  # a folder to see the footer in
+            await page.locator(".sidebar-footer").screenshot(path=os.path.join(os.environ["CYNITOR_E2E_SHOTS"], "version-update.png"))
+        server.update = {"version": "9.2.0", "url": "https://example.com/x"}  # only the project's own release pages
+        await page.evaluate("pollStatus()")
+        foreign = await link.count()
+        assert (none, found, foreign) == (0, ("v9.1.0 available", page_url, "_blank"), 0), \
+            f"Before: {none}; found: {found}; a link off the project: {foreign}"
+    finally:
+        server.update = None
+        await page.evaluate("state.update = null; renderVersionTag()")
+        await sidebar_close(page, server)
+
+
+@test("Sidebar: transmit errors alone say no other node acknowledges, not to check termination")
+async def _(page):
+    server = _SidebarServer()
+    await sidebar_open(page, server)
+    try:
+        await page.locator("#connectDashboardBtn").click()
+        await page.wait_for_function("state.dashboardConnected", timeout=WAIT_MS)
+        await page.locator("#connectCanBtn").click()
+        await page.wait_for_function("state.canState === 'connected'", timeout=WAIT_MS)
+        # The node unplugged: Cynitor alone, its frames unacknowledged (audit E8-18).
+        server.bus_errors = {"state": "ERROR-PASSIVE", "tx_errors": 128, "rx_errors": 0, "since_unix": time.time()}
+        await page.evaluate("pollStatus()")
+        hint = page.locator("#canBusNotice .can-bus-notice-hint")
+        await hint.wait_for(state="visible", timeout=WAIT_MS)
+        text = await hint.inner_text()
+        assert text == "No other node acknowledges: check the bus is connected and a node is powered", f"Hint: {text}"
+    finally:
+        server.bus_errors = None
+        await sidebar_close(page, server)
+
+
+@test("Sidebar: a problem the backend reports while connected shows under the CAN form, and goes with it")
+async def _(page):
+    server = _SidebarServer()
+    await sidebar_open(page, server)
+    try:
+        await page.locator("#connectDashboardBtn").click()
+        await page.wait_for_function("state.dashboardConnected", timeout=WAIT_MS)
+        await page.locator("#connectCanBtn").click()
+        await page.wait_for_function("state.canState === 'connected'", timeout=WAIT_MS)
+        server.last_error = "Another node uses Cynitor's own node-ID 127"
+        await page.evaluate("pollStatus()")
+        shown = await page.evaluate(SIDEBAR_CAN_ERROR)
+        server.last_error = None
+        await page.evaluate("pollStatus()")
+        gone = await page.evaluate(SIDEBAR_CAN_ERROR)
+        server.history_error = "disk I/O error"  # a full disk
+        await page.evaluate("pollStatus()")
+        unsaved = await page.evaluate(SIDEBAR_CAN_ERROR)
+        server.history_error = None
+        assert (shown, gone, unsaved) == ("Another node uses Cynitor's own node-ID 127", None,
+                                          "History and recordings are not being saved: disk I/O error"), \
+            f"Shown: {shown!r}; then: {gone!r}; with the disk full: {unsaved!r}"
+    finally:
+        server.last_error = server.history_error = None
         await sidebar_close(page, server)
 
 
@@ -6196,6 +6341,69 @@ async def _(page):
         assert kept == (True, True), f"After a reload, the choice and the box: {kept}"
     finally:
         await page.evaluate("state.canAllocator = false; _writeSettingsNow()")  # off again for the tests after
+        await sidebar_close(page, server)
+
+
+@test("Sidebar: the CAN line says which node-ID Cynitor is, or that it only listens")
+async def _(page):
+    server = _SidebarServer()
+    await sidebar_open(page, server)
+    try:
+        await page.locator("#connectDashboardBtn").click()
+        await page.wait_for_function("state.dashboardConnected", timeout=WAIT_MS)
+        await sidebar_connect_can(page)
+        await page.evaluate("pollStatus()")
+        await page.wait_for_function("el('canUtilization').textContent.includes('as node 127')", timeout=WAIT_MS)
+        await sidebar_disconnect_can(page)
+        await page.locator("#canListenOnlyToggle").check()
+        await sidebar_connect_can(page)
+        await page.evaluate("pollStatus()")
+        await page.wait_for_function("el('canUtilization').textContent.includes('listening only')", timeout=WAIT_MS)
+    finally:
+        await page.evaluate("state.canListenOnly = false; _writeSettingsNow()")
+        await sidebar_close(page, server)
+
+
+@test("Confirmations name the device: node-ID, name, the end of its unique-ID and the bus")
+async def _(page):
+    text = await page.evaluate("""() => {
+        const saved = [state.latestNodesPayload, state.preferredCanInterface];
+        state.latestNodesPayload = {nodes: {'21': {node_id: 21, name: 'org.example.esc',
+                                                   unique_id: '0123456789abcdef0123456789abcdef'}}};
+        state.preferredCanInterface = 'can0';
+        const out = NODE_COMMANDS[0].question(21);
+        [state.latestNodesPayload, state.preferredCanInterface] = saved;
+        return out;
+    }""")
+    assert text == 'Restart node 21, "org.example.esc", unique-ID …89abcdef, on can0?', f"Question: {text}"
+
+
+@test("Sidebar: Listen only connects sending nothing; while it runs the box says so, and the choice is kept")
+async def _(page):
+    server = _SidebarServer()
+    await sidebar_open(page, server)
+    row, box = page.locator("#canListenOnlyRow"), page.locator("#canListenOnlyToggle")
+    try:
+        await page.locator("#connectDashboardBtn").click()
+        await page.wait_for_function("state.dashboardConnected", timeout=WAIT_MS)
+        offered = (await row.is_visible(), await box.is_checked(), await box.is_enabled())
+        await sidebar_connect_can(page)
+        unticked = (server.connect_body.get("listen_only"), await row.is_hidden())
+        await sidebar_disconnect_can(page)
+        await box.check()
+        await sidebar_connect_can(page)
+        running = (server.connect_body.get("listen_only"), await row.is_visible(), await box.is_checked(),
+                   await box.is_disabled(), "sends nothing" in (await row.get_attribute("title")))
+        await sidebar_disconnect_can(page)
+        await page.evaluate("_writeSettingsNow()")
+        await page.reload(wait_until="load")
+        kept = (await page.evaluate("state.canListenOnly"), await box.is_checked())
+        assert offered == (True, False, True), f"Before connecting, the box shown, ticked, enabled: {offered}"
+        assert unticked == (False, True), f"Unticked, Connect sent listen_only false and the box hides: {unticked}"
+        assert running == (True, True, True, True, True), f"Ticked, connected listening only: {running}"
+        assert kept == (True, True), f"After a reload, the choice and the box: {kept}"
+    finally:
+        await page.evaluate("state.canListenOnly = false; _writeSettingsNow()")
         await sidebar_close(page, server)
 
 

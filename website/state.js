@@ -32,6 +32,9 @@ const state = {
   // The connect form's choice: have Cynitor give plug-and-play nodes their
   // node-IDs. Off unless ticked: a bus may have one allocator only.
   canAllocator: false,
+  canListenOnly: false,  // connect sending nothing (the connect form's Listen only)
+  listenOnly: false,     // whether the session that runs sends nothing, from /api/status
+  ownNodeId: null,       // Cynitor's own node-ID on the bus, from /api/status
   // Cynitor's allocator in the CAN session connected to (GET /api/status
   // allocator): {other_allocator, allocated}, or null while it runs none.
   allocatorStatus: null,
@@ -69,6 +72,7 @@ const state = {
   _watchedSent: null,  // the subjects last told to the server as watched, as sent; null: none yet
   lastWsMessageMs: 0,
   busUtilization: null,
+  update: null,          // a newer release, {version, url}, from /api/status
   droppedEvents: null,   // {scanner, logger, clients} from /api/status, null when not on CAN
   busLoadHistory: [],
   _busFullArmed: true,
@@ -217,6 +221,17 @@ const upgradeStableKeys = () => {
 const getNodeAlias = (uid) => {
   const key = uniqueIdKey(uid);
   return key ? state.nodeAliases[key] || null : null;
+};
+
+// A node as a confirmation names it: node-ID, name, the end of its unique-ID
+// and the bus, so that a command goes to the device meant, not one that took
+// its node-ID meanwhile.
+const describeNode = (nodeId) => {
+  const node = state.latestNodesPayload?.nodes?.[String(nodeId)];
+  const name = getNodeAlias(node?.unique_id) || node?.name;
+  const uid = uniqueIdKey(node?.unique_id);
+  return [`node ${nodeId}`, name && `"${name}"`, uid && `unique-ID …${uid.slice(-8)}`,
+    state.preferredCanInterface && `on ${state.preferredCanInterface}`].filter(Boolean).join(', ');
 };
 
 const setNodeAlias = (uid, alias) => {
@@ -798,6 +813,7 @@ const _writeSettingsNow = () => {
     canBitrates: state.canBitrates,
     canDataBitrates: state.canDataBitrates,
     canAllocator: state.canAllocator,
+    canListenOnly: state.canListenOnly,
     customCanSpec: state.customCanSpec,
     // A session being restored or reconnected is still the user's: a reload meanwhile goes on with it.
     dashboardConnected: state.dashboardConnected || Boolean(state.dashboardRetry || state.pendingReconnect),
@@ -943,6 +959,7 @@ const loadSettings = () => {
     state.canDataBitrates = settings.canDataBitrates;
   }
   state.canAllocator = settings.canAllocator === true;
+  state.canListenOnly = settings.canListenOnly === true;
   if (typeof settings.customCanSpec === 'string') {
     state.customCanSpec = settings.customCanSpec;
     el('canSpecInput').value = settings.customCanSpec;

@@ -7,13 +7,13 @@ from typing import Optional
 
 from aiohttp import web
 
-from api_helpers import MAX_SUBJECT_ID
+from api_helpers import ApiHandlers, MAX_SUBJECT_ID
 from testnodes import (HEALTH, MAX_NODE_ID as MAX_TEST_NODE_ID, MAX_PUBLISHERS, MAX_RATE_HZ, MAX_TEST_NODES,
                        MAX_TOTAL_RATE_HZ, MIN_NODE_ID as MIN_TEST_NODE_ID, MIN_RATE_HZ, MODES, WAVES,
                        ConfirmationRequired, UnknownTestNode, normalize_definition, value_schema)
 
 
-class TestNodesApi:
+class TestNodesApi(ApiHandlers):
     """The testnodes part of WebSocketServer, which has the session and the rest these use."""
 
     _TEST_NODE_OPTIONS = {
@@ -52,12 +52,15 @@ class TestNodesApi:
         test_id = request.match_info["test_id"]
 
         async def delete() -> dict:
+            unique_id = self.session.test_nodes.view(test_id).get("unique_id")
             await self.session.test_nodes.delete(test_id)
+            await self._forget_device(unique_id)  # else it stays as an offline device for good
             return {"deleted": test_id}
         return await self._test_node_action(delete())
 
     async def _start_test_node(self, request: web.Request) -> web.Response:
-        body, err = {}, None
+        body: dict = {}
+        err: Optional[web.Response] = None
         if request.can_read_body:
             body, err = await self._read_json_body(request)
         if err:

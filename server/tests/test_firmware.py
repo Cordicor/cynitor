@@ -1,6 +1,5 @@
 """Firmware updates: the file server's reads, the session's update command, the REST API."""
 
-from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -119,6 +118,17 @@ class TestApi:
         assert (await client.delete("/api/firmware/new-2.0.bin")).status == 200
         assert (await client.delete("/api/firmware/new-2.0.bin")).status == 404
 
+    async def test_the_folder_has_a_quota(self, api):
+        # Files of 32 MiB each were kept without limit (F-035).
+        client, session = api
+        held = sum(f.stat().st_size for f in session.firmware_folder.iterdir() if f.is_file())
+        with patch("api_firmware.MAX_FIRMWARE_FOLDER_BYTES", held + 10):
+            assert (await client.post("/api/firmware?name=a.bin", data=b"123456")).status == 201
+            assert (await client.post("/api/firmware?name=a.bin", data=b"1234567")).status == 201  # replaces itself
+            full = await client.post("/api/firmware?name=b.bin", data=b"12345")
+        assert full.status == 413 and "delete one first" in (await full.json())["error"]
+        assert not (session.firmware_folder / "b.bin").exists()
+
     async def test_upload_refusals(self, api):
         client, session = api
         assert (await client.post("/api/firmware?name=../x.bin", data=b"x")).status == 400
@@ -133,6 +143,16 @@ class TestApi:
         resp = await client.post("/api/nodes/42/firmware", json={"file": "motor-1.2.app.bin"})
         assert resp.status == 200
         session.begin_firmware_update.assert_awaited_once_with(42, "motor-1.2.app.bin")
+
+    async def test_an_update_is_written_to_the_nodes_history(self, api):
+        # A re-flash left no record that Cynitor did it (F-024).
+        client, session = api
+        session.begin_firmware_update = AsyncMock(return_value={"state": "requested"})
+        session.event_logger = MagicMock(log_node_event=AsyncMock())
+        session.scanner._get_node_unique_id_hex = lambda node_id: "ab" * 16
+        await client.post("/api/nodes/42/firmware", json={"file": "motor-1.2.app.bin"})
+        session.event_logger.log_node_event.assert_awaited_once_with(
+            42, "firmware_update", {"file": "motor-1.2.app.bin"}, unique_id="ab" * 16)
 
     @pytest.mark.parametrize("error, status", [
         (FileNotFoundError("x"), 404), (TimeoutError("x"), 504), (RuntimeError("x"), 409),

@@ -461,6 +461,22 @@ class TestNodeIdIsPickedForEachBus:
         await session.disconnect()
         assert os.environ["UAVCAN__NODE__ID"] == "7"
 
+    @pytest.mark.parametrize("set_by_user", [None, "7"])
+    async def test_listening_only_runs_anonymously_and_restores_the_users_node_id(self, hubs, monkeypatch, set_by_user):
+        # F-032: a session that sends nothing has no node-ID; pycyphal takes one
+        # out of range for none. A node-ID the user set is theirs again after.
+        import os
+        import main
+        if set_by_user is None:
+            monkeypatch.delenv("UAVCAN__NODE__ID")
+        else:
+            monkeypatch.setenv("UAVCAN__NODE__ID", set_by_user)
+        session = main.CANSession()
+        await session._pick_node_id("socketcan:vcan0", listen_only=True)
+        during = os.environ["UAVCAN__NODE__ID"]
+        await session.disconnect()
+        assert (during, os.environ.get("UAVCAN__NODE__ID")) == ("65535", set_by_user)
+
     def test_another_node_on_cynitors_node_id_is_said_in_last_error(self):
         import main
         session = main.CANSession()
@@ -804,3 +820,28 @@ class TestEventLogger:
             assert first is second is s.event_logger
         finally:
             await first.stop()
+
+
+class TestKeepAttached:
+    """--reconnect: the --can bus is attached again after it is lost (F-037)."""
+
+    async def test_attaches_again_with_back_off_until_the_operator_disconnects(self, monkeypatch):
+        import main
+        waits = []
+
+        async def no_wait(seconds):
+            waits.append(seconds)
+        monkeypatch.setattr(main.asyncio, "sleep", no_wait)
+        session = main.CANSession()
+        session.wanted_can = "can0"
+        tries = []
+
+        async def connect(iface, force_compile=False):
+            tries.append(iface)
+            if len(tries) < 3:
+                raise OSError("No such device")
+            session.wanted_can = None  # then the operator disconnects: the loop ends
+        session.connect = connect
+        await main._keep_attached(session, "can0")
+        assert tries == ["can0"] * 3 and waits == [5, 10, 20]
+

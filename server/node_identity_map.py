@@ -54,8 +54,8 @@ class NodeIdentityMap:
 
         return None
 
-    def get_uid(self, node_id: int) -> Optional[str]:
-        return self._nid_to_uid.get(node_id)
+    def get_uid(self, node_id: Optional[int]) -> Optional[str]:
+        return None if node_id is None else self._nid_to_uid.get(node_id)
 
     def get_nid(self, unique_id_hex: str) -> Optional[int]:
         return self._uid_to_nid.get(unique_id_hex)
@@ -107,7 +107,7 @@ class NodeIdentityMap:
             current_nid = self._uid_to_nid.get(uid)
             if current_nid is not None and current_nid in live_node_ids:
                 continue
-            entry = {
+            entry: dict = {
                 "unique_id_hex": uid,
                 "name": self._node_names.get(uid),
                 "last_seen": self._last_seen.get(uid),

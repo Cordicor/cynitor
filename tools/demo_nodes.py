@@ -51,15 +51,28 @@ def transport_factory(iface: str, fd: bool) -> demo_devices.MakeTransport:
     return make_transport
 
 
+def _socketcan_mtu(iface: str):
+    """The MTU of SocketCAN interface ``iface`` (72 for CAN FD, 16 for Classic), or None off Linux or if absent."""
+    try:
+        return int(Path(f"/sys/class/net/{iface}/mtu").read_text())
+    except (OSError, ValueError):
+        return None
+
+
 async def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, epilog=demo_devices.__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--iface", default="vcan0", help="SocketCAN name, or a pycyphal spec (default vcan0)")
-    parser.add_argument("--fd", action="store_true", help="run Cyphal/CAN FD (MTU 64)")
+    parser.add_argument("--fd", action="store_true",
+                        help="run Cyphal/CAN FD (MTU 64); on a SocketCAN interface set up for CAN FD it does anyway")
     parser.add_argument("--conflict", action="store_true", help="add a second node on the same node-ID")
     parser.add_argument("--node-id", type=int, default=demo_devices.DEFAULT_NODE_ID, choices=range(1, 126),
                         metavar="1..125", help=f"the node-ID to run on (default {demo_devices.DEFAULT_NODE_ID})")
     args = parser.parse_args()
+    # Cynitor runs CAN FD on a CAN FD interface (a new vcan is one on current
+    # kernels): a Classic demo there would hear none of its requests.
+    if not args.fd and ":" not in args.iface and _socketcan_mtu(args.iface) == 72:
+        args.fd = True
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     logging.getLogger("pycyphal").setLevel(logging.WARNING)
     print(f"Demo nodes on {args.iface}{' (CAN FD)' if args.fd else ''}", flush=True)

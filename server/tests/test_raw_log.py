@@ -1,6 +1,7 @@
 """Tests for raw CAN logs: the candump file, the session's start/stop, and /api/rawlogs."""
 
 import datetime
+import json
 import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
@@ -58,6 +59,36 @@ class TestRawLogFile:
         log.write(_frames()[0])
         assert log.error == "No space left on device" and log._writer is None
         assert log.status()["error"] == "No space left on device"
+
+    def test_a_close_that_fails_too_does_not_escape(self, tmp_path):
+        # On a full disk, closing flushes and fails as well; that raised into the
+        # thread that handed the frame over, and behind the hub ended it (F-027).
+        log = RawLog(tmp_path / "cynitor-20260928-120000.log", channel="can0")
+        log._writer.on_message_received = MagicMock(side_effect=OSError("No space left on device"))
+        log._writer.stop = MagicMock(side_effect=OSError("No space left on device (flush)"))
+        log.write(_frames()[0])
+        log.write(_frames()[1])
+        assert log.error == "No space left on device" and log._writer is None
+
+    def test_stops_at_the_size_limit(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(RawLog, "MAX_BYTES", 200)
+        monkeypatch.setattr(RawLog, "CHECK_EVERY_FRAMES", 1)
+        log = RawLog(tmp_path / "cynitor-20260928-120000.log", channel="can0")
+        for _ in range(20):
+            log.write(_frames()[0])
+        log.close()
+        assert log.error and "Size limit" in log.error
+        assert log.frames < 20
+
+    def test_stops_when_the_disk_runs_low(self, tmp_path, monkeypatch):
+        import raw_log
+        monkeypatch.setattr(RawLog, "CHECK_EVERY_FRAMES", 2)
+        monkeypatch.setattr(raw_log.shutil, "disk_usage", lambda _: SimpleNamespace(free=10 * 2**20))
+        log = RawLog(tmp_path / "cynitor-20260928-120000.log", channel="can0")
+        for _ in range(5):
+            log.write(_frames()[0])
+        assert log.frames == 2 and log._writer is None
+        assert "MiB free" in log.error
 
 
 class TestNames:
@@ -128,6 +159,13 @@ class TestSessionRawLog:
 
     def test_stop_without_a_log(self, running_session):
         assert running_session.stop_raw_log() is None
+
+    def test_refused_when_the_disk_is_low(self, running_session, monkeypatch):
+        import raw_log
+        monkeypatch.setattr(raw_log.shutil, "disk_usage", lambda _: SimpleNamespace(free=0))
+        with pytest.raises(RuntimeError, match="MiB free"):
+            running_session.start_raw_log()
+        assert running_session.raw_log is None
 
 
 @pytest.fixture
@@ -266,6 +304,18 @@ class TestSidecar:
 
     def test_missing_sidecar_reads_empty(self, tmp_path):
         assert read_sidecar(_log_with(tmp_path, [_heartbeat(50, 0)])) == {}
+
+    @pytest.mark.parametrize("written, kept", [
+        # A "publishers" that is no object left a session that never played (F-048).
+        ({"publishers": ["oops"], "names": {"50": "x"}}, {"publishers": {}, "names": {"50": "x"}}),
+        ({"publishers": {"50": {"1620": 7, "1621": "T_1_0"}, "x": {}}}, {"publishers": {"50": {"1621": "T_1_0"}}}),
+        ({"bitrate": "fast", "fd": "yes", "own_node_id": -3, "data_bitrate": 2000000}, {"data_bitrate": 2000000}),
+        (["a", "list"], {}),
+    ])
+    def test_what_does_not_fit_is_left_out(self, tmp_path, written, kept):
+        path = _log_with(tmp_path, [_heartbeat(50, 0)])
+        sidecar_path(path).write_text(json.dumps(written))
+        assert read_sidecar(path) == kept
 
     def test_fd_frames_detected(self, tmp_path):
         classic = _log_with(tmp_path, [_heartbeat(50, 0)])

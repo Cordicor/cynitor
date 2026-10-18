@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import logging
+import re
 import threading
 import traceback
 from collections import deque
@@ -85,6 +86,21 @@ class InMemoryLogStore:
         if parsed.tzinfo is None:
             parsed = parsed.replace(tzinfo=timezone.utc)
         return parsed.astimezone(timezone.utc).isoformat(timespec="microseconds")
+
+
+# A token in a URL (the dashboard sends ?token= for its WebSocket and
+# downloads), up to the end of its query parameter.
+_TOKEN_IN_URL = re.compile(r"([?&]token=)[^&\s\"']+")
+
+
+class TokenRedactingFilter(logging.Filter):
+    """Masks ``token=<value>`` in log lines, so the auth token stays out of the console and the journal."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        message = record.getMessage()
+        if "token=" in message:
+            record.msg, record.args = _TOKEN_IN_URL.sub(r"\1***", message), None
+        return True
 
 
 # aiohttp logs every HTTP request under this name. A dashboard asks several

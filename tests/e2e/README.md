@@ -50,8 +50,7 @@ Tests run in registration order on one page; the first one navigates.
 
 ## Notes
 
-`result.md` is generated output, not source. Add `tests/e2e/result.md` to
-`.gitignore` so it does not churn on every run.
+`result.md` is generated output, not source: keep it out of commits.
 
 When the UI changes, these assertions go stale silently unless CI runs them;
 several had already rotted before this suite was automated.
