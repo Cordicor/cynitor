@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import json
 import logging
 import ipaddress
@@ -355,6 +356,8 @@ class CANSession:
         self.hub: Optional[CANHub] = None
         self.registered_nodes: set[int] = set()
         self._tasks: list[asyncio.Task] = []
+        # How to stop what the session that runs started, last started first (see connect).
+        self._stack = contextlib.AsyncExitStack()
         self._lock = asyncio.Lock()
         self._event_logger_lock = asyncio.Lock()
         self._disconnect_task: Optional[asyncio.Task] = None
@@ -459,9 +462,13 @@ class CANSession:
                     await asyncio.to_thread(hub.stop)
                 raise SessionBusy("Already connected")
             self.last_error = None
-            # From here on _teardown owns the hub, including on failure below.
+            # Each component, once started, registers how it stops: _teardown
+            # stops them in the reverse order, also after a failure below.
+            self._stack = stack = contextlib.AsyncExitStack()
             self.hub = hub
+            stack.push_async_callback(self._close_hub)  # last: everything else talks to the adapter through it
             self._media, self._bus_spec, self.node_id = media, spec, node_id
+            stack.callback(self._forget_bus)
 
             try:
                 from scanner_node import ScannerNode
@@ -470,6 +477,7 @@ class CANSession:
                 logger.info("Initializing ScannerNode...")
                 self.scanner = ScannerNode(register_file=str(self.data_dir / SCANNER_DB),
                                            transport=self._transport(node_id))
+                stack.callback(self._close_scanner)
                 self.scanner.offline = offline
                 self.scanner.listen_only = self.listen_only = listen_only
                 self.no_commands = no_commands
@@ -478,14 +486,17 @@ class CANSession:
                 if offline is None and self.scanner.node.id is not None:
                     self.firmware = FirmwareServer(self.firmware_folder)
                     self.firmware.serve_on(self.scanner.node)
+                    stack.callback(setattr, self, "firmware", None)  # its server closes with the scanner's node
                 # Nothing can be sent while a raw log plays, an answer neither.
                 if offline is None and not listen_only and not no_commands \
                         and (self.default_allocator if allocator is None else allocator):
                     self._start_allocator()
+                    stack.callback(self._close_allocator)  # before the scanner, whose node it answers from
 
                 logger.info("Initializing TelemetryManager...")
                 self.telemetry = TelemetryManager(self.scanner)
                 await self.telemetry.start()
+                stack.push_async_callback(self._stop_telemetry)
 
                 # Frame capture for the Debugging view: its tap opens while a
                 # dashboard captures. Error frames read as SocketCAN reports
@@ -495,9 +506,11 @@ class CANSession:
                 self.frame_capture = FrameCaptureManager(
                     self._open_capture_tap, self._own_node_ids,
                     decode_errors=hub is None or hub.spec.partition(":")[0] in ("gs_usb", "rawlog"))
+                stack.callback(self._stop_frame_capture)  # before the hub and the scanner, which its tap listens to
 
                 logger.info("Initializing EventLogger...")
                 event_logger = await self.ensure_event_logger()
+                stack.push_async_callback(self._stop_event_logger)
 
                 saved_identities = await event_logger.load_identity_map()
                 if saved_identities:
@@ -515,6 +528,7 @@ class CANSession:
                     asyncio.create_task(_event_logger_loop(self.event_logger, logger_queue)),
                     asyncio.create_task(_register_loop(self.scanner, self.registered_nodes, self)),
                 ]
+                stack.push_async_callback(self._cancel_tasks)  # before the event logger they write to
 
                 # canbusload reads a SocketCAN device; behind the hub, the
                 # hub counts the traffic itself.
@@ -526,6 +540,7 @@ class CANSession:
                     bus_load = HubBusLoad(hub)
                 self.bus_load = bus_load
                 await bus_load.start()
+                stack.push_async_callback(self._stop_bus_load)
 
                 if hub is None:
                     self.v11 = V11Traffic()
@@ -533,6 +548,7 @@ class CANSession:
                 else:
                     self.v11 = hub.v11
                 self.bus_errors = BusErrors(can_iface)
+                stack.callback(self._stop_bus_watch)
 
                 self.can_interface = can_iface
                 self.can_bitrate = bitrate
@@ -550,15 +566,20 @@ class CANSession:
                     self.service_calls.start()
                 except Exception as exc:  # CAN works on; only the recordings miss the calls
                     logger.warning("Service calls will not be recorded: %s", exc)
+                stack.callback(self._stop_service_calls)  # before the event logger it writes to
+                # Decoding on demand may be switched on later too: its stop is always due.
+                stack.callback(self._stop_on_demand, False)
                 if self.decode_on_demand:
                     self._start_on_demand()
                 if simulation is not None:
                     # Last, so that the devices join a bus Cynitor already watches.
                     self.simulation = simulation
                     simulation.start()
+                    stack.push_async_callback(self._stop_simulation)
                 if offline is None and not listen_only:  # nothing can be sent while a raw log plays
                     self.test_nodes.attach(TestNodeBus(self._transport, simulation is not None,
                                                        self._node_ids_in_use))
+                    stack.push_async_callback(self.test_nodes.detach)  # first: a bus's nodes go quiet when it is let go
                 logger.info("CAN session started on %s", can_iface)
             except Exception:
                 try:
@@ -1058,19 +1079,62 @@ class CANSession:
         await target.stop()
 
     async def _teardown(self) -> None:
-        """Internal cleanup — caller must hold self._lock."""
-        logger.info("Tearing down CAN session...")
+        """Internal cleanup — caller must hold self._lock.
 
-        # Test nodes and the simulated bus's devices first, as a bus's go quiet when it is let go.
-        await self.test_nodes.detach()
-        if self.simulation is not None:
-            await self.simulation.stop()
-        self.simulation = None
-        # Before the event logger it writes to, and the hub its tap listens to.
-        if self.service_calls is not None:
-            self.service_calls.stop()
-        self.service_calls = None
-        self.stop_raw_log()
+        Stops what connect started, in the reverse order (see self._stack),
+        each stop run even if one before it failed.
+        """
+        logger.info("Tearing down CAN session...")
+        self.stop_raw_log()  # started while the session runs, so not on the stack; its tap needs the bus
+        stack, self._stack = self._stack, contextlib.AsyncExitStack()
+        try:
+            await stack.aclose()
+        finally:
+            self.registered_nodes.clear()
+        logger.info("CAN session stopped")
+
+    # What connect registers on self._stack, each the stop of one component.
+
+    async def _close_hub(self) -> None:
+        if self.hub is not None:
+            await asyncio.to_thread(self.hub.stop)
+        self.hub = None
+
+    def _forget_bus(self) -> None:
+        self.node_id = None
+        self._media = self._bus_spec = None
+        self.listen_only = self.no_commands = False
+        self.can_interface = self.can_bitrate = self.can_data_bitrate = None
+        self.can_fd = False
+
+    def _close_scanner(self) -> None:
+        if self.scanner is not None:
+            self.scanner.close()
+        self.scanner = None
+
+    def _close_allocator(self) -> None:
+        if self.allocator is not None:
+            self.allocator.close()
+        self.allocator = None
+
+    async def _stop_telemetry(self) -> None:
+        if self.telemetry is not None:
+            await self.telemetry.stop()
+        self.telemetry = None
+
+    def _stop_frame_capture(self) -> None:
+        if self.frame_capture is not None:
+            self.frame_capture.stop()
+        self.frame_capture = None
+
+    async def _stop_event_logger(self) -> None:
+        if self.event_logger is not None:
+            if self.scanner is not None:
+                await self.event_logger.save_identity_map(self.scanner.identity_map.snapshot())
+            await self.event_logger.stop()
+        self.event_logger = None
+
+    async def _cancel_tasks(self) -> None:
         for task in self._tasks:
             if not task.done():
                 task.cancel()
@@ -1080,51 +1144,27 @@ class CANSession:
                     pass
         self._tasks.clear()
 
-        if self.event_logger and self.scanner:
-            await self.event_logger.save_identity_map(self.scanner.identity_map.snapshot())
-
-        if self.event_logger:
-            await self.event_logger.stop()
-            self.event_logger = None
-        if self.telemetry:
-            await self.telemetry.stop()
-            self.telemetry = None
-        if self.bus_load:
+    async def _stop_bus_load(self) -> None:
+        if self.bus_load is not None:
             await self.bus_load.stop()
-            self.bus_load = None
-        # Before the scanner, whose node it answers from.
-        if self.allocator is not None:
-            self.allocator.close()
-        self.allocator = None
-        self._stop_on_demand(decode_all=False)  # before the hub and the scanner too
-        # Before the hub and the scanner, which its tap listens to.
-        if self.frame_capture is not None:
-            self.frame_capture.stop()
-        self.frame_capture = None
-        self.firmware = None  # its server closes with the scanner's node
-        if self.scanner:
-            self.scanner.close()
-            self.scanner = None
+        self.bus_load = None
+
+    def _stop_bus_watch(self) -> None:
         if self._v11_tap is not None:
             self._v11_tap.stop()
-            self._v11_tap = None
+        self._v11_tap = None
         self.v11 = None
         self.bus_errors = None
-        # Last: everything above talks to the adapter through it.
-        if self.hub:
-            await asyncio.to_thread(self.hub.stop)
-            self.hub = None
-        self.registered_nodes.clear()
-        self.node_id = None
-        self._media = self._bus_spec = None
-        self.listen_only = False
-        self.no_commands = False
-        self.can_interface = None
-        self.can_bitrate = None
-        self.can_data_bitrate = None
-        self.can_fd = False
 
-        logger.info("CAN session stopped")
+    def _stop_service_calls(self) -> None:
+        if self.service_calls is not None:
+            self.service_calls.stop()
+        self.service_calls = None
+
+    async def _stop_simulation(self) -> None:
+        if self.simulation is not None:
+            await self.simulation.stop()
+        self.simulation = None
 
     def schedule_fatal_disconnect(self, error_msg: str) -> None:
         """Schedule a disconnect due to a fatal CAN error (safe to call from background tasks)."""

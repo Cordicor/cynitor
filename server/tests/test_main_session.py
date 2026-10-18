@@ -185,6 +185,26 @@ class TestConnectSimulatedBus:
             await CANSession().connect("sim:warp")
         assert captured == [] and hubs == []
 
+    async def test_teardown_stops_in_reverse_and_runs_every_stop_though_one_fails(self):
+        # F-030 Q-20: the order is the reverse of the starts, kept in one place; a
+        # stop that raises no longer leaves the components after it running.
+        from main import CANSession
+        s = CANSession()
+        stopped = []
+
+        def broken():
+            stopped.append("broken")
+            raise OSError("adapter gone")
+        s._stack.callback(stopped.append, "hub")
+        s._stack.callback(broken)
+        s._stack.callback(stopped.append, "test nodes")
+        s.registered_nodes.add(5)
+        with pytest.raises(OSError, match="adapter gone"):
+            await s._teardown()
+        assert stopped == ["test nodes", "broken", "hub"] and s.registered_nodes == set()
+        await s._teardown()  # the stack is spent: a second teardown stops nothing again
+        assert stopped == ["test nodes", "broken", "hub"]
+
     async def test_its_devices_stop_with_the_session(self):
         from main import CANSession
         stopped = []
@@ -195,6 +215,7 @@ class TestConnectSimulatedBus:
 
         s = CANSession()
         s.simulation = FakeSimulation()
+        s._stack.push_async_callback(s._stop_simulation)  # as connect registers it
         await s._teardown()
         assert stopped == [True] and s.simulation is None
 
@@ -210,6 +231,7 @@ class TestTestNodes:
         from testnodes import TestNodeBus
         s = CANSession(data_dir=tmp_path)
         s.test_nodes.attach(TestNodeBus(lambda node_id: None, True, set))
+        s._stack.push_async_callback(s.test_nodes.detach)  # as connect registers it
         await s._teardown()
         assert s.test_nodes.bus is None
 
@@ -326,6 +348,7 @@ class TestAllocator:
         s.allocator = running = MagicMock()
         running.status.return_value = {"other_allocator": None, "allocated": 3}
         assert s.allocator_status() == {"other_allocator": None, "allocated": 3}
+        s._stack.callback(s._close_allocator)  # as connect registers it
         await s._teardown()
         running.close.assert_called_once_with()
         assert s.allocator is None and s.allocator_status() is None
@@ -779,6 +802,7 @@ class TestDecodeOnDemand:
         await session.set_decode_on_demand(True)
         scanner = session.scanner
         scanner.set_decoding.reset_mock()
+        session._stack.callback(session._stop_on_demand, False)  # as connect registers it
         await session._teardown()
         scanner.set_decoding.assert_not_called()
         assert session.taps[0][2] and session._rates is None
