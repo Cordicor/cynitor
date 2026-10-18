@@ -32,6 +32,32 @@ def logger(db_path):
     return el
 
 
+class TestSchemaVersion:
+
+    def test_new_database_gets_the_schema_version(self, logger, db_path):
+        with sqlite3.connect(db_path) as conn:
+            assert conn.execute("PRAGMA user_version").fetchone()[0] == EventLogger.SCHEMA_VERSION
+
+    def test_database_from_before_is_versioned(self, db_path):
+        with sqlite3.connect(db_path) as conn:
+            conn.execute("CREATE TABLE events (id INTEGER PRIMARY KEY, subject_id INTEGER NOT NULL, "
+                         "timestamp TEXT NOT NULL, timestamp_unix REAL NOT NULL, rate INTEGER, "
+                         "message_type TEXT NOT NULL, publisher_node_id INTEGER, attributes TEXT)")
+        EventLogger(db_path=db_path).init_db_sync()
+        with sqlite3.connect(db_path) as conn:
+            assert conn.execute("PRAGMA user_version").fetchone()[0] == EventLogger.SCHEMA_VERSION
+
+    def test_newer_database_is_warned_of_and_kept(self, db_path, caplog):
+        with sqlite3.connect(db_path) as conn:
+            conn.execute("PRAGMA user_version = 99")
+        el = EventLogger(db_path=db_path)
+        el.init_db_sync()
+        assert el._db_initialized
+        assert "newer Cynitor" in caplog.text
+        with sqlite3.connect(db_path) as conn:
+            assert conn.execute("PRAGMA user_version").fetchone()[0] == 99
+
+
 class TestEventLogger:
 
     @pytest.mark.asyncio

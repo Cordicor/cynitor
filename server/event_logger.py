@@ -77,6 +77,9 @@ class EventLogger:
     # server further: thousands of lines a second. One says it, then one every so long.
     DROP_WARNING_INTERVAL_S = 5.0
     QUEUE_SIZE = 5000
+    # The database's layout, kept in SQLite's user_version. Raise it with a
+    # migration below when the layout changes; 0 is a database from before.
+    SCHEMA_VERSION = 1
 
     def __init__(
         self,
@@ -119,6 +122,12 @@ class EventLogger:
         try:
             with sqlite3.connect(self.db_path) as conn:
                 cursor = conn.cursor()
+                found_version = cursor.execute("PRAGMA user_version").fetchone()[0]
+                if found_version > self.SCHEMA_VERSION:
+                    logger.warning(
+                        "The database %s was written by a newer Cynitor (schema %d, this one knows %d); "
+                        "history and recordings may not work as expected",
+                        self.db_path, found_version, self.SCHEMA_VERSION)
 
                 # Create events table
                 cursor.execute("""
@@ -253,6 +262,8 @@ class EventLogger:
                 cursor.execute("CREATE INDEX IF NOT EXISTS idx_nh_node ON node_history(node_id)")
                 cursor.execute("CREATE INDEX IF NOT EXISTS idx_nh_uid ON node_history(unique_id)")
                 cursor.execute("CREATE INDEX IF NOT EXISTS idx_nh_timestamp ON node_history(timestamp_unix)")
+                if found_version < self.SCHEMA_VERSION:
+                    cursor.execute(f"PRAGMA user_version = {int(self.SCHEMA_VERSION)}")
 
                 conn.execute("PRAGMA journal_mode=WAL")
             self._db_initialized = True
