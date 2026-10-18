@@ -26,6 +26,8 @@ jobs:
     runs-on: ubuntu-22.04
     permissions:
       contents: write  # attach the binary to the Release on a tag build
+      id-token: write  # sign the provenance attestation (Sigstore)
+      attestations: write
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -144,6 +146,14 @@ jobs:
           path: packaging/out/*
           if-no-files-found: error
 
+      - name: Attest where the files were built
+        # A signed statement that this workflow, at this commit, built each
+        # file: `gh attestation verify <file> --repo OpenCyphal-Garage/cynitor`.
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8  # v4.2.2
+        with:
+          subject-path: packaging/out/*
+
       - name: Attach the binary to the release
         if: startsWith(github.ref, 'refs/tags/v')
         env:
@@ -165,6 +175,8 @@ jobs:
     runs-on: windows-2022
     permissions:
       contents: write  # attach the executable to the Release on a tag build
+      id-token: write  # sign the provenance attestation (Sigstore)
+      attestations: write
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -230,6 +242,14 @@ jobs:
           name: cynitor-server-windows
           path: packaging/out/*
           if-no-files-found: error
+
+      - name: Attest where the files were built
+        # A signed statement that this workflow, at this commit, built each
+        # file: `gh attestation verify <file> --repo OpenCyphal-Garage/cynitor`.
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8  # v4.2.2
+        with:
+          subject-path: packaging/out/*
 
       - name: Attach the executable to the release
         if: startsWith(github.ref, 'refs/tags/v')

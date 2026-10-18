@@ -46,7 +46,9 @@ No Python needed. Take the file for your system from the
 - All of them are for x86-64, hold the same server and open no window: you
   use it from a browser.
 - Each file has a `<file>.sha256` beside it: `sha256sum -c <file>.sha256`
-  checks a download.
+  checks a download. From 1.4.0 each is also signed as built by this
+  repository's release workflow:
+  `gh attestation verify <file> --repo OpenCyphal-Garage/cynitor`.
 - The licences of the third-party code inside are in the release's
   `*.THIRD-PARTY-NOTICES.txt`, and the versions in `*.requirements.txt`.
 - The Linux builds are made on Ubuntu 22.04 and run on it and anything newer.
