@@ -23,6 +23,7 @@ import uavcan.node.port
 import uavcan.diagnostic
 import uavcan.pnp
 
+from events import SubjectEvent
 from local_time import local_isoformat
 from node_info import NodeInfo
 from update_check import parse_version
@@ -161,7 +162,7 @@ class ScannerNode(ScannerRegisters, ScannerServices):
         self.identity_map = NodeIdentityMap()
         self.subject_attributes: dict[int, list[str]] = {}                # Maps subject_id to list of attribute names
         self.publishers_subscribers: dict[int, Any] = {}  # pycyphal Subscribers
-        self.message_queue: asyncio.Queue = asyncio.Queue(maxsize=self.MESSAGE_QUEUE_SIZE)
+        self.message_queue: asyncio.Queue[SubjectEvent] = asyncio.Queue(maxsize=self.MESSAGE_QUEUE_SIZE)
         self.dropped_events = 0  # events discarded because message_queue was full
         self.active_publishers: dict[int, set] = {}                        # Maps subject_id to set of publisher node_ids
         self.services: set[str] = set()
@@ -617,7 +618,7 @@ class ScannerNode(ScannerRegisters, ScannerServices):
         """Build a standardized event dict and put it on the message queue."""
         timestamp, monotonic = self._transfer_times(transfer)
         rate, subject_rate = self._track_rate(subject_id, publisher_node_id, monotonic)
-        event = {
+        event: SubjectEvent = {
             "subject_id": subject_id,
             "timestamp": local_isoformat(timestamp, timespec="seconds"),
             "timestamp_unix": timestamp,
@@ -631,7 +632,7 @@ class ScannerNode(ScannerRegisters, ScannerServices):
         }
         await self._enqueue(event)
 
-    async def _enqueue(self, event: dict) -> None:
+    async def _enqueue(self, event: SubjectEvent) -> None:
         try:
             self.message_queue.put_nowait(event)
         except asyncio.QueueFull:

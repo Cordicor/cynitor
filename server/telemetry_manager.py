@@ -5,6 +5,7 @@ import math
 from collections import defaultdict
 from typing import Any, Optional
 
+from events import SubjectEvent
 from local_time import local_isoformat
 
 logger = logging.getLogger(__name__)
@@ -28,10 +29,10 @@ class TelemetryManager:
         self.scanner = scanner
 
         # Latest telemetry by subject_id
-        self.latest_by_subject: dict[int, dict[str, Any]] = {}
+        self.latest_by_subject: dict[int, SubjectEvent] = {}
 
         # Latest telemetry by node_id then subject_id
-        self.latest_by_node: dict[int, dict[int, dict[str, Any]]] = defaultdict(dict)
+        self.latest_by_node: dict[int, dict[int, SubjectEvent]] = defaultdict(dict)
 
         # Async subscribers: queue -> label ("logger", "client", ...)
         self.subscribers: dict[asyncio.Queue, str] = {}
@@ -94,7 +95,7 @@ class TelemetryManager:
         self.subscribers.pop(queue, None)
         logger.debug(f"Subscriber removed (total: {len(self.subscribers)})")
 
-    def get_latest_subject(self, subject_id: int) -> Optional[dict[str, Any]]:
+    def get_latest_subject(self, subject_id: int) -> Optional[SubjectEvent]:
         """
         Get the latest telemetry for a subject.
         
@@ -106,7 +107,7 @@ class TelemetryManager:
         """
         return self.latest_by_subject.get(subject_id)
 
-    def get_latest_node(self, node_id: int) -> dict[int, dict[str, Any]]:
+    def get_latest_node(self, node_id: int) -> dict[int, SubjectEvent]:
         """
         Get the latest telemetry for all subjects published by a node.
         
@@ -285,7 +286,7 @@ class TelemetryManager:
     # STATE MANAGEMENT
     # ------------------------------------------------------------------
 
-    def _update_state(self, event: dict[str, Any]) -> Optional[dict[str, Any]]:
+    def _update_state(self, event: SubjectEvent) -> Optional[SubjectEvent]:
         """
         Update the latest-state cache with the new event, and return it as cached: JSON-safe.
         None for an event without a subject-ID, which is neither cached nor sent.
@@ -315,7 +316,7 @@ class TelemetryManager:
     # BROADCAST
     # ------------------------------------------------------------------
 
-    async def _broadcast(self, event: dict[str, Any]) -> None:
+    async def _broadcast(self, event: SubjectEvent) -> None:
         """
         Distribute event dict to all subscribers (already JSON-serializable from _update_state).
 

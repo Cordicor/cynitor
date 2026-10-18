@@ -10,6 +10,8 @@ from pathlib import Path
 from typing import Optional, Any
 import json
 
+from events import SubjectEvent
+
 logger = logging.getLogger(__name__)
 
 
@@ -314,7 +316,7 @@ class EventLogger:
 
         logger.info("EventLogger stopped")
     
-    async def log_event(self, event: dict[str, Any]) -> None:
+    async def log_event(self, event: SubjectEvent) -> None:
         """
         Queue an event for logging (non-blocking).
         
