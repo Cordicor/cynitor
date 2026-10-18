@@ -1,6 +1,6 @@
 """Browser end-to-end tests: Compare tab. Run through test_landing_page.py, which imports every suite in order."""
 
-from harness import test
+from harness import WAIT_MS, test
 
 
 # ── Compare tab ──
@@ -27,6 +27,15 @@ COMPARE_START = """() => {
     }, 100);
     switchView('compare');
 }"""
+
+# What COMPARE_START feeds, every 100 ms: wait for a few points of each, not a fixed time.
+COMPARE_FED = """() => ['1100:value', '1700:current', '1400:value']
+    .every((key) => (state.subjectHistory.get(key) || []).length >= 3)"""
+
+
+async def compare_fed(page):
+    await page.wait_for_function(COMPARE_FED, timeout=WAIT_MS)
+
 
 COMPARE_STOP = """() => {
     clearInterval(window.e2eCompareFeed);
@@ -73,7 +82,7 @@ async def compare_graph(page, *series):
 async def _(page):
     await page.evaluate(COMPARE_START)
     try:
-        await page.wait_for_timeout(300)
+        await compare_fed(page)
         for _ in range(4):
             await compare_graph(page, (1100, "value"))
         await page.wait_for_timeout(500)
@@ -96,7 +105,7 @@ COMPARE_LAG = "(c) => Date.now() / 1000 + 12 - c.querySelector('.detail-plot-are
 async def _(page):
     await page.evaluate(COMPARE_START)
     try:
-        await page.wait_for_timeout(300)
+        await compare_fed(page)
         first = await compare_graph(page, (1100, "value"))
         await compare_graph(page, (1100, "value"))
         pause_all = page.locator(".compare-pause-all")
@@ -124,7 +133,7 @@ async def _(page):
 async def _(page):
     await page.evaluate(COMPARE_START)
     try:
-        await page.wait_for_timeout(300)
+        await compare_fed(page)
         card = await compare_graph(page, (1100, "value"))
         button = card.locator(".plot-pause-btn")
         assert await button.get_attribute("aria-pressed") == "false", "Running, the pause button is not an unpressed toggle"
@@ -144,7 +153,7 @@ async def _(page):
 async def _(page):
     await page.evaluate(COMPARE_START)
     try:
-        await page.wait_for_timeout(300)
+        await compare_fed(page)
         card = await compare_graph(page, (1100, "value"))
         plot = card.locator(".detail-plot-area svg")
         await plot.click(position={"x": 300, "y": 40})
@@ -219,7 +228,7 @@ COMPARE_LEGEND = "(c) => [...c.querySelectorAll('.plot-legend-item')].map(e => e
 async def _(page):
     await page.evaluate(COMPARE_START)
     try:
-        await page.wait_for_timeout(300)
+        await compare_fed(page)
         card = await compare_graph(page, (1400, "value"))  # node 10 alone publishes 1400
         await page.evaluate("e2eCompare.join1400 = true")  # then node 20 does too
         await page.wait_for_timeout(600)
@@ -236,7 +245,7 @@ async def _(page):
 async def _(page):
     await page.evaluate(COMPARE_START)
     try:
-        await page.wait_for_timeout(300)
+        await compare_fed(page)
         card = await compare_graph(page, (1400, "value"), (1100, "value"))
         await page.wait_for_timeout(300)
         stroke = """(c) => [...c.querySelectorAll('.compare-line')]
@@ -277,7 +286,7 @@ async def compare_note_is(page, expected):
 async def _(page):
     await page.evaluate(COMPARE_START)
     try:
-        await page.wait_for_timeout(300)
+        await compare_fed(page)
         await compare_graph(page, (1100, "value"))
         await compare_note_is(page, "")
         await page.evaluate("state.canConnected = false")
@@ -301,7 +310,7 @@ async def _(page):
 async def _(page):
     await page.evaluate(COMPARE_START)
     try:
-        await page.wait_for_timeout(300)
+        await compare_fed(page)
         card = await compare_graph(page, (1100, "value"))
         await card.locator('[aria-label="Threshold value"]').fill("82")
         await card.locator(".plot-threshold-picker .plot-compare-add").click()
@@ -378,7 +387,7 @@ async def _(page):
     started_in = await page.evaluate(theme)
     await page.evaluate(COMPARE_START)
     try:
-        await page.wait_for_timeout(300)
+        await compare_fed(page)
         await compare_graph(page, (1100, "value"))
         for _ in range(2):  # to the other theme, and back
             await page.locator("#themeToggle").click()
@@ -458,7 +467,7 @@ async def _(page):
 async def _(page):
     await page.evaluate(COMPARE_START)
     try:
-        await page.wait_for_timeout(300)
+        await compare_fed(page)
         card = await compare_graph(page, (1700, "current"), (1400, "value"))
         # 1400 went quiet 10 s ago.
         await page.evaluate("""() => { e2eCompare.mute1400 = true;
@@ -496,7 +505,7 @@ async def _(page):
 async def _(page):
     await page.evaluate(COMPARE_START)
     try:
-        await page.wait_for_timeout(300)
+        await compare_fed(page)
         card = await compare_graph(page, (1100, "value"))
         await card.locator('[aria-label="Threshold value"]').fill("82")
         await card.locator('[aria-label="Threshold label"]').fill("limit")
@@ -522,7 +531,7 @@ async def _(page):
     await page.evaluate(COMPARE_START)
     drawn = "(c) => [...c.querySelectorAll('.compare-line')].filter(l => l.getAttribute('d')).length"
     try:
-        await page.wait_for_timeout(300)
+        await compare_fed(page)
         card = await compare_graph(page, (1100, "value"))
         await card.locator('input[aria-label="Fill rate interpolation"]').check()
         await page.wait_for_timeout(1500)
@@ -585,7 +594,7 @@ async def _(page):
 async def _(page):
     await page.evaluate(COMPARE_START)
     try:
-        await page.wait_for_timeout(300)
+        await compare_fed(page)
         card = await compare_graph(page, (1100, "value"))
         box = await card.locator(".plot-overlay").bounding_box()
         form = card.locator(".plot-marker-form")
@@ -625,7 +634,7 @@ COUNT_LISTENERS = """() => {
 async def _(page):
     await page.evaluate(COMPARE_START)
     try:
-        await page.wait_for_timeout(300)
+        await compare_fed(page)
         before = await page.evaluate(COUNT_LISTENERS)
         for _ in range(5):
             card = await compare_graph(page, (1100, "value"))
@@ -715,7 +724,7 @@ async def _(page):
     await page.evaluate(COMPARE_START)
     view = "(i) => { const g = state.compareGraphs[i]; return [g.paused, g.pausedAt, g.timeWindow, g._zoom]; }"
     try:
-        await page.wait_for_timeout(300)
+        await compare_fed(page)
         a = await compare_graph(page, (1100, "value"))
         b = await compare_graph(page, (1100, "value"))
         c = await compare_graph(page, (1100, "value"))
@@ -754,7 +763,7 @@ async def _(page):
     await page.evaluate(COMPARE_START)
     marks = "(i) => [...document.querySelectorAll('.compare-graph-card')[i].querySelectorAll('.plot-marker text')].map(t => t.textContent)"
     try:
-        await page.wait_for_timeout(300)
+        await compare_fed(page)
         a = await compare_graph(page, (1100, "value"))
         b = await compare_graph(page, (1100, "value"))
         await compare_graph(page, (1100, "value"))  # not synced
@@ -946,7 +955,7 @@ async def _(page):
 async def _(page):
     await page.evaluate(COMPARE_START)
     try:
-        await page.wait_for_timeout(300)
+        await compare_fed(page)
         card = await compare_graph(page, (1100, "value"))
         editor, edit = card.locator(".compare-card-editor"), card.locator(".compare-edit-btn")
         assert await editor.is_visible(), "A new graph does not start on its editing rows"
@@ -1006,7 +1015,7 @@ async def _(page):
     await page.evaluate(COMPARE_START)
     empty = page.locator(".compare-empty")
     try:
-        await page.wait_for_timeout(300)
+        await compare_fed(page)
         assert await page.evaluate("state.compareGraphs.length") == 0, "The test needs no graph to start from"
         assert await empty.is_visible(), "With no graph, the tab is blank"
         words = await empty.inner_text()
@@ -1023,7 +1032,7 @@ async def _(page):
 async def _(page):
     await page.evaluate(COMPARE_START)
     try:
-        await page.wait_for_timeout(300)
+        await compare_fed(page)
         await compare_graph(page, (1100, "value"))
         coloured = await page.evaluate("""() => {
             const probe = document.createElement('span');
@@ -1202,7 +1211,7 @@ async def _(page):
     started_in = await page.evaluate(theme)
     await page.evaluate(COMPARE_START)
     try:
-        await page.wait_for_timeout(300)
+        await compare_fed(page)
         card = await compare_graph(page, (1100, "value"))
         await card.locator('[aria-label="Threshold value"]').fill("82")
         await card.locator('[aria-label="Add threshold line"]').click()
@@ -1245,7 +1254,7 @@ COMPARE_OWN_CLIPS = """() => [...document.querySelectorAll('.compare-graph-card'
 async def _(page):
     await page.evaluate(COMPARE_START)
     try:
-        await page.wait_for_timeout(300)
+        await compare_fed(page)
         await compare_graph(page, (1100, "value"))  # its editing rows open: a short plot
         second = await compare_graph(page, (1100, "value"))
         await second.locator(".compare-edit-btn").click()  # folded away: a taller plot
