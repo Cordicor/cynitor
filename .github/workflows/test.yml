@@ -44,6 +44,9 @@ jobs:
           - os: windows-2025
             python-version: '3.12'
 
+    env:
+      COVERAGE: ${{ matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12' && 'yes' || 'no' }}
+
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         # The test suite mocks the Cyphal stack, so it needs neither the DSDL
@@ -66,7 +69,13 @@ jobs:
           # Matches the documented local command: stops third-party plugins
           # (notably ROS2's) from being auto-loaded into the run.
           PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
-        run: python -m pytest tests/ -v -p pytest_asyncio.plugin
+        run: python -m pytest tests/ -v -p pytest_asyncio.plugin ${{ env.COVERAGE == 'yes' && '-p pytest_cov --cov=.' || '' }}
+
+      - name: Coverage report
+        # One leg measures it, for the job summary; no threshold fails a run yet.
+        if: env.COVERAGE == 'yes'
+        working-directory: server
+        run: python -m coverage report --format=markdown --sort=cover >> "$GITHUB_STEP_SUMMARY"
 
   integration:
     # A whole CAN session through the CAN hub on a virtual bus: the real

@@ -11,6 +11,9 @@ Backend, from `server/`:
 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest tests/ -v -p pytest_asyncio.plugin
 ```
 
+Add `-p pytest_cov --cov=. --cov-report=term` to see which lines the tests
+reach; CI puts the same table on the Python 3.12 Linux job's summary.
+
 Integration, a real Cyphal stack behind the CAN hub on a virtual bus, and a running
 server's API walked over HTTP, from the repository root:
 
