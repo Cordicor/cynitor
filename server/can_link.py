@@ -8,6 +8,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+from typing import Optional
 
 IS_LINUX = sys.platform.startswith("linux")
 
@@ -121,3 +122,18 @@ def get_can_link_diagnostics(iface: str) -> dict:
             int(counters.group(i)) for i in range(1, 7)
         )
     return result
+
+
+def rx_overflows(device: str) -> Optional[int]:
+    """Frames the controller or its driver lost, the receive buffer being full: ``rx_over_errors``.
+
+    A count of overflows rather than of frames, for most drivers (gs_usb counts
+    one per overflow notice). None where there is no such counter, or off Linux.
+    """
+    if not IS_LINUX:
+        return None
+    try:
+        return int((Path("/sys/class/net") / device / "statistics" / "rx_over_errors").read_text().strip())
+    except (OSError, ValueError):
+        return None
+

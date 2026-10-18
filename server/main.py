@@ -31,7 +31,7 @@ from bus_errors import BusErrors
 from can_discovery import AdapterCatalog, discover_adapters, simulated_adapters
 from can_hub import CANHub, HubBusLoad, pick_free_node_id
 from bus_load import BusLoadMonitor
-from can_link import _CAN_STATE, discover_can_interfaces, get_can_link_diagnostics
+from can_link import _CAN_STATE, discover_can_interfaces, get_can_link_diagnostics, rx_overflows
 from cyphal_v11 import SOCKETCAN_FILTER, V11Traffic
 from data_dir import (EVENTS_DB, SCANNER_DB, TEST_NODES_FILE, prepare_data_dir,
                       resolve_data_dir)
@@ -158,6 +158,7 @@ class CANSession:
         self.can_bitrate: Optional[int] = None
         self.can_data_bitrate: Optional[int] = None
         self.can_fd = False
+        self._overflows_before: Optional[int] = None  # the SocketCAN interface's rx_over_errors at connect
         # The raw frame log being written, if any, and its SocketCAN tap.
         self.raw_logs = RawLogging(self)
         self.user_types = UserSubjectTypes(self)  # types the user set for subjects no register names  # every frame on the bus to a candump .log file, while asked to
@@ -377,6 +378,8 @@ class CANSession:
                 else:
                     self.v11 = hub.v11
                 self.bus_errors = BusErrors(can_iface)
+                # The controller's own overflows count from here (behind the hub, the hub counts them).
+                self._overflows_before = None if hub is not None else rx_overflows(socketcan_device(can_iface))
                 stack.callback(self._stop_bus_watch)
 
                 self.can_interface = can_iface
@@ -561,6 +564,19 @@ class CANSession:
         async with self._lock:
             await self._teardown()
 
+    def adapter_overflows(self) -> int:
+        """How often the adapter lost received frames this session, its buffer full; 0 where it cannot say.
+
+        Behind the hub, its overflow notices (gs_usb sends them); on SocketCAN,
+        the growth of the interface's rx_over_errors. Each is one frame or more.
+        """
+        if self.hub is not None:
+            return self.hub.rx_overflows
+        if self._overflows_before is None or not self.can_interface:
+            return 0
+        now = rx_overflows(socketcan_device(self.can_interface))
+        return max(0, now - self._overflows_before) if now is not None else 0
+
     def dropped_events(self) -> Optional[dict[str, int]]:
         """What was discarded because a queue was full, by where it was lost.
 
@@ -572,7 +588,7 @@ class CANSession:
         if not self.is_running or not self.scanner or not self.telemetry:
             return None
         return {
-            "scanner": self.scanner.dropped_events + self.scanner.dropped_frames(),
+            "scanner": self.scanner.dropped_events + self.scanner.dropped_frames() + self.adapter_overflows(),
             "logger": self.telemetry.dropped["logger"]
                       + (self.event_logger.dropped_events if self.event_logger else 0),
             "clients": self.telemetry.dropped["client"],
@@ -721,6 +737,7 @@ class CANSession:
         self.listen_only = self.no_commands = False
         self.can_interface = self.can_bitrate = self.can_data_bitrate = None
         self.can_fd = False
+        self._overflows_before = None
 
     def _close_scanner(self) -> None:
         if self.scanner is not None:

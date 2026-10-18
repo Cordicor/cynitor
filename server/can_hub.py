@@ -78,6 +78,17 @@ _MAX_NODE_ID = 127
 _TOOL_NODE_IDS = (127, 126)
 
 
+# A receive overflow, as SocketCAN reports one and gs_usb_fd passes it on (linux/can/error.h).
+_CAN_ERR_CRTL = 0x00000004
+_CAN_ERR_CRTL_RX_OVERFLOW = 0x01
+
+
+def is_rx_overflow(msg: can.Message) -> bool:
+    """Whether ``msg`` is an adapter's notice that it lost received frames."""
+    return (msg.is_error_frame and bool(msg.arbitration_id & _CAN_ERR_CRTL)
+            and len(msg.data) > 1 and bool(msg.data[1] & _CAN_ERR_CRTL_RX_OVERFLOW))
+
+
 def open_adapter(spec: str, bitrate: int, data_bitrate: Optional[int] = None) -> can.BusABC:
     """Open ``spec`` (pycyphal's ``<interface>:<channel>`` form) as a python-can bus.
 
@@ -208,6 +219,7 @@ class CANHub:
         self.frames_to_bus = 0
         self.send_failures = 0
         self.error_frames = 0  # reported by the adapter's driver, if it reports them
+        self.rx_overflows = 0  # the adapter's notices that it lost frames: no bus error, a loss
         # Called from the pump threads with every frame on the wire, both ways:
         # raw_log.RawLog.write while a raw log runs, frame capture while a
         # dashboard captures. A tuple, replaced whole, for the threads to read.
@@ -297,6 +309,7 @@ class CANHub:
             "adapter_frames_out": self.frames_to_bus,
             "adapter_send_failures": self.send_failures,
             "adapter_error_frames": self.error_frames,
+            "adapter_rx_overflows": self.rx_overflows,
         }
 
     def add_listener(self, listener: Callable[[can.Message], None]) -> None:
@@ -342,7 +355,10 @@ class CANHub:
                 continue
             # Counted and logged, not forwarded: the Cyphal stack has no use for them.
             if msg.is_error_frame:
-                self.error_frames += 1
+                if is_rx_overflow(msg):
+                    self.rx_overflows += 1
+                else:
+                    self.error_frames += 1
                 self._tell(msg)
                 continue
             # is_rx is False for adapters that echo what they sent (gs_usb

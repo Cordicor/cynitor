@@ -722,6 +722,35 @@ class TestRegisterNodesRetry:
         scanner.add_subscriptions.assert_awaited_once_with(42, {1620: "t.T_1_0"})
 
 
+class TestAdapterOverflows:
+    """Frames an adapter lost, its buffer full, count as dropped (F-042)."""
+
+    def test_behind_the_hub_its_overflow_notices(self, tmp_path):
+        from types import SimpleNamespace
+        from main import CANSession
+        s = CANSession(data_dir=tmp_path)
+        s.hub = SimpleNamespace(rx_overflows=3)
+        assert s.adapter_overflows() == 3
+
+    def test_on_socketcan_the_growth_of_rx_over_errors_since_connect(self, tmp_path, monkeypatch):
+        import main
+        s = main.CANSession(data_dir=tmp_path)
+        s.can_interface, s._overflows_before = "can0", 40
+        monkeypatch.setattr(main, "rx_overflows", lambda device: 45 if device == "can0" else None)
+        assert s.adapter_overflows() == 5
+        s._overflows_before = None  # no counter to read at connect
+        assert s.adapter_overflows() == 0
+
+    def test_the_counter_is_read_from_sysfs(self, tmp_path, monkeypatch):
+        import can_link
+        (tmp_path / "can0" / "statistics").mkdir(parents=True)
+        (tmp_path / "can0" / "statistics" / "rx_over_errors").write_text("7\n")
+        real_path = can_link.Path
+        monkeypatch.setattr(can_link, "Path", lambda p: tmp_path if p == "/sys/class/net" else real_path(p))
+        monkeypatch.setattr(can_link, "IS_LINUX", True)
+        assert can_link.rx_overflows("can0") == 7 and can_link.rx_overflows("vcan9") is None
+
+
 class TestDecodeOnDemand:
     """With the switch on, only what a dashboard watches or a recording takes is decoded; the rest is counted."""
 
