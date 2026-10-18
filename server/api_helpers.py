@@ -47,6 +47,18 @@ def listen_only_refusal(session) -> "web.Response | None":
     return None
 
 
+def command_refusal(session) -> "web.Response | None":
+    """409 for a request that would change a node (a register write, a service call, a firmware
+    update) while the session listens only or takes no commands; else None."""
+    if refused := listen_only_refusal(session):
+        return refused
+    if getattr(session, "no_commands", False) is True:
+        return web.json_response({"error": "The session takes no commands: Cynitor reads the bus and its "
+                                           "nodes but changes none. Connect without No commands to write, "
+                                           "call or update."}, status=409)
+    return None
+
+
 def _parse_int(value: Optional[str], name: str, lo: int = 0, hi: int = MAX_NODE_ID):
     try:
         v = int(value)  # type: ignore[arg-type]  # None raises TypeError, answered below

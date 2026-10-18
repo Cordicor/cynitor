@@ -633,13 +633,21 @@ class TestIdentify:
 class TestAPI:
     @pytest.fixture
     def session(self, manager) -> SimpleNamespace:
-        return SimpleNamespace(test_nodes=manager, can_interface=None, telemetry=None)
+        return SimpleNamespace(test_nodes=manager, can_interface=None, telemetry=None, simulation=None)
 
     @pytest.fixture
     async def client(self, session, dsdl):
         server = WebSocketServer(session=session, host="127.0.0.1", port=0, dsdl_manager=dsdl)
         async with TestClient(TestServer(server.app)) as c:
             yield c
+
+    async def test_on_the_simulated_bus_one_starts_while_taking_no_commands(self, client, session):
+        # Nothing real can move there, so the session's no-commands mode does not stop it.
+        made = await (await client.post("/api/testnodes", json={"name": "probe"})).json()
+        session.test_nodes.attach(_bus(simulated=True))
+        session.simulation, session.no_commands = object(), True
+        resp = await client.post(f"/api/testnodes/{made['id']}/start")
+        assert resp.status == 200 and (await resp.json())["running"]
 
     async def test_one_with_no_node_id_is_given_one_when_it_starts(self, client, session):
         resp = await client.post("/api/testnodes", json={"name": "probe"})
@@ -671,6 +679,10 @@ class TestAPI:
         session.can_interface = "pcan:PCAN_USBBUS1"
         resp = await client.post(f"/api/testnodes/{test_id}/start")
         assert resp.status == 409 and (await resp.json())["confirm"] == "real_bus"
+        session.no_commands = True  # a session that takes no commands starts none on a real bus (F-024)
+        resp = await client.post(f"/api/testnodes/{test_id}/start", json={"confirm_real_bus": True})
+        assert resp.status == 409 and "takes no commands" in (await resp.json())["error"]
+        session.no_commands = False
         resp = await client.post(f"/api/testnodes/{test_id}/start", json={"confirm_real_bus": True})
         assert resp.status == 200 and (await resp.json())["running"]
         listing = await (await client.get("/api/testnodes")).json()

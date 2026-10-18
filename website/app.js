@@ -52,6 +52,10 @@ const bind = () => {
     state.canListenOnly = el('canListenOnlyToggle').checked;
     saveSettings();
   });
+  el('canNoCommandsToggle').addEventListener('change', () => {
+    state.canNoCommands = el('canNoCommandsToggle').checked;
+    saveSettings();
+  });
   el('decodeOnDemandToggle').addEventListener('change', () => {
     setDecodeOnDemand(el('decodeOnDemandToggle').checked);
   });

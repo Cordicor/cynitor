@@ -283,7 +283,8 @@ class CANSession:
 
     def __init__(self, default_bitrate: Optional[int] = None, data_dir: Path = Path("."),
                  default_data_bitrate: Optional[int] = None, default_allocator: bool = False,
-                 decode_on_demand: bool = False, default_listen_only: bool = False) -> None:
+                 decode_on_demand: bool = False, default_listen_only: bool = False,
+                 default_no_commands: bool = False) -> None:
         # Where the databases live; main() passes the resolved data folder.
         self.data_dir = Path(data_dir)
         # --bitrate, used when connect() is not given one. There is no built-in
@@ -298,6 +299,9 @@ class CANSession:
         # --listen-only, likewise: watch the bus without sending anything.
         self.default_listen_only = default_listen_only
         self.listen_only = False  # whether the session that runs sends nothing
+        # --no-commands, likewise: read the bus and its nodes, but change no node.
+        self.default_no_commands = default_no_commands
+        self.no_commands = False  # whether the session that runs refuses writes, calls and updates
         # The interface the server was started with (--can), while the operator
         # has not disconnected it: down, the server is not healthy.
         self.wanted_can: Optional[str] = None
@@ -369,7 +373,7 @@ class CANSession:
     async def connect(self, can_iface: str, force_compile: bool = False,
                       bitrate: Optional[int] = None, data_bitrate: Optional[int] = None,
                       *, allocator: Optional[bool] = None, open_bus=None, offline: Optional[dict] = None,
-                      listen_only: Optional[bool] = None) -> None:
+                      listen_only: Optional[bool] = None, no_commands: Optional[bool] = None) -> None:
         """Start all CAN components.
 
         `bitrate` is ignored by SocketCAN (set it with `ip link`) and required
@@ -386,8 +390,14 @@ class CANSession:
         `listen_only` has the session send nothing: no node-ID, no heartbeat,
         no requests, so no names or registers either; None means
         `default_listen_only`.
+
+        `no_commands` has the session change no node: it names nodes and reads
+        registers, but the API refuses register writes, service calls,
+        firmware updates and test nodes on a real bus, and no allocator runs;
+        None means `default_no_commands`.
         """
         listen_only = self.default_listen_only if listen_only is None else bool(listen_only)
+        no_commands = self.default_no_commands if no_commands is None else bool(no_commands)
         bitrate = resolve_bitrate(can_iface, self.default_bitrate if bitrate is None else bitrate)
         data_bitrate = resolve_data_bitrate(
             can_iface, self.default_data_bitrate if data_bitrate is None else data_bitrate)
@@ -448,13 +458,15 @@ class CANSession:
                 self.scanner = ScannerNode(register_file=str(self.data_dir / SCANNER_DB))
                 self.scanner.offline = offline
                 self.scanner.listen_only = self.listen_only = listen_only
+                self.no_commands = no_commands
                 self.scanner.on_own_node_id_conflict = self._own_node_id_taken
                 self._apply_saved_subject_types()
                 if offline is None and self.scanner.node.id is not None:
                     self.firmware = FirmwareServer(self.firmware_folder)
                     self.firmware.serve_on(self.scanner.node)
                 # Nothing can be sent while a raw log plays, an answer neither.
-                if offline is None and not listen_only and (self.default_allocator if allocator is None else allocator):
+                if offline is None and not listen_only and not no_commands \
+                        and (self.default_allocator if allocator is None else allocator):
                     self._start_allocator()
 
                 logger.info("Initializing TelemetryManager...")
@@ -1099,6 +1111,7 @@ class CANSession:
             self._picked_node_id = False
             self._node_id_before = None
         self.listen_only = False
+        self.no_commands = False
         self.can_interface = None
         self.can_bitrate = None
         self.can_data_bitrate = None
@@ -1497,7 +1510,7 @@ async def main(can_iface: Optional[str] = None, force_compile: bool = False, bin
                can_data_bitrate: Optional[int] = None, allocator: bool = False,
                decode_on_demand: bool = False, update_check: bool = True,
                allow_any_interface: bool = False, listen_only: bool = False, access_log: bool = False,
-               reconnect: bool = False) -> None:
+               reconnect: bool = False, no_commands: bool = False) -> None:
     from websocket_server import WebSocketServer
     from dsdl_manager import DsdlManager
 
@@ -1514,7 +1527,8 @@ async def main(can_iface: Optional[str] = None, force_compile: bool = False, bin
 
     session = CANSession(default_bitrate=can_bitrate, data_dir=data_path,
                          default_data_bitrate=can_data_bitrate, default_allocator=allocator,
-                         decode_on_demand=decode_on_demand, default_listen_only=listen_only)
+                         decode_on_demand=decode_on_demand, default_listen_only=listen_only,
+                         default_no_commands=no_commands)
     project_root = resolve_project_root()
     dsdl_mgr = DsdlManager(project_root, data_dir=data_path)
     dsdl_mgr.make_importable()
@@ -1800,6 +1814,13 @@ if __name__ == "__main__":
              "and registers are not read. The dashboard's Listen only box does the same for one session",
     )
     parser.add_argument(
+        "--no-commands",
+        action="store_true",
+        help="Watch the bus and read its nodes, but change none: register writes, service calls, firmware "
+             "updates and test nodes on a real bus are refused, and no allocator runs. The dashboard's "
+             "No commands box does the same for one session",
+    )
+    parser.add_argument(
         "--insecure-no-auth",
         action="store_true",
         help="Allow a --bind beyond loopback without CYNITOR_AUTH_TOKEN: anyone who can reach the "
@@ -1852,6 +1873,7 @@ if __name__ == "__main__":
             update_check=not args.no_update_check,
             allow_any_interface=args.allow_any_interface,
             listen_only=args.listen_only,
+            no_commands=args.no_commands,
             access_log=args.access_log,
             reconnect=args.reconnect,
         ))

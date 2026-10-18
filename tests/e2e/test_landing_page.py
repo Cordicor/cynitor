@@ -247,14 +247,20 @@ async def _(page):
              detail: {name: 'limit', value: '<b>5</b>', status: 'timeout'}},
             {timestamp_unix: Date.now() / 1000, event_type: 'register_write',
              detail: {name: 'gain', value: '5', status: 'not_applied'}},
-            {timestamp_unix: Date.now() / 1000, event_type: 'firmware_update', detail: {file: 'motor-1.2.app.bin'}}]);
+            {timestamp_unix: Date.now() / 1000, event_type: 'firmware_update', detail: {file: 'motor-1.2.app.bin'}},
+            {timestamp_unix: Date.now() / 1000, event_type: 'firmware_update',
+             detail: {file: 'motor-1.3.app.bin', client: '192.168.1.20'}},
+            {timestamp_unix: Date.now() / 1000, event_type: 'service_call',
+             detail: {service_id: 435, status: 'ok', latency_ms: 12, client: '<i>10.0.0.5</i>'}}]);
         return [...div.querySelectorAll('.hist-row')].map((r) =>
             [r.querySelector('.hist-badge').textContent, r.querySelector('.hist-detail').textContent]);
     }""")
     assert rows == [["Register write", "cordicor.test.bits = 1 0 1 · read back true, false, true"],
                     ["Register write", "limit = <b>5</b> · no answer"],
                     ["Register write", "gain = 5 · not taken by the node"],
-                    ["Firmware update", "from motor-1.2.app.bin"]], f"Rows: {rows}"
+                    ["Firmware update", "from motor-1.2.app.bin"],
+                    ["Firmware update", "from motor-1.3.app.bin · by 192.168.1.20"],
+                    ["Service call", "svc 435 · ok · 12ms · by <i>10.0.0.5</i>"]], f"Rows: {rows}"
 
 
 @test("Log panel shows diagnostics' severity, in time order")
@@ -5712,6 +5718,7 @@ class _SidebarServer:
         self.update = None         # a newer release its update check found
         self.history_error = None  # why its database cannot be written, while connected
         self.listen_only = False   # whether the session it runs sends nothing
+        self.no_commands = False   # whether the session it runs changes no node
         self.connect_body = None   # what the last CAN connect asked for
         self.allocator = None      # what it says of its node-ID allocator, while it runs one
         self.decode_on_demand = False  # whether it decodes only what is watched or recorded
@@ -5739,6 +5746,7 @@ class _SidebarServer:
                       "decode_on_demand": self.decode_on_demand, "update": self.update,
                       "history_error": self.history_error if self.can else None,
                       "listen_only": bool(self.can) and self.listen_only,
+                      "no_commands": bool(self.can) and self.no_commands,
                       "own_node_id": None if not self.can or self.listen_only else 127}
         elif path == "/api/decoding" and self.decoding_error:
             await route.fulfill(json={"error": self.decoding_error}, status=500,
@@ -5758,8 +5766,9 @@ class _SidebarServer:
             # As the backend: its allocator runs only in a session asked to run it.
             self.allocator = {"other_allocator": None, "allocated": 0} if self.connect_body.get("allocator") else None
             self.listen_only = self.connect_body.get("listen_only") is True
+            self.no_commands = self.connect_body.get("no_commands") is True
             answer = {"status": "running", "can_interface": self.can, "can_fd": False, "allocator": self.allocator,
-                      "listen_only": self.listen_only}
+                      "listen_only": self.listen_only, "no_commands": self.no_commands}
         elif path == "/api/can/disconnect":
             self.can, self.allocator, answer = None, None, {"status": "idle"}
         elif path == "/api/nodes" and self.can:
@@ -6404,6 +6413,34 @@ async def _(page):
         assert kept == (True, True), f"After a reload, the choice and the box: {kept}"
     finally:
         await page.evaluate("state.canListenOnly = false; _writeSettingsNow()")
+        await sidebar_close(page, server)
+
+
+@test("Sidebar: No commands connects a session that changes no node; the CAN line and the box say so")
+async def _(page):
+    server = _SidebarServer()
+    await sidebar_open(page, server)
+    row, box = page.locator("#canNoCommandsRow"), page.locator("#canNoCommandsToggle")
+    try:
+        await page.locator("#connectDashboardBtn").click()
+        await page.wait_for_function("state.dashboardConnected", timeout=WAIT_MS)
+        offered = (await row.is_visible(), await box.is_checked(), await box.is_enabled())
+        await box.check()
+        await sidebar_connect_can(page)
+        await page.evaluate("pollStatus()")
+        await page.wait_for_function("el('canUtilization').textContent.includes('no commands')", timeout=WAIT_MS)
+        running = (server.connect_body.get("no_commands"), await row.is_visible(), await box.is_checked(),
+                   await box.is_disabled(), "changes no node" in (await row.get_attribute("title")),
+                   "as node 127" in await page.locator("#canUtilization").text_content())
+        await sidebar_disconnect_can(page)
+        await box.uncheck()
+        await sidebar_connect_can(page)
+        unticked = (server.connect_body.get("no_commands"), await row.is_hidden())
+        assert offered == (True, False, True), f"Before connecting, the box shown, unticked, enabled: {offered}"
+        assert running == (True, True, True, True, True, True), f"Ticked, connected taking no commands: {running}"
+        assert unticked == (False, True), f"Unticked, Connect sent no_commands false and the box hides: {unticked}"
+    finally:
+        await page.evaluate("state.canNoCommands = false; _writeSettingsNow()")
         await sidebar_close(page, server)
 
 

@@ -58,6 +58,8 @@ class CanApi(ApiHandlers):
             "own_node_id": next(iter(self.session._own_node_ids()), None) if self.session.is_running else None,
             # Whether the session that runs sends nothing on the bus (connect's listen_only).
             "listen_only": self.session.is_running and self.session.listen_only is True,
+            # Whether the session that runs refuses writes, calls and updates (connect's no_commands).
+            "no_commands": self.session.is_running and self.session.no_commands is True,
             # A newer release, {"version", "url"}, if the update check found one; else None.
             "update": self.update_check.available if self.update_check is not None else None,
         })
@@ -108,6 +110,10 @@ class CanApi(ApiHandlers):
         listen_only = payload.get("listen_only")
         if listen_only is not None and not isinstance(listen_only, bool):
             return web.json_response({"error": "Field 'listen_only' must be true or false"}, status=400)
+        # Optional; the session changes no node. --no-commands stands in likewise.
+        no_commands = payload.get("no_commands")
+        if no_commands is not None and not isinstance(no_commands, bool):
+            return web.json_response({"error": "Field 'no_commands' must be true or false"}, status=400)
 
         if is_explicit_spec(iface) and not self.allow_any_interface and (refused := api_interface_error(iface)):
             return web.json_response({"error": refused}, status=400)
@@ -128,11 +134,12 @@ class CanApi(ApiHandlers):
 
         try:
             await self.session.connect(iface, bitrate=bitrate, data_bitrate=data_bitrate, allocator=allocator,
-                                       listen_only=listen_only)
+                                       listen_only=listen_only, no_commands=no_commands)
             return web.json_response({"status": "running", "can_interface": iface,
                                       "can_fd": self.session.can_fd,
                                       "allocator": self.session.allocator_status(),
-                                      "listen_only": self.session.listen_only is True})
+                                      "listen_only": self.session.listen_only is True,
+                                      "no_commands": self.session.no_commands is True})
         except Exception as e:
             from main import SessionBusy
             if isinstance(e, SessionBusy):  # a session or a replay runs: the caller's to resolve
