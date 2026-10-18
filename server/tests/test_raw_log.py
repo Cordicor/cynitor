@@ -70,6 +70,26 @@ class TestRawLogFile:
         log.write(_frames()[1])
         assert log.error == "No space left on device" and log._writer is None
 
+    def test_stops_at_the_size_limit(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(RawLog, "MAX_BYTES", 200)
+        monkeypatch.setattr(RawLog, "CHECK_EVERY_FRAMES", 1)
+        log = RawLog(tmp_path / "cynitor-20260928-120000.log", channel="can0")
+        for _ in range(20):
+            log.write(_frames()[0])
+        log.close()
+        assert log.error and "Size limit" in log.error
+        assert log.frames < 20
+
+    def test_stops_when_the_disk_runs_low(self, tmp_path, monkeypatch):
+        import raw_log
+        monkeypatch.setattr(RawLog, "CHECK_EVERY_FRAMES", 2)
+        monkeypatch.setattr(raw_log.shutil, "disk_usage", lambda _: SimpleNamespace(free=10 * 2**20))
+        log = RawLog(tmp_path / "cynitor-20260928-120000.log", channel="can0")
+        for _ in range(5):
+            log.write(_frames()[0])
+        assert log.frames == 2 and log._writer is None
+        assert "MiB free" in log.error
+
 
 class TestNames:
     def test_new_name(self):
@@ -139,6 +159,13 @@ class TestSessionRawLog:
 
     def test_stop_without_a_log(self, running_session):
         assert running_session.stop_raw_log() is None
+
+    def test_refused_when_the_disk_is_low(self, running_session, monkeypatch):
+        import raw_log
+        monkeypatch.setattr(raw_log.shutil, "disk_usage", lambda _: SimpleNamespace(free=0))
+        with pytest.raises(RuntimeError, match="MiB free"):
+            running_session.start_raw_log()
+        assert running_session.raw_log is None
 
 
 @pytest.fixture

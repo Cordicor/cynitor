@@ -15,6 +15,7 @@ from __future__ import annotations
 import datetime
 import logging
 import re
+import shutil
 import threading
 import time
 from pathlib import Path
@@ -59,8 +60,28 @@ def list_logs(folder: Path) -> list[dict]:
     return sorted(logs, key=lambda log: log["name"], reverse=True)
 
 
+def free_space_problem(folder: Path) -> Optional[str]:
+    """Why a raw log should not be written into ``folder`` now, or None."""
+    try:
+        free = shutil.disk_usage(folder).free
+    except OSError:
+        return None  # not knowable here; a write that fails still stops the log
+    if free < RawLog.MIN_FREE_BYTES:
+        return f"Less than {RawLog.MIN_FREE_BYTES // 2**20} MiB free on the disk of {folder.name}"
+    return None
+
+
 class RawLog:
-    """One log file being written. Frames may arrive from several threads."""
+    """One log file being written. Frames may arrive from several threads.
+
+    It stops by itself at MAX_BYTES, or when the disk has less than
+    MIN_FREE_BYTES left: a busy bus writes gigabytes an hour, and a log left
+    running would otherwise fill the disk the database also lives on.
+    """
+
+    MAX_BYTES = 4 * 2**30
+    MIN_FREE_BYTES = 512 * 2**20
+    CHECK_EVERY_FRAMES = 1000  # a stat per frame would cost more than the write
 
     def __init__(self, path: Path, channel: str) -> None:
         self.path = path
@@ -82,9 +103,27 @@ class RawLog:
                 self._writer.on_message_received(msg)
                 self.frames += 1
             except Exception as exc:  # e.g. disk full: stop writing, say why
-                self.error = str(exc)
-                logger.error("Raw log %s stopped: %s", self.path.name, exc)
-                self._close_locked()
+                self._stop_locked(str(exc))
+                return
+            if self.frames % self.CHECK_EVERY_FRAMES == 0:
+                self._check_limits_locked()
+
+    def _check_limits_locked(self) -> None:
+        try:
+            size = self._writer.file.tell()  # the file on disk lags by the write buffer
+        except (OSError, ValueError, AttributeError):
+            return
+        if size >= self.MAX_BYTES:
+            self._stop_locked(f"Size limit of {self.MAX_BYTES // 2**20} MiB reached")
+        else:
+            problem = free_space_problem(self.path.parent)
+            if problem is not None:
+                self._stop_locked(problem)
+
+    def _stop_locked(self, reason: str) -> None:
+        self.error = reason
+        logger.error("Raw log %s stopped: %s", self.path.name, reason)
+        self._close_locked()
 
     def close(self) -> None:
         with self._lock:

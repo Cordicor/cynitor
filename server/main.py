@@ -38,8 +38,8 @@ from data_dir import (EVENTS_DB, SCANNER_DB, SUBJECT_TYPES_FILE, TEST_NODES_FILE
                       resolve_data_dir)
 from firmware import COMMAND_STATUS, FIRMWARE_DIR, FirmwareServer, firmware_path, send_update_command
 from log_store import InMemoryLogStore, APILogHandler, TokenRedactingFilter
-from raw_log import (END_OF_LOG, RAW_LOG_DIR, LogPlayer, RawLog, SocketcanTap, log_has_fd_frames, log_path,
-                     new_log_name, read_sidecar, write_sidecar)
+from raw_log import (END_OF_LOG, RAW_LOG_DIR, LogPlayer, RawLog, SocketcanTap, free_space_problem, log_has_fd_frames,
+                     log_path, new_log_name, read_sidecar, write_sidecar)
 from simulation import SimulatedBus
 from testnodes import TestNodeBus, TestNodeManager
 from transfer_rates import TransferRates
@@ -849,6 +849,9 @@ class CANSession:
         if self.raw_log is not None:
             raise RuntimeError("A raw log is already running")
         self.raw_log_folder.mkdir(parents=True, exist_ok=True)
+        problem = free_space_problem(self.raw_log_folder)
+        if problem is not None:
+            raise RuntimeError(problem)
         path = self.raw_log_folder / new_log_name()
         if self.hub is not None:
             log = RawLog(path, channel="can0")
