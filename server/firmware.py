@@ -119,3 +119,32 @@ async def send_update_command(node, node_id: int, name: str) -> Optional[int]:
     finally:
         client.close()
     return None if result is None else int(result[0].status)
+
+
+async def begin_update(firmware: Optional[FirmwareServer], node, folder: Path, node_id: int, name: str) -> dict:
+    """Tell ``node_id`` to update its software from the uploaded file ``name`` in ``folder``.
+
+    ``firmware`` serves the file from Cynitor's ``node``; None where Cynitor
+    cannot send (a raw log playing, or no node-ID). FileNotFoundError for an
+    unknown file; RuntimeError if nothing can be sent or the node refuses (its
+    ExecuteCommand status); TimeoutError if it does not answer.
+    """
+    path = firmware_path(folder, name)
+    if path is None or not path.is_file():
+        raise FileNotFoundError(f"No firmware file {name}")
+    if firmware is None:
+        raise RuntimeError("Cynitor cannot send here: a raw log is playing, or it has no node-ID")
+    # Followed from before the command: the node may start reading at once.
+    update = firmware.begin(node_id, name, path.stat().st_size)
+    try:
+        status = await send_update_command(node, node_id, name)
+        if status is None:
+            raise TimeoutError(f"Node {node_id} did not answer the update command")
+        if status != 0:
+            reason = COMMAND_STATUS[status] if status < len(COMMAND_STATUS) else f"status {status}"
+            raise RuntimeError(f"Node {node_id} refused the update: {reason}")
+    except BaseException:
+        firmware.updates.pop(node_id, None)
+        raise
+    logger.info("Node %d is updating from %s (%d bytes)", node_id, name, update["bytes"])
+    return update
