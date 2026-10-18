@@ -1,7 +1,8 @@
 # Cynitor
 
+[![Tests](https://github.com/OpenCyphal-Garage/cynitor/actions/workflows/test.yml/badge.svg?branch=main&event=push)](https://github.com/OpenCyphal-Garage/cynitor/actions/workflows/test.yml)
 ![Ubuntu 22.04: passing](https://img.shields.io/badge/Ubuntu_22.04-passing-brightgreen "On real hardware: a gs_usb CAN FD adapter and an STM32 Cyphal node; release binaries are built here")
-![Ubuntu 24.04: passing](https://img.shields.io/badge/Ubuntu_24.04-passing-brightgreen "CI: unit tests (Python 3.10, 3.11, 3.12), integration, browser end-to-end")
+![Ubuntu 24.04: passing](https://img.shields.io/badge/Ubuntu_24.04-passing-brightgreen "CI: unit tests (Python 3.10 to 3.13), type check, integration, browser end-to-end")
 ![Windows Server 2022, 2025: passing](https://img.shields.io/badge/Windows_Server_2022%2C_2025-passing-brightgreen "CI: unit tests and integration on a virtual bus; the release build's smoke test (2022)")
 [![Latest release](https://img.shields.io/github/v/release/OpenCyphal-Garage/cynitor)](https://github.com/OpenCyphal-Garage/cynitor/releases/latest)
 
