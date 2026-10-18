@@ -43,7 +43,7 @@ from raw_log import (END_OF_LOG, RAW_LOG_DIR, LogPlayer, RawLog, SocketcanTap, f
 from session_errors import SessionBusy
 from simulation import SimulatedBus
 from testnodes import TestNodeBus, TestNodeManager
-from transfer_rates import TransferRates
+from on_demand import OnDemandDecoding
 from update_check import DISABLE_ENV as DISABLE_UPDATE_CHECK_ENV, UpdateCheck
 from type_guess import load_candidates, rank_types
 from startup_setup import ensure_libusb_on_path, prepare_runtime, resolve_project_root
@@ -151,10 +151,9 @@ class CANSession:
         # from their frames (see transfer_rates). For a bus that carries more
         # than can be decoded; off, every subject is decoded.
         self.decode_on_demand = decode_on_demand
-        self._watched: dict[object, frozenset[int]] = {}  # by dashboard: the subjects it shows the values of
-        self._rates: Optional[TransferRates] = None       # the frame-level count, while decoding on demand
-        self._stop_rates_tap: Optional[Callable[[], None]] = None
-        self._on_demand_task: Optional[asyncio.Task] = None
+        self.on_demand = OnDemandDecoding(
+            lambda on_frame, can_filters: self._open_capture_tap(on_frame, can_filters),
+            lambda: self.scanner, lambda: self.event_logger)
         self.can_interface: Optional[str] = None
         self.can_bitrate: Optional[int] = None
         self.can_data_bitrate: Optional[int] = None
@@ -398,9 +397,9 @@ class CANSession:
                     logger.warning("Service calls will not be recorded: %s", exc)
                 stack.callback(self._stop_service_calls)  # before the event logger it writes to
                 # Decoding on demand may be switched on later too: its stop is always due.
-                stack.callback(self._stop_on_demand, False)
+                stack.callback(self.on_demand.stop, False)
                 if self.decode_on_demand:
-                    self._start_on_demand()
+                    self.on_demand.start()
                 if simulation is not None:
                     # Last, so that the devices join a bus Cynitor already watches.
                     self.simulation = simulation
@@ -469,11 +468,7 @@ class CANSession:
             seen |= {node_id for node_id, node in self.scanner.all_nodes.items() if node.has_appeared}
         return seen
 
-    # ── Decoding on demand ──
-
-    # For a SocketCAN socket: let the kernel pass message frames only, as
-    # transfer_rates counts no others (bit 25 marks a service frame).
-    _MESSAGE_FRAMES = [{"can_id": 0, "can_mask": 1 << 25, "extended": True}]
+    # ── Decoding on demand (see on_demand) ──
 
     async def set_decode_on_demand(self, on: bool) -> None:
         """Decode only what is watched or recorded (True), or every subject (False). Takes effect at once."""
@@ -481,66 +476,14 @@ class CANSession:
             self.decode_on_demand = on
             if not self.is_running:
                 return
-            if on and self._rates is None:
-                self._start_on_demand()
+            if on and not self.on_demand.running:
+                self.on_demand.start()
             elif not on:
-                self._stop_on_demand()
+                self.on_demand.stop()
 
     def set_watched(self, dashboard: object, subject_ids) -> None:
         """The subjects ``dashboard`` shows the values of; None once it has gone."""
-        if subject_ids is None:
-            self._watched.pop(dashboard, None)
-        else:
-            self._watched[dashboard] = frozenset(subject_ids)
-        self._apply_decoding()
-
-    def _start_on_demand(self) -> None:
-        self._rates = TransferRates()
-        self._stop_rates_tap = self._open_capture_tap(self._rates.on_frame, self._MESSAGE_FRAMES)
-        self._on_demand_task = asyncio.create_task(self._on_demand_loop())
-        self._apply_decoding()
-        logger.info("Decoding on demand: only the subjects watched or recorded are decoded, the rest counted")
-
-    def _stop_on_demand(self, decode_all: bool = True) -> None:
-        """Stop counting; ``decode_all`` unless the session is ending anyway."""
-        if self._on_demand_task is not None:
-            self._on_demand_task.cancel()
-        self._on_demand_task = None
-        if self._stop_rates_tap is not None:
-            self._stop_rates_tap()
-        self._stop_rates_tap = None
-        if decode_all and self._rates is not None and self.scanner is not None:
-            self.scanner.set_decoding(None)
-            logger.info("Decoding every subject again")
-        self._rates = None
-
-    def _wanted_subjects(self) -> set[int]:
-        """The subjects some dashboard watches or some recording takes."""
-        wanted: set[int] = set().union(*self._watched.values())
-        if self.event_logger is not None and self.scanner is not None:
-            for subject_id, message_type in self.scanner.subject_types.items():
-                if subject_id not in wanted and self.event_logger.records_subject(
-                        subject_id, self.scanner.active_publishers.get(subject_id, ()),
-                        message_type.rpartition(".")[2]):
-                    wanted.add(subject_id)
-        return wanted
-
-    def _apply_decoding(self) -> None:
-        if self._rates is not None and self.scanner is not None:
-            self.scanner.set_decoding(self._wanted_subjects())
-
-    async def _on_demand_loop(self) -> None:
-        """Every second: follow the recordings that started or stopped, and report the rates counted."""
-        while True:
-            await asyncio.sleep(1.0)
-            try:
-                self._apply_decoding()
-                if self.scanner is not None and self._rates is not None:
-                    await self.scanner.queue_rates(self._rates.sample())
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:  # a second's rates missed must not end the loop
-                logger.error("Decoding on demand: %s", exc, exc_info=True)
+        self.on_demand.set_watched(dashboard, subject_ids)
 
     def _node_ids_in_use(self) -> set[int]:
         """Cynitor's own node-IDs, and those of the nodes online on the bus."""

@@ -752,7 +752,7 @@ class TestDecodeOnDemand:
         await session.set_decode_on_demand(True)
         try:
             (on_frame, can_filters, _), = session.taps
-            assert on_frame == session._rates.on_frame
+            assert on_frame == session.on_demand.rates.on_frame
             assert can_filters == [{"can_id": 0, "can_mask": 1 << 25, "extended": True}]   # no service frames
             session.scanner.set_decoding.assert_called_with({1620})
             session.set_watched("another", [1621, 1700])
@@ -762,7 +762,7 @@ class TestDecodeOnDemand:
         finally:
             await session.set_decode_on_demand(False)
         session.scanner.set_decoding.assert_called_with(None)
-        assert session.taps[0][2] and session._rates is None and session._on_demand_task is None
+        assert session.taps[0][2] and session.on_demand.rates is None and session.on_demand._task is None
         assert session.decode_on_demand is False
 
     async def test_a_recording_keeps_what_it_takes_decoded(self, session):
@@ -777,7 +777,7 @@ class TestDecodeOnDemand:
             session.scanner.set_decoding.assert_called_with({1621})
             assert (1621, {43, 44}, "Scalar_1_0") in asked and (1620, {42}, "T_1_0") in asked
         finally:
-            session._stop_on_demand()
+            session.on_demand.stop()
 
     async def test_every_second_the_counted_rates_go_to_the_scanner(self, session, monkeypatch):
         import main
@@ -788,27 +788,27 @@ class TestDecodeOnDemand:
             if len(slept) > 2:
                 raise asyncio.CancelledError
         monkeypatch.setattr(main.asyncio, "sleep", no_wait)
-        session._rates = MagicMock(sample=MagicMock(return_value={(1621, 43): (250.0, 1000.0)}))
+        session.on_demand.rates = MagicMock(sample=MagicMock(return_value={(1621, 43): (250.0, 1000.0)}))
         with pytest.raises(asyncio.CancelledError):
-            await session._on_demand_loop()
+            await session.on_demand._loop()
         assert session.scanner.queue_rates.await_count == 2
         session.scanner.queue_rates.assert_awaited_with({(1621, 43): (250.0, 1000.0)})
-        session._rates = None
+        session.on_demand.rates = None
 
     async def test_not_connected_the_choice_waits_for_the_next_session(self, tmp_path):
         from main import CANSession
         s = CANSession(data_dir=tmp_path)
         await s.set_decode_on_demand(True)
-        assert s.decode_on_demand is True and s._rates is None
+        assert s.decode_on_demand is True and s.on_demand.rates is None
 
     async def test_a_session_that_ends_does_not_start_decoding_everything_first(self, session):
         await session.set_decode_on_demand(True)
         scanner = session.scanner
         scanner.set_decoding.reset_mock()
-        session._stack.callback(session._stop_on_demand, False)  # as connect registers it
+        session._stack.callback(session.on_demand.stop, False)  # as connect registers it
         await session._teardown()
         scanner.set_decoding.assert_not_called()
-        assert session.taps[0][2] and session._rates is None
+        assert session.taps[0][2] and session.on_demand.rates is None
         assert session.decode_on_demand is True   # the next session decodes on demand too
 
     async def test_counted_rates_are_not_written_to_history(self):

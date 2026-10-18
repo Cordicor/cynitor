@@ -411,7 +411,7 @@ async def run() -> None:
               "watched by a dashboard, it is decoded again at once")
         session.set_watched("a dashboard", None)
         await session.set_decode_on_demand(False)
-        check(TEMPERATURE_SUBJECT_ID in session.scanner.publishers_subscribers and session._rates is None,
+        check(TEMPERATURE_SUBJECT_ID in session.scanner.publishers_subscribers and session.on_demand.rates is None,
               "switched off, every subject is decoded again")
 
         session.hub._still_present = lambda: False  # the adapter goes away
