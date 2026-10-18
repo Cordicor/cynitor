@@ -5,17 +5,17 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from main import BusLoadMonitor, _canbusload_counts_can_fd, _get_can_bitrates
+from bus_load import BusLoadMonitor, _canbusload_counts_can_fd, _get_can_bitrates
 
 
 class TestGetCanBitrates:
     def test_default_when_command_fails(self):
-        with patch("main.subprocess.run") as mock_run:
+        with patch("bus_load.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=1, stdout="")
             assert _get_can_bitrates("vcan0") == (500000, None)
 
     def test_parses_bitrate_from_output(self):
-        with patch("main.subprocess.run") as mock_run:
+        with patch("bus_load.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(
                 returncode=0,
                 stdout="3: can0: <NOARP,UP,LOWER_UP> mtu 16 qdisc fq_codel state UP\n    link/can  promiscuity 0\n    can state ERROR-ACTIVE restart-ms 0\n          bitrate 1000000 sample-point 0.750",
@@ -23,7 +23,7 @@ class TestGetCanBitrates:
             assert _get_can_bitrates("can0") == (1000000, None)
 
     def test_parses_can_fd_data_bitrate(self):
-        with patch("main.subprocess.run") as mock_run:
+        with patch("bus_load.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(
                 returncode=0,
                 stdout="3: can0: <NOARP,UP,LOWER_UP> mtu 72 qdisc pfifo_fast state UP\n    link/can  promiscuity 0\n    can <FD> state ERROR-ACTIVE restart-ms 0\n          bitrate 500000 sample-point 0.875\n          dbitrate 2000000 dsample-point 0.750",
@@ -31,12 +31,12 @@ class TestGetCanBitrates:
             assert _get_can_bitrates("can0") == (500000, 2000000)
 
     def test_default_when_no_match(self):
-        with patch("main.subprocess.run") as mock_run:
+        with patch("bus_load.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=0, stdout="no bitrate info here")
             assert _get_can_bitrates("can0") == (500000, None)
 
     def test_default_on_exception(self):
-        with patch("main.subprocess.run", side_effect=FileNotFoundError):
+        with patch("bus_load.subprocess.run", side_effect=FileNotFoundError):
             assert _get_can_bitrates("can0") == (500000, None)
 
 
@@ -52,9 +52,9 @@ def make_monitor(iface: str = "vcan0", canbusload: str | None = "/usr/bin/canbus
 
     Pass canbusload=None to construct the disabled no-op variant.
     """
-    with patch("main._get_can_bitrates", return_value=bitrates), \
-         patch("main.shutil.which", return_value=canbusload), \
-         patch("main._canbusload_counts_can_fd", return_value=counts_can_fd):
+    with patch("bus_load._get_can_bitrates", return_value=bitrates), \
+         patch("bus_load.shutil.which", return_value=canbusload), \
+         patch("bus_load._canbusload_counts_can_fd", return_value=counts_can_fd):
         return BusLoadMonitor(iface)
 
 
@@ -71,7 +71,7 @@ class TestBusLoadMonitor:
         mock_proc.kill = MagicMock()
         mock_proc.wait = AsyncMock()
 
-        with patch("main.asyncio.create_subprocess_exec", return_value=mock_proc):
+        with patch("bus_load.asyncio.create_subprocess_exec", return_value=mock_proc):
             await monitor.start()
             assert monitor._proc is not None
             assert monitor.is_alive
@@ -94,7 +94,7 @@ class TestBusLoadMonitor:
         mock_proc.terminate = MagicMock()
         mock_proc.wait = AsyncMock()
 
-        with patch("main.asyncio.create_subprocess_exec", return_value=mock_proc):
+        with patch("bus_load.asyncio.create_subprocess_exec", return_value=mock_proc):
             await monitor.start()
             await asyncio.sleep(0.1)
 
@@ -109,7 +109,7 @@ class TestBusLoadMonitor:
         mock_proc.stdout.readline = AsyncMock(return_value=b"")
         mock_proc.terminate = MagicMock()
         mock_proc.wait = AsyncMock()
-        with patch("main.asyncio.create_subprocess_exec", return_value=mock_proc) as spawn:
+        with patch("bus_load.asyncio.create_subprocess_exec", return_value=mock_proc) as spawn:
             await monitor.start()
         assert spawn.call_args.args[:2] == ("canbusload", "can0@500000,2000000")
         await monitor.stop()
@@ -180,11 +180,11 @@ class TestOldCanbusloadOnCanFd:
         ("commandline in the form: <ifname>@<bitrate>[,<dbitrate>]\n", True),
     ])
     def test_the_version_is_told_by_its_usage_text(self, usage, counts):
-        with patch("main.subprocess.run", return_value=MagicMock(stdout=usage, stderr="")):
+        with patch("bus_load.subprocess.run", return_value=MagicMock(stdout=usage, stderr="")):
             assert _canbusload_counts_can_fd() is counts
 
     def test_a_canbusload_that_cannot_run_counts_nothing(self):
-        with patch("main.subprocess.run", side_effect=OSError):
+        with patch("bus_load.subprocess.run", side_effect=OSError):
             assert _canbusload_counts_can_fd() is False
 
 
@@ -206,7 +206,7 @@ class TestBusLoadMonitorWithoutCanUtils:
     @pytest.mark.asyncio
     async def test_start_does_not_spawn_a_process(self):
         monitor = make_monitor(canbusload=None)
-        with patch("main.asyncio.create_subprocess_exec") as spawn:
+        with patch("bus_load.asyncio.create_subprocess_exec") as spawn:
             await monitor.start()
         spawn.assert_not_called()
         assert monitor._proc is None

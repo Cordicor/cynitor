@@ -23,6 +23,7 @@ import uavcan.node.port
 import uavcan.diagnostic
 import uavcan.pnp
 
+from events import SubjectEvent
 from local_time import local_isoformat
 from node_info import NodeInfo
 from update_check import parse_version
@@ -126,9 +127,12 @@ class ScannerNode(ScannerRegisters, ScannerServices):
         510: 'uavcan.time.GetSynchronizationMasterInfo_0_1',
     }
 
-    def __init__(self, register_file: Optional[str] = None) -> None:
+    def __init__(self, register_file: Optional[str] = None, transport=None) -> None:
         """``register_file`` is where the node's registers persist; the session
-        puts it in the data folder (see data_dir). Defaults to REGISTER_FILE."""
+        puts it in the data folder (see data_dir). Defaults to REGISTER_FILE.
+        ``transport`` is the CAN transport, with the node-ID, the session made
+        (main.CANSession._transport); without one, pycyphal makes one from the
+        UAVCAN__* environment variables, as its own tools do."""
         # Cynitor's own name and version, as another tool on the bus sees them
         # (it named itself after the pycyphal example it began as).
         major, minor = (parse_version(__version__) or (0, 0))[:2]
@@ -137,7 +141,8 @@ class ScannerNode(ScannerRegisters, ScannerServices):
             name=NODE_NAME,
         )
 
-        self._node = pycyphal.application.make_node(node_information, register_file or ScannerNode.REGISTER_FILE)
+        self._node = pycyphal.application.make_node(node_information, register_file or ScannerNode.REGISTER_FILE,
+                                                    transport=transport)
         self._node.heartbeat_publisher.mode = uavcan.node.Mode_1.OPERATIONAL
         self._node.heartbeat_publisher.vendor_specific_status_code = os.getpid() % 100
 
@@ -157,7 +162,7 @@ class ScannerNode(ScannerRegisters, ScannerServices):
         self.identity_map = NodeIdentityMap()
         self.subject_attributes: dict[int, list[str]] = {}                # Maps subject_id to list of attribute names
         self.publishers_subscribers: dict[int, Any] = {}  # pycyphal Subscribers
-        self.message_queue: asyncio.Queue = asyncio.Queue(maxsize=self.MESSAGE_QUEUE_SIZE)
+        self.message_queue: asyncio.Queue[SubjectEvent] = asyncio.Queue(maxsize=self.MESSAGE_QUEUE_SIZE)
         self.dropped_events = 0  # events discarded because message_queue was full
         self.active_publishers: dict[int, set] = {}                        # Maps subject_id to set of publisher node_ids
         self.services: set[str] = set()
@@ -613,7 +618,7 @@ class ScannerNode(ScannerRegisters, ScannerServices):
         """Build a standardized event dict and put it on the message queue."""
         timestamp, monotonic = self._transfer_times(transfer)
         rate, subject_rate = self._track_rate(subject_id, publisher_node_id, monotonic)
-        event = {
+        event: SubjectEvent = {
             "subject_id": subject_id,
             "timestamp": local_isoformat(timestamp, timespec="seconds"),
             "timestamp_unix": timestamp,
@@ -627,7 +632,7 @@ class ScannerNode(ScannerRegisters, ScannerServices):
         }
         await self._enqueue(event)
 
-    async def _enqueue(self, event: dict) -> None:
+    async def _enqueue(self, event: SubjectEvent) -> None:
         try:
             self.message_queue.put_nowait(event)
         except asyncio.QueueFull:

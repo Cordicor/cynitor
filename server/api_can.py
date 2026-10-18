@@ -7,9 +7,11 @@ import asyncio
 from aiohttp import web
 
 from api_helpers import ApiHandlers, logger
+from can_link import discover_can_interfaces, get_can_link_diagnostics
 from bus_errors import BusErrors
 from can_config import api_interface_error, is_explicit_spec, is_socketcan, resolve_bitrate, resolve_data_bitrate, socketcan_device
 from cyphal_v11 import V11Traffic
+from session_errors import SessionBusy
 
 
 class CanApi(ApiHandlers):
@@ -26,7 +28,6 @@ class CanApi(ApiHandlers):
         return [adapter.as_dict() for adapter in adapters]
 
     async def _get_status(self, request: web.Request) -> web.Response:
-        from main import discover_can_interfaces
         bus_load = self.session.bus_load
         available = await asyncio.to_thread(discover_can_interfaces)
         return web.json_response({
@@ -81,7 +82,6 @@ class CanApi(ApiHandlers):
         return web.json_response({"adapters": await self._list_adapters(refresh=refresh)})
 
     async def _can_connect(self, request: web.Request) -> web.Response:
-        from main import discover_can_interfaces
         try:
             payload = await request.json()
         except Exception:
@@ -141,7 +141,6 @@ class CanApi(ApiHandlers):
                                       "listen_only": self.session.listen_only is True,
                                       "no_commands": self.session.no_commands is True})
         except Exception as e:
-            from main import SessionBusy
             if isinstance(e, SessionBusy):  # a session or a replay runs: the caller's to resolve
                 logger.info("CAN connect refused: %s", e)
                 return web.json_response({"error": str(e)}, status=409)
@@ -149,7 +148,6 @@ class CanApi(ApiHandlers):
             return web.json_response({"error": str(e)}, status=500)
 
     async def _can_disconnect(self, request: web.Request) -> web.Response:
-        from main import discover_can_interfaces
         if not self.session.is_running:
             return web.json_response({"error": "Not connected"}, status=409)
 
@@ -171,7 +169,6 @@ class CanApi(ApiHandlers):
         in-process) with controller/bus-state details parsed from iproute2
         (run off the event loop via to_thread).
         """
-        from main import get_can_link_diagnostics
         if not self.session.is_running or self.session.scanner is None:
             return web.json_response({"connected": False})
 

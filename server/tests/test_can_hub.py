@@ -185,6 +185,19 @@ class TestFiltering:
             a.shutdown()
             h.stop()
 
+    def test_an_overflow_notice_is_a_loss_not_a_bus_error(self):
+        # gs_usb_fd passes the device's overflow flag on as SocketCAN's error frame (F-042).
+        overflow = can.Message(arbitration_id=0x4, is_error_frame=True, is_extended_id=False,
+                               data=bytes([0, 0x01, 0, 0, 0, 0, 0, 0]))
+        h, a = _start_with(StubAdapter(incoming=[overflow, overflow, _frame(0x601)]), listen=True)
+        try:
+            assert _recv_matching(a, 0x601) is not None
+            assert (h.rx_overflows, h.error_frames) == (2, 0)
+            assert h.link_diagnostics()["adapter_rx_overflows"] == 2
+        finally:
+            a.shutdown()
+            h.stop()
+
 
 class TestFailures:
     def test_a_listener_that_raises_is_dropped_and_forwarding_goes_on(self, hub, other_node, caplog):

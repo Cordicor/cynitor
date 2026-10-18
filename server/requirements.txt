@@ -2,7 +2,10 @@
 # and pycyphal.transport.can.media.pythoncan for its channel). pycyphal
 # declares it only as an optional extra, so a plain `pycyphal` install fails
 # with "No module named 'can'" — on a fresh checkout as well as in a frozen build.
-pycyphal[transport-can-pythoncan]>=1.27,<2.0
+# Within 1.27: Cynitor relies on some of pycyphal's internals, which a minor
+# release may change (tests/test_pycyphal_internals.py lists them). Widen it
+# once those tests pass on the next one.
+pycyphal[transport-can-pythoncan]>=1.27.1,<1.28
 # That extra takes any python-can 4. slcan adapters run CAN FD from 4.6 on;
 # an older one ignores the data bitrate, and the bitrate with it.
 python-can[serial]>=4.6,<5.0

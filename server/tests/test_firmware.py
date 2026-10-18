@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from aiohttp.test_utils import TestClient, TestServer
 
+import firmware
 import main
 from firmware import FirmwareServer, firmware_path, list_firmware
 
@@ -72,7 +73,7 @@ def session(tmp_path, folder):
 
 class TestBeginUpdate:
     async def test_accepted(self, session):
-        with patch.object(main, "send_update_command", AsyncMock(return_value=0)) as send:
+        with patch.object(firmware, "send_update_command", AsyncMock(return_value=0)) as send:
             update = await session.begin_firmware_update(42, "motor-1.2.app.bin")
         send.assert_awaited_once_with(session.scanner.node, 42, "motor-1.2.app.bin")
         assert update["state"] == "requested" and update["bytes"] == len(IMAGE)
@@ -84,7 +85,7 @@ class TestBeginUpdate:
         (99, RuntimeError, "status 99"),
     ])
     async def test_refused_or_silent(self, session, status, error, match):
-        with patch.object(main, "send_update_command", AsyncMock(return_value=status)):
+        with patch.object(firmware, "send_update_command", AsyncMock(return_value=status)):
             with pytest.raises(error, match=match):
                 await session.begin_firmware_update(42, "motor-1.2.app.bin")
         assert 42 not in session.firmware.updates

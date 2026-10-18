@@ -30,6 +30,8 @@ python3 tests/integration/hub_session.py --fd
 python3 tests/integration/api_walk.py
 ```
 
+or all three under pytest, each reported on its own: `pytest tests/integration`.
+
 Dashboard, end to end in Chromium (needs `pip install playwright` and
 `playwright install chromium`), from `tests/e2e/`:
 

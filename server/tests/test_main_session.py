@@ -115,7 +115,7 @@ class TestConnectBitrate:
         with pytest.raises(RuntimeError, match="stop"):
             await s.connect("gs_usb:0")
         assert (hubs[0].spec, hubs[0].bitrate) == ("gs_usb:0", 250_000)
-        assert captured == [("virtual:fake-hub", False, 250_000, False, None)]
+        assert captured == [(False,)]  # compiling only: the rates stay with the session
 
     async def test_explicit_bitrate_wins(self, captured, hubs):
         from main import CANSession
@@ -123,7 +123,7 @@ class TestConnectBitrate:
         with pytest.raises(RuntimeError, match="stop"):
             await s.connect("gs_usb:0", bitrate=125_000)
         assert hubs[0].bitrate == 125_000
-        assert captured == [("virtual:fake-hub", False, 125_000, False, None)]
+        assert captured == [(False,)]
 
     async def test_invalid_bitrate_fails_before_prepare_runtime(self, captured, hubs):
         from main import CANSession
@@ -141,7 +141,7 @@ class TestConnectBitrate:
         from main import CANSession
         with pytest.raises(RuntimeError, match="stop"):
             await CANSession().connect("vcan0")
-        assert captured == [("vcan0", False, None)]
+        assert captured == [(False,)]
         assert hubs == []  # SocketCAN keeps its direct path
 
     async def test_socketcan_ignores_a_given_bitrate(self, captured, hubs):
@@ -149,7 +149,7 @@ class TestConnectBitrate:
         from main import CANSession
         with pytest.raises(RuntimeError, match="stop"):
             await CANSession(default_bitrate=250_000).connect("vcan0")
-        assert captured == [("vcan0", False, None)]
+        assert captured == [(False,)]
 
     def test_invalid_default_is_rejected_up_front(self):
         from main import CANSession
@@ -171,7 +171,7 @@ class TestConnectSimulatedBus:
         assert (hubs[0].spec, hubs[0].bitrate, hubs[0].data_bitrate) == (spec, *rates)
         wire = hubs[0].open_bus.__self__
         assert isinstance(wire, SimulatedBus) and (wire.bitrate, wire.data_bitrate) == rates
-        assert captured == [("virtual:fake-hub", False, rates[0], False, rates[1])]
+        assert captured == [(False,)]
 
     async def test_needs_no_bitrate(self, captured, hubs):
         from main import CANSession
@@ -185,6 +185,26 @@ class TestConnectSimulatedBus:
             await CANSession().connect("sim:warp")
         assert captured == [] and hubs == []
 
+    async def test_teardown_stops_in_reverse_and_runs_every_stop_though_one_fails(self):
+        # F-030 Q-20: the order is the reverse of the starts, kept in one place; a
+        # stop that raises no longer leaves the components after it running.
+        from main import CANSession
+        s = CANSession()
+        stopped = []
+
+        def broken():
+            stopped.append("broken")
+            raise OSError("adapter gone")
+        s._stack.callback(stopped.append, "hub")
+        s._stack.callback(broken)
+        s._stack.callback(stopped.append, "test nodes")
+        s.registered_nodes.add(5)
+        with pytest.raises(OSError, match="adapter gone"):
+            await s._teardown()
+        assert stopped == ["test nodes", "broken", "hub"] and s.registered_nodes == set()
+        await s._teardown()  # the stack is spent: a second teardown stops nothing again
+        assert stopped == ["test nodes", "broken", "hub"]
+
     async def test_its_devices_stop_with_the_session(self):
         from main import CANSession
         stopped = []
@@ -195,6 +215,7 @@ class TestConnectSimulatedBus:
 
         s = CANSession()
         s.simulation = FakeSimulation()
+        s._stack.push_async_callback(s._stop_simulation)  # as connect registers it
         await s._teardown()
         assert stopped == [True] and s.simulation is None
 
@@ -210,6 +231,7 @@ class TestTestNodes:
         from testnodes import TestNodeBus
         s = CANSession(data_dir=tmp_path)
         s.test_nodes.attach(TestNodeBus(lambda node_id: None, True, set))
+        s._stack.push_async_callback(s.test_nodes.detach)  # as connect registers it
         await s._teardown()
         assert s.test_nodes.bus is None
 
@@ -228,11 +250,12 @@ class TestTestNodes:
     async def test_behind_the_hub_they_share_its_channel(self, tmp_path, monkeypatch, bitrate, mtu, payload):
         from types import SimpleNamespace
         from main import CANSession
-        monkeypatch.setenv("UAVCAN__CAN__BITRATE", bitrate)  # as prepare_runtime publishes them
-        monkeypatch.setenv("UAVCAN__CAN__MTU", mtu)
+        from can_config import media_settings
         s = CANSession(data_dir=tmp_path)
         s.hub = SimpleNamespace(local_spec="virtual:test-node-hub")
-        transport = s._test_node_transport(60)
+        rates = [int(r) for r in bitrate.split()]
+        s._media = media_settings("virtual:test-node-hub", rates[0], None if mtu == "8" else rates[1])
+        transport = s._transport(60)
         try:
             assert transport.local_node_id == 60 and transport.protocol_parameters.mtu == payload
         finally:
@@ -254,7 +277,8 @@ class TestAllocator:
             raise RuntimeError("stop after the scanner")
 
         monkeypatch.setattr(main, "prepare_runtime", lambda *args: None)
-        monkeypatch.setattr(scanner_node, "ScannerNode", lambda register_file: MagicMock())
+        monkeypatch.setattr(scanner_node, "ScannerNode", lambda register_file, transport=None: MagicMock())
+        monkeypatch.setattr(main.CANSession, "_transport", lambda self, node_id: None)
         monkeypatch.setattr(main, "FirmwareServer", MagicMock())  # the real one needs compiled DSDL
         monkeypatch.setattr(telemetry_manager, "TelemetryManager", stop_after_the_scanner)
         monkeypatch.setattr(main.CANSession, "_start_allocator", lambda self: starts.append(True))
@@ -324,6 +348,7 @@ class TestAllocator:
         s.allocator = running = MagicMock()
         running.status.return_value = {"other_allocator": None, "allocated": 3}
         assert s.allocator_status() == {"other_allocator": None, "allocated": 3}
+        s._stack.callback(s._close_allocator)  # as connect registers it
         await s._teardown()
         running.close.assert_called_once_with()
         assert s.allocator is None and s.allocator_status() is None
@@ -345,7 +370,7 @@ class TestConnectCanFd:
         with pytest.raises(RuntimeError, match="stop"):
             await CANSession().connect("pcan:PCAN_USBBUS1", bitrate=500_000, data_bitrate=2_000_000)
         assert hubs[0].data_bitrate == 2_000_000
-        assert captured == [("virtual:fake-hub", False, 500_000, False, 2_000_000)]
+        assert captured == [(False,)]
 
     async def test_session_default_data_bitrate(self, captured, hubs):
         from main import CANSession
@@ -378,7 +403,7 @@ class TestConnectCanFd:
         from main import CANSession
         with pytest.raises(RuntimeError, match="stop"):
             await CANSession().connect("vcan0", data_bitrate=2_000_000)
-        assert captured == [("vcan0", False, None)]
+        assert captured == [(False,)]
 
     def test_invalid_default_data_bitrate_is_rejected_up_front(self):
         from main import CANSession
@@ -413,7 +438,7 @@ class TestConnectThroughHub:
         with pytest.raises(RuntimeError, match="stop"):
             await main.CANSession().connect("gs_usb:0", bitrate=500_000)
         assert picks == [("virtual:fake-hub", frozenset())]
-        assert os.environ["UAVCAN__NODE__ID"] == "42"
+        assert "UAVCAN__NODE__ID" not in os.environ  # the session's own, not the process's
 
     async def test_preset_node_id_is_kept(self, captured, hubs, monkeypatch):
         import os
@@ -421,7 +446,7 @@ class TestConnectThroughHub:
         monkeypatch.setattr(main, "pick_free_node_id", lambda *a: pytest.fail("should not pick"))
         with pytest.raises(RuntimeError, match="stop"):
             await main.CANSession().connect("gs_usb:0", bitrate=500_000)
-        assert os.environ["UAVCAN__NODE__ID"] == "7"
+        assert os.environ["UAVCAN__NODE__ID"] == "7"  # read, never written
 
 
 class TestNodeIdOnSocketcan:
@@ -433,12 +458,13 @@ class TestNodeIdOnSocketcan:
         import main
         picks = []
         monkeypatch.setattr(main, "pick_free_node_id", lambda *args: picks.append(args) or 42)
-        monkeypatch.setattr(main, "socketcan_supports_fd", lambda device: fd)
+        import can_config
+        monkeypatch.setattr(can_config, "socketcan_supports_fd", lambda device: fd)
         monkeypatch.delenv("UAVCAN__NODE__ID")
         with pytest.raises(RuntimeError, match="stop"):
             await main.CANSession().connect("vcan0")
         assert picks == [("socketcan:vcan0", frozenset(), None, fd)]
-        assert os.environ["UAVCAN__NODE__ID"] == "42"
+        assert "UAVCAN__NODE__ID" not in os.environ
 
     async def test_preset_node_id_is_kept(self, captured, hubs, monkeypatch):
         import os
@@ -450,41 +476,38 @@ class TestNodeIdOnSocketcan:
 
 
 class TestNodeIdIsPickedForEachBus:
-    """A node-ID Cynitor picked is the free one of the bus it was picked on, not of the next."""
+    """A node-ID Cynitor picked is the free one of the bus it was picked on, not of the next.
 
-    async def test_picked_node_id_is_forgotten_when_the_session_ends(self, hubs, monkeypatch):
+    It is the session's own: no process-wide variable carries it to the next
+    session, nor to the processes the server starts (F-023, F-030 Q-22)."""
+
+    async def test_picked_for_the_bus_and_kept_by_the_session_only(self, hubs, monkeypatch):
         import os
         import main
         monkeypatch.delenv("UAVCAN__NODE__ID")
         session = main.CANSession()
-        await session._pick_node_id("socketcan:vcan0")
-        assert os.environ["UAVCAN__NODE__ID"] == "42"
-        await session.disconnect()
+        assert await session._pick_node_id("socketcan:vcan0") == 42
         assert "UAVCAN__NODE__ID" not in os.environ
 
-    async def test_node_id_the_user_set_is_kept(self, hubs, monkeypatch):
+    async def test_node_id_the_user_set_is_used(self, hubs, monkeypatch):
+        import main
+        monkeypatch.setattr(main, "pick_free_node_id", lambda *a: pytest.fail("should not pick"))
+        session = main.CANSession()  # UAVCAN__NODE__ID=7, from the fixture
+        assert session.fixed_node_id == 7 and await session._pick_node_id("socketcan:vcan0") == 7
+
+    async def test_listening_only_runs_anonymously(self, hubs):
+        # F-032: a session that sends nothing has no node-ID, even one the user set.
         import os
         import main
         session = main.CANSession()
-        await session._pick_node_id("socketcan:vcan0")
-        await session.disconnect()
+        assert await session._pick_node_id("socketcan:vcan0", listen_only=True) is None
         assert os.environ["UAVCAN__NODE__ID"] == "7"
 
-    @pytest.mark.parametrize("set_by_user", [None, "7"])
-    async def test_listening_only_runs_anonymously_and_restores_the_users_node_id(self, hubs, monkeypatch, set_by_user):
-        # F-032: a session that sends nothing has no node-ID; pycyphal takes one
-        # out of range for none. A node-ID the user set is theirs again after.
-        import os
+    @pytest.mark.parametrize("value", ["128", "abc", "-1"])
+    def test_a_node_id_out_of_range_is_ignored(self, monkeypatch, caplog, value):
         import main
-        if set_by_user is None:
-            monkeypatch.delenv("UAVCAN__NODE__ID")
-        else:
-            monkeypatch.setenv("UAVCAN__NODE__ID", set_by_user)
-        session = main.CANSession()
-        await session._pick_node_id("socketcan:vcan0", listen_only=True)
-        during = os.environ["UAVCAN__NODE__ID"]
-        await session.disconnect()
-        assert (during, os.environ.get("UAVCAN__NODE__ID")) == ("65535", set_by_user)
+        monkeypatch.setenv("UAVCAN__NODE__ID", value)
+        assert main.CANSession().fixed_node_id is None and "is no node-ID" in caplog.text
 
     def test_another_node_on_cynitors_node_id_is_said_in_last_error(self):
         import main
@@ -545,12 +568,15 @@ class TestControllerState:
     @pytest.fixture
     def ip_says(self, monkeypatch, tmp_path):
         import types
+        import can_link
         import main
         (tmp_path / "can0").mkdir()
         (tmp_path / "can0" / "operstate").write_text("up\n")
         real_path = main.Path
-        monkeypatch.setattr(main, "Path", lambda p: tmp_path if p == "/sys/class/net" else real_path(p))
-        monkeypatch.setattr(main, "IS_LINUX", True)
+        # The health check is main's, the diagnostics can_link's: each reads its own.
+        for module in (main, can_link):
+            monkeypatch.setattr(module, "Path", lambda p: tmp_path if p == "/sys/class/net" else real_path(p))
+            monkeypatch.setattr(module, "IS_LINUX", True)
 
         def say(line):
             out = ("141: can0: <NOARP,UP,LOWER_UP,ECHO> mtu 72 qdisc pfifo_fast state UP mode DEFAULT\n"
@@ -696,6 +722,35 @@ class TestRegisterNodesRetry:
         scanner.add_subscriptions.assert_awaited_once_with(42, {1620: "t.T_1_0"})
 
 
+class TestAdapterOverflows:
+    """Frames an adapter lost, its buffer full, count as dropped (F-042)."""
+
+    def test_behind_the_hub_its_overflow_notices(self, tmp_path):
+        from types import SimpleNamespace
+        from main import CANSession
+        s = CANSession(data_dir=tmp_path)
+        s.hub = SimpleNamespace(rx_overflows=3)
+        assert s.adapter_overflows() == 3
+
+    def test_on_socketcan_the_growth_of_rx_over_errors_since_connect(self, tmp_path, monkeypatch):
+        import main
+        s = main.CANSession(data_dir=tmp_path)
+        s.can_interface, s._overflows_before = "can0", 40
+        monkeypatch.setattr(main, "rx_overflows", lambda device: 45 if device == "can0" else None)
+        assert s.adapter_overflows() == 5
+        s._overflows_before = None  # no counter to read at connect
+        assert s.adapter_overflows() == 0
+
+    def test_the_counter_is_read_from_sysfs(self, tmp_path, monkeypatch):
+        import can_link
+        (tmp_path / "can0" / "statistics").mkdir(parents=True)
+        (tmp_path / "can0" / "statistics" / "rx_over_errors").write_text("7\n")
+        real_path = can_link.Path
+        monkeypatch.setattr(can_link, "Path", lambda p: tmp_path if p == "/sys/class/net" else real_path(p))
+        monkeypatch.setattr(can_link, "IS_LINUX", True)
+        assert can_link.rx_overflows("can0") == 7 and can_link.rx_overflows("vcan9") is None
+
+
 class TestDecodeOnDemand:
     """With the switch on, only what a dashboard watches or a recording takes is decoded; the rest is counted."""
 
@@ -726,7 +781,7 @@ class TestDecodeOnDemand:
         await session.set_decode_on_demand(True)
         try:
             (on_frame, can_filters, _), = session.taps
-            assert on_frame == session._rates.on_frame
+            assert on_frame == session.on_demand.rates.on_frame
             assert can_filters == [{"can_id": 0, "can_mask": 1 << 25, "extended": True}]   # no service frames
             session.scanner.set_decoding.assert_called_with({1620})
             session.set_watched("another", [1621, 1700])
@@ -736,7 +791,7 @@ class TestDecodeOnDemand:
         finally:
             await session.set_decode_on_demand(False)
         session.scanner.set_decoding.assert_called_with(None)
-        assert session.taps[0][2] and session._rates is None and session._on_demand_task is None
+        assert session.taps[0][2] and session.on_demand.rates is None and session.on_demand._task is None
         assert session.decode_on_demand is False
 
     async def test_a_recording_keeps_what_it_takes_decoded(self, session):
@@ -751,7 +806,7 @@ class TestDecodeOnDemand:
             session.scanner.set_decoding.assert_called_with({1621})
             assert (1621, {43, 44}, "Scalar_1_0") in asked and (1620, {42}, "T_1_0") in asked
         finally:
-            session._stop_on_demand()
+            session.on_demand.stop()
 
     async def test_every_second_the_counted_rates_go_to_the_scanner(self, session, monkeypatch):
         import main
@@ -762,26 +817,27 @@ class TestDecodeOnDemand:
             if len(slept) > 2:
                 raise asyncio.CancelledError
         monkeypatch.setattr(main.asyncio, "sleep", no_wait)
-        session._rates = MagicMock(sample=MagicMock(return_value={(1621, 43): (250.0, 1000.0)}))
+        session.on_demand.rates = MagicMock(sample=MagicMock(return_value={(1621, 43): (250.0, 1000.0)}))
         with pytest.raises(asyncio.CancelledError):
-            await session._on_demand_loop()
+            await session.on_demand._loop()
         assert session.scanner.queue_rates.await_count == 2
         session.scanner.queue_rates.assert_awaited_with({(1621, 43): (250.0, 1000.0)})
-        session._rates = None
+        session.on_demand.rates = None
 
     async def test_not_connected_the_choice_waits_for_the_next_session(self, tmp_path):
         from main import CANSession
         s = CANSession(data_dir=tmp_path)
         await s.set_decode_on_demand(True)
-        assert s.decode_on_demand is True and s._rates is None
+        assert s.decode_on_demand is True and s.on_demand.rates is None
 
     async def test_a_session_that_ends_does_not_start_decoding_everything_first(self, session):
         await session.set_decode_on_demand(True)
         scanner = session.scanner
         scanner.set_decoding.reset_mock()
+        session._stack.callback(session.on_demand.stop, False)  # as connect registers it
         await session._teardown()
         scanner.set_decoding.assert_not_called()
-        assert session.taps[0][2] and session._rates is None
+        assert session.taps[0][2] and session.on_demand.rates is None
         assert session.decode_on_demand is True   # the next session decodes on demand too
 
     async def test_counted_rates_are_not_written_to_history(self):

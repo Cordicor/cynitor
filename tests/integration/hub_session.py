@@ -196,8 +196,8 @@ async def run() -> None:
     try:
         await session.connect(f"virtual:{WIRE}", bitrate=BITRATE, data_bitrate=DATA_BITRATE, allocator=True)
         check(session.is_running and session.hub is not None, "connected through the CAN hub")
-        own_id = os.environ.get("UAVCAN__NODE__ID")
-        check(own_id == "127", f"picked its own node-ID ({own_id}): 127, the first of the two Cyphal leaves to tools")
+        own_id = str(session.node_id)
+        check(own_id == "127" and "UAVCAN__NODE__ID" not in os.environ, f"picked its own node-ID ({own_id}): 127, the first of the two Cyphal leaves to tools")
         check(session.can_fd == FD, f"session runs {'CAN FD' if FD else 'Classic CAN'}")
         own_frame = await first_frame_from(tap, int(own_id))
         check(own_frame is not None and own_frame.is_fd == FD,
@@ -242,9 +242,9 @@ async def run() -> None:
 
         live = await wait_for(lambda: TEMPERATURE_SUBJECT_ID in session.telemetry.latest_by_subject)
         check(live, f"subject {TEMPERATURE_SUBJECT_ID}, named in the device's registers, decoded live")
-        log = session.start_raw_log()
+        log = session.raw_logs.start()
         await asyncio.sleep(4)  # heartbeats each way, the port list, temperatures
-        session.stop_raw_log()
+        session.raw_logs.stop()
         logged = list(can.LogReader(str(log.path)))
         from_device = [m for m in logged if m.is_rx and m.arbitration_id & 0x7F == DEVICE_NODE_ID]
         own = [m for m in logged if not m.is_rx and m.arbitration_id & 0x7F == int(own_id)]
@@ -304,14 +304,14 @@ async def run() -> None:
               f"subject {UNNAMED_SUBJECT_ID} is in the device's port list, but no register names its type")
         from dsdl_manager import DsdlManager
         types = DsdlManager(ROOT, data_dir=data).message_types()
-        guess = await session.guess_subject_type(UNNAMED_SUBJECT_ID, types)
+        guess = await session.user_types.guess(UNNAMED_SUBJECT_ID, types)
         offered = {c["type"]: c["preview"] for c in guess["candidates"]}
         right = "uavcan.si.unit.velocity.Vector3.1.0"
         check(guess["samples"] > 0 and offered.get(right) == {"meter_per_second": [1.0, 2.0, 3.5]},
               f"guessing from {guess['samples']} payloads offers {right} among {guess['matches']} fitting types")
         check("uavcan.si.sample.velocity.Vector3.1.0" not in offered,
               "a type of another size (the same with a timestamp) is not offered")
-        session.set_subject_type(UNNAMED_SUBJECT_ID, right)
+        session.user_types.set(UNNAMED_SUBJECT_ID, right)
         decoded = await wait_for(lambda: UNNAMED_SUBJECT_ID in session.telemetry.latest_by_subject)
         values = decoded and session.telemetry.latest_by_subject[UNNAMED_SUBJECT_ID]["attributes"][0]["value"]
         check(values == [1.0, 2.0, 3.5], f"subject {UNNAMED_SUBJECT_ID} decodes once its type is set: {values}")
@@ -411,7 +411,7 @@ async def run() -> None:
               "watched by a dashboard, it is decoded again at once")
         session.set_watched("a dashboard", None)
         await session.set_decode_on_demand(False)
-        check(TEMPERATURE_SUBJECT_ID in session.scanner.publishers_subscribers and session._rates is None,
+        check(TEMPERATURE_SUBJECT_ID in session.scanner.publishers_subscribers and session.on_demand.rates is None,
               "switched off, every subject is decoded again")
 
         session.hub._still_present = lambda: False  # the adapter goes away
@@ -493,7 +493,8 @@ async def run() -> None:
 
         # Cynitor's node-ID is the free one of the bus it was picked on: forgotten
         # with the session, picked again on the next bus, where 127 is now taken.
-        check("UAVCAN__NODE__ID" not in os.environ, "the node-ID Cynitor picked is forgotten when it disconnects")
+        check(session.node_id is None and "UAVCAN__NODE__ID" not in os.environ,
+              "the node-ID Cynitor picked is the session's, gone when it disconnects, never in the environment")
         on_127 = pycyphal.application.make_node(uavcan.node.GetInfo_1_0.Response(name="integration.on127"),
                                                 transport=on_wire(127))
         on_127.start()
