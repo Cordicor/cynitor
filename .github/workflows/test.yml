@@ -20,8 +20,8 @@ jobs:
     name: Lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6.3.0
         with:
           python-version: '3.12'
       - run: pip install ruff==0.6.9
@@ -45,11 +45,11 @@ jobs:
             python-version: '3.12'
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         # The test suite mocks the Cyphal stack, so it needs neither the DSDL
         # submodule nor compiled types. Skipping the submodule keeps this fast.
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6.3.0
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
@@ -80,12 +80,12 @@ jobs:
         os: [ubuntu-latest, windows-2022, windows-2025]
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           # The session compiles and imports the regulated DSDL types.
           submodules: recursive
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6.3.0
         with:
           python-version: '3.12'
           cache: pip
@@ -112,9 +112,9 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6.3.0
         with:
           python-version: '3.12'
           cache: pip
@@ -125,7 +125,7 @@ jobs:
 
       - name: Cache Playwright browsers
         id: browser-cache
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
         with:
           path: ~/.cache/ms-playwright
           # Keyed on the pinned Playwright version: each release expects a
@@ -151,7 +151,7 @@ jobs:
         # A convenience copy of the summary; the test step above decides the
         # job. An exhausted artifact storage quota must not fail passing tests.
         continue-on-error: true
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: e2e-result
           path: tests/e2e/result.md
