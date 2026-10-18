@@ -150,7 +150,7 @@ your layout in the browser, and needs no internet access.
 
 ## CAN adapters
 
-What each system was tested on is under [Tested on](#tested-on).
+What each system was tested on is in the badges at the top.
 
 | System | Adapters the dashboard finds |
 |---|---|
