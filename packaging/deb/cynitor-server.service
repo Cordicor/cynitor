@@ -14,6 +14,9 @@ RestartSec=5
 # its data folder. Data an earlier version wrote into / is moved there on the
 # first start.
 StateDirectory=cynitor
+# The dynamic user has no home where systemd's NSS module is not installed
+# (Debian minimal, containers), and pycyphal will not start without one.
+Environment=HOME=/var/lib/cynitor
 # Not root: an unprivileged user of its own, made at start, which is all
 # SocketCAN needs (its raw sockets need no capability). DynamicUser also
 # makes the system read-only to it, but for its StateDirectory, and gives it
