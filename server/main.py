@@ -1330,6 +1330,7 @@ async def _register_loop(scanner, registered_nodes: set[int], session: 'CANSessi
                 scanner.report_kernel_drops()
 
             try:
+                scanner.hold_offline_while_losing_frames()
                 for node in scanner.all_nodes.values():
                     node.check_disappeared()
                 await register_nodes(scanner, registered_nodes, registration_retry_at)

@@ -73,6 +73,8 @@ class NodeInfo:
         self.last_info_time: Optional[datetime.datetime] = None      # last GetInfo answered
         self.last_info_attempt: Optional[datetime.datetime] = None   # last GetInfo sent
         self._last_seen_mono: float = 0.0
+        # Until then (monotonic), Cynitor is losing frames, so a silent node is not called offline.
+        self.silence_unreliable_until: float = 0.0
 
     def mark_appeared(self, first_seen: datetime.datetime):
         self.has_appeared = True
@@ -100,6 +102,8 @@ class NodeInfo:
     def check_disappeared(self) -> bool:
         if not self.has_appeared:
             return False
+        if time.monotonic() < self.silence_unreliable_until:
+            return self.has_disappeared  # its heartbeats may be among the frames lost: silence proves nothing
         if time.monotonic() - self._last_seen_mono >= self.OFFLINE_THRESHOLD_S:
             self.has_disappeared = True
             return True

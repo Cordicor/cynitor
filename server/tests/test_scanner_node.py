@@ -432,6 +432,18 @@ class TestKernelDroppedFrames:
         assert "self._maybe_media" in inspect.getsource(CANTransport.__init__)
         assert "self._sock =" in inspect.getsource(SocketCANMedia.__init__)
 
+    def test_no_node_is_called_offline_while_the_kernel_drops_frames(self):
+        node = scanner_on_socket(socket_that_dropped(0))
+        node.all_nodes = {n: NodeInfo(node_id=n) for n in (42, 43)}
+        node.hold_offline_while_losing_frames()
+        assert node.all_nodes[42].silence_unreliable_until == 0.0
+        node._node.presentation.transport._maybe_media._sock = socket_that_dropped(500)
+        node.hold_offline_while_losing_frames()
+        held = node.all_nodes[42].silence_unreliable_until
+        assert held >= time.monotonic() + NodeInfo.OFFLINE_THRESHOLD_S - 0.5
+        node.hold_offline_while_losing_frames()  # no more drops: the hold runs out, not renewed
+        assert node.all_nodes[43].silence_unreliable_until == held
+
     def test_a_warning_once_a_while_while_the_count_grows(self, caplog):
         node = scanner_on_socket(socket_that_dropped(0))
         node.report_kernel_drops()

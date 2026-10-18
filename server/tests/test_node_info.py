@@ -96,6 +96,15 @@ class TestCheckDisappeared:
         node._last_seen_mono = time.monotonic() - (NodeInfo.OFFLINE_THRESHOLD_S - 0.1)
         assert node.check_disappeared() is False
 
+    def test_silence_while_frames_are_lost_is_not_offline(self):
+        node = NodeInfo(node_id=1)
+        node.mark_appeared(datetime.datetime.now())
+        node._last_seen_mono = time.monotonic() - 5.0
+        node.silence_unreliable_until = time.monotonic() + 1.0
+        assert node.check_disappeared() is False and node.has_disappeared is False
+        node.silence_unreliable_until = time.monotonic() - 0.1
+        assert node.check_disappeared() is True
+
 
 class TestOnlineOfflineTime:
     def test_online_time_not_appeared(self):

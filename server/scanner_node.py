@@ -84,6 +84,7 @@ class ScannerNode(ScannerRegisters, ScannerServices):
     INFO_RETRY_S = 10.0     # retry period while it has not
     NODE_ID_CONFLICT_REPORT_S = 60.0  # report a shared node-ID at most this often
     KERNEL_DROPS_REPORT_S = 60.0      # warn of frames lost in the kernel at most this often
+    _kernel_drops_seen = 0            # the kernel's drop count at the last offline sweep
     _kernel_drops_reported = 0        # the kernel's drop count at the last warning ...
     _kernel_drops_reported_at = float("-inf")  # ... and when it was given
     # The furthest the decoding of a subject may fall behind the bus. pycyphal
@@ -425,6 +426,20 @@ class ScannerNode(ScannerRegisters, ScannerServices):
             return struct.unpack_from(f"{_SK_MEMINFO_DROPS + 1}I", meminfo)[_SK_MEMINFO_DROPS]
         except (AttributeError, OSError, struct.error):
             return 0
+
+    def hold_offline_while_losing_frames(self) -> None:
+        """Call no node offline while the kernel drops the scanner's frames, nor for a threshold after.
+
+        Its heartbeats are lost with the rest: a node declared gone had its
+        subjects unsubscribed, and the kernel then discarded their frames
+        before any counter saw them (F-042: 13 % of a 12,000/s flood).
+        """
+        drops = self.kernel_dropped_frames()
+        if drops > self._kernel_drops_seen:
+            until = time.monotonic() + NodeInfo.OFFLINE_THRESHOLD_S
+            for node in self.all_nodes.values():
+                node.silence_unreliable_until = until
+        self._kernel_drops_seen = drops
 
     def report_kernel_drops(self) -> None:
         """Warn of frames the kernel let go since the last warning, at most once a KERNEL_DROPS_REPORT_S."""
