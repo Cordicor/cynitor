@@ -7,7 +7,7 @@ from typing import Optional
 
 from aiohttp import web
 
-from api_helpers import ApiHandlers, MAX_SUBJECT_ID
+from api_helpers import ApiHandlers, MAX_SUBJECT_ID, command_refusal
 from testnodes import (HEALTH, MAX_NODE_ID as MAX_TEST_NODE_ID, MAX_PUBLISHERS, MAX_RATE_HZ, MAX_TEST_NODES,
                        MAX_TOTAL_RATE_HZ, MIN_NODE_ID as MIN_TEST_NODE_ID, MIN_RATE_HZ, MODES, WAVES,
                        ConfirmationRequired, UnknownTestNode, normalize_definition, value_schema)
@@ -68,6 +68,9 @@ class TestNodesApi(ApiHandlers):
         confirm = body.get("confirm_real_bus", False)
         if not isinstance(confirm, bool):
             return web.json_response({"error": "confirm_real_bus is true or false"}, status=400)
+        # On the simulated bus nothing real can move; on a real one a test node is a command.
+        if self.session.simulation is None and (refused := command_refusal(self.session)):
+            return refused
         return await self._test_node_action(
             self.session.test_nodes.start(request.match_info["test_id"], confirm_real_bus=confirm))
 

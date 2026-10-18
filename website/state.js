@@ -34,6 +34,8 @@ const state = {
   canAllocator: false,
   canListenOnly: false,  // connect sending nothing (the connect form's Listen only)
   listenOnly: false,     // whether the session that runs sends nothing, from /api/status
+  canNoCommands: false,  // connect changing no node (the connect form's No commands)
+  noCommands: false,     // whether the session that runs refuses writes, calls and updates, from /api/status
   ownNodeId: null,       // Cynitor's own node-ID on the bus, from /api/status
   // Cynitor's allocator in the CAN session connected to (GET /api/status
   // allocator): {other_allocator, allocated}, or null while it runs none.
@@ -814,6 +816,7 @@ const _writeSettingsNow = () => {
     canDataBitrates: state.canDataBitrates,
     canAllocator: state.canAllocator,
     canListenOnly: state.canListenOnly,
+    canNoCommands: state.canNoCommands,
     customCanSpec: state.customCanSpec,
     // A session being restored or reconnected is still the user's: a reload meanwhile goes on with it.
     dashboardConnected: state.dashboardConnected || Boolean(state.dashboardRetry || state.pendingReconnect),
@@ -960,6 +963,7 @@ const loadSettings = () => {
   }
   state.canAllocator = settings.canAllocator === true;
   state.canListenOnly = settings.canListenOnly === true;
+  state.canNoCommands = settings.canNoCommands === true;
   if (typeof settings.customCanSpec === 'string') {
     state.customCanSpec = settings.customCanSpec;
     el('canSpecInput').value = settings.customCanSpec;

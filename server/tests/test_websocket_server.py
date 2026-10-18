@@ -144,7 +144,7 @@ class TestCANConnect:
             ok = await client.post("/api/can/connect", json={"interface": "vcan0", "listen_only": True})
         assert bad.status == 400 and ok.status == 200
         session.connect.assert_awaited_once_with("vcan0", bitrate=None, data_bitrate=None, allocator=None,
-                                                 listen_only=True)
+                                                 listen_only=True, no_commands=None)
 
     @pytest.mark.asyncio
     async def test_nothing_is_sent_while_listening_only(self, client, session):
@@ -163,6 +163,36 @@ class TestCANConnect:
         session.scanner.get_registers.assert_not_awaited()
         session.scanner.set_register.assert_not_awaited()
         session.begin_firmware_update.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_no_commands_reaches_the_session_and_must_be_true_or_false(self, client, session):
+        with patch("main.discover_can_interfaces", return_value=["vcan0"]):
+            bad = await client.post("/api/can/connect", json={"interface": "vcan0", "no_commands": 1})
+            ok = await client.post("/api/can/connect", json={"interface": "vcan0", "no_commands": True})
+        assert bad.status == 400 and ok.status == 200
+        session.connect.assert_awaited_once_with("vcan0", bitrate=None, data_bitrate=None, allocator=None,
+                                                 listen_only=None, no_commands=True)
+
+    @pytest.mark.asyncio
+    async def test_no_node_is_changed_while_taking_no_commands(self, client, session):
+        # Reads still go out (names, registers); writes, calls and updates are refused (F-024).
+        session.is_running, session.listen_only, session.no_commands = True, False, True
+        session.scanner = MagicMock(get_registers=AsyncMock(return_value=[]), set_register=AsyncMock(),
+                                    make_service_call=AsyncMock())
+        session.begin_firmware_update = AsyncMock()
+        answers = [
+            await client.get("/api/registers/42"),
+            await client.post("/api/registers/42/set", json={"name": "x", "value": "1", "type": "natural16"}),
+            await client.post("/api/services/42/435/call", json={"attributes": {}}),
+            await client.post("/api/nodes/42/firmware", json={"file": "a.bin"}),
+        ]
+        assert [a.status for a in answers] == [200, 409, 409, 409]
+        assert "takes no commands" in (await answers[1].json())["error"]
+        session.scanner.set_register.assert_not_awaited()
+        session.scanner.make_service_call.assert_not_awaited()
+        session.begin_firmware_update.assert_not_awaited()
+        status = await (await client.get("/api/status")).json()
+        assert status["no_commands"] is True and status["listen_only"] is False
 
     @pytest.mark.asyncio
     async def test_connect_while_a_replay_runs_is_a_conflict(self, client, session):
@@ -239,7 +269,7 @@ class TestCANConnectSpecsAndBitrate:
         with patch("main.discover_can_interfaces", return_value=["vcan0"]):
             resp = await client.post("/api/can/connect", json={"interface": "vcan0"})
         assert resp.status == 200
-        session.connect.assert_awaited_once_with("vcan0", bitrate=None, data_bitrate=None, allocator=None, listen_only=None)
+        session.connect.assert_awaited_once_with("vcan0", bitrate=None, data_bitrate=None, allocator=None, listen_only=None, no_commands=None)
 
     @pytest.mark.asyncio
     async def test_explicit_spec_skips_discovery(self, client, session):
@@ -251,7 +281,7 @@ class TestCANConnectSpecsAndBitrate:
             )
         assert resp.status == 200
         discover.assert_not_called()
-        session.connect.assert_awaited_once_with("gs_usb:0", bitrate=250000, data_bitrate=None, allocator=None, listen_only=None)
+        session.connect.assert_awaited_once_with("gs_usb:0", bitrate=250000, data_bitrate=None, allocator=None, listen_only=None, no_commands=None)
 
     @pytest.mark.asyncio
     async def test_adapter_without_bitrate_is_refused(self, client, session):
@@ -266,7 +296,7 @@ class TestCANConnectSpecsAndBitrate:
         session.default_bitrate = 250_000
         resp = await client.post("/api/can/connect", json={"interface": "gs_usb:0"})
         assert resp.status == 200
-        session.connect.assert_awaited_once_with("gs_usb:0", bitrate=None, data_bitrate=None, allocator=None, listen_only=None)
+        session.connect.assert_awaited_once_with("gs_usb:0", bitrate=None, data_bitrate=None, allocator=None, listen_only=None, no_commands=None)
 
     @pytest.mark.asyncio
     async def test_data_bitrate_opens_can_fd(self, client, session):
@@ -275,7 +305,7 @@ class TestCANConnectSpecsAndBitrate:
         })
         assert resp.status == 200
         session.connect.assert_awaited_once_with("pcan:PCAN_USBBUS1", bitrate=500000, data_bitrate=2000000,
-                                                     allocator=None, listen_only=None)
+                                                     allocator=None, listen_only=None, no_commands=None)
         assert (await resp.json())["can_fd"] is False  # what the (mock) session reports
 
     @pytest.mark.asyncio
@@ -312,7 +342,7 @@ class TestCANConnectSpecsAndBitrate:
         with patch("main.discover_can_interfaces", return_value=["vcan0"]):
             resp = await client.post("/api/can/connect", json={"interface": "vcan0", "allocator": allocator})
         assert resp.status == 200
-        session.connect.assert_awaited_once_with("vcan0", bitrate=None, data_bitrate=None, allocator=allocator, listen_only=None)
+        session.connect.assert_awaited_once_with("vcan0", bitrate=None, data_bitrate=None, allocator=allocator, listen_only=None, no_commands=None)
         assert (await resp.json())["allocator"] is None  # what the (mock) session reports it runs
 
     @pytest.mark.asyncio
@@ -991,9 +1021,21 @@ class TestSetRegister:
         await client.post("/api/registers/42/set", json={"name": "flag", "value": "1", "type": "bit"})
         await client.post("/api/registers/42/set", json={"name": "flag", "value": "0", "type": "bit"})
         assert [c.args for c in session.event_logger.log_node_event.await_args_list] == [
-            (42, "register_write", {"name": "flag", "value": "1", "read_back": "True", "status": "ok"}),
-            (42, "register_write", {"name": "flag", "value": "0", "status": "timeout"}),
+            (42, "register_write", {"name": "flag", "value": "1", "read_back": "True", "status": "ok",
+                                    "client": "127.0.0.1"}),
+            (42, "register_write", {"name": "flag", "value": "0", "status": "timeout", "client": "127.0.0.1"}),
         ]
+
+    @pytest.mark.asyncio
+    async def test_a_service_call_says_who_made_it_in_the_history(self, client, session):
+        session.is_running = True
+        session.scanner = MagicMock(make_service_call=AsyncMock(return_value="{}"),
+                                    service_metadata={(42, 435): {"namespace": "uavcan.node",
+                                                                  "service_name": "ExecuteCommand_1_3"}},
+                                    _get_node_unique_id_hex=lambda node_id: None)
+        session.event_logger = MagicMock(log_node_event=AsyncMock())
+        await client.post("/api/services/42/435/call", json={"attributes": {}})
+        assert session.event_logger.log_node_event.await_args.args[2]["client"] == "127.0.0.1"
 
     @pytest.mark.asyncio
     async def test_set_register_timeout(self, client, session):

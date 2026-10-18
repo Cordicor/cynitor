@@ -9,7 +9,7 @@ from typing import Optional
 
 from aiohttp import web
 
-from api_helpers import ApiHandlers, _parse_int, listen_only_refusal, logger, MAX_NODE_ID, MAX_SERVICE_ID, MAX_SUBJECT_ID
+from api_helpers import ApiHandlers, _parse_int, command_refusal, listen_only_refusal, logger, MAX_NODE_ID, MAX_SERVICE_ID, MAX_SUBJECT_ID
 
 
 def _synthesize_nodes_from_recording(db_path, recording_id: int) -> dict:
@@ -158,7 +158,7 @@ class NodesApi(ApiHandlers):
 
         if not self.session.is_running:
             return web.json_response({"error": "CAN bus not connected"}, status=503)
-        if refused := listen_only_refusal(self.session):
+        if refused := command_refusal(self.session):
             return refused
 
         try:
@@ -173,22 +173,23 @@ class NodesApi(ApiHandlers):
             return web.json_response({"error": "Missing required fields: name, value, type"}, status=400)
 
         from scanner_registers import RegisterNotApplied  # imports the compiled DSDL, ready once connected
+        client = request.remote  # who asked, for the node's history
         try:
             updated = await self.session.scanner.set_register(node_id, name, str(value), reg_type)
             if updated is None:
                 await self._note_in_node_history(node_id, "register_write", {
-                    "name": name, "value": str(value), "status": "timeout"})
+                    "name": name, "value": str(value), "status": "timeout", "client": client})
                 return web.json_response({"error": "Write failed — no response from node"}, status=504)
             if isinstance(updated, list):
                 formatted = ', '.join(str(v) for v in updated)
             else:
                 formatted = str(updated)
             await self._note_in_node_history(node_id, "register_write", {
-                "name": name, "value": str(value), "read_back": formatted, "status": "ok"})
+                "name": name, "value": str(value), "read_back": formatted, "status": "ok", "client": client})
             return web.json_response({"status": "ok", "name": name, "value": formatted})
         except RegisterNotApplied as e:
             await self._note_in_node_history(node_id, "register_write", {
-                "name": name, "value": str(value), "status": "not_applied"})
+                "name": name, "value": str(value), "status": "not_applied", "client": client})
             return web.json_response({"error": str(e)}, status=409)
         except ValueError as e:
             return web.json_response({"error": str(e)}, status=400)
@@ -213,7 +214,7 @@ class NodesApi(ApiHandlers):
 
         if not self.session.is_running:
             return web.json_response({"error": "CAN bus not connected"}, status=503)
-        if refused := listen_only_refusal(self.session):
+        if refused := command_refusal(self.session):
             return refused
 
         try:
@@ -233,6 +234,7 @@ class NodesApi(ApiHandlers):
         service_type = f"{meta['namespace']}.{meta['service_name']}"
 
         uid = self.session.scanner._get_node_unique_id_hex(node_id) if self.session.scanner else None
+        client = request.remote  # who asked, for the node's history
 
         t0 = time.monotonic()
         try:
@@ -244,7 +246,7 @@ class NodesApi(ApiHandlers):
                 await self.session.event_logger.log_node_event(node_id, "service_call", {
                     "service_id": service_id, "service_type": service_type,
                     "status": "ok", "latency_ms": latency_ms,
-                    "response": response_str,
+                    "response": response_str, "client": client,
                 }, unique_id=uid)
             return web.json_response({
                 "status": "ok",
@@ -256,7 +258,7 @@ class NodesApi(ApiHandlers):
             if self.session.event_logger:
                 await self.session.event_logger.log_node_event(node_id, "service_call", {
                     "service_id": service_id, "service_type": service_type,
-                    "status": "timeout", "latency_ms": latency_ms,
+                    "status": "timeout", "latency_ms": latency_ms, "client": client,
                 }, unique_id=uid)
             return web.json_response({
                 "status": "timeout",
@@ -272,7 +274,7 @@ class NodesApi(ApiHandlers):
             if self.session.event_logger:
                 await self.session.event_logger.log_node_event(node_id, "service_call", {
                     "service_id": service_id, "service_type": service_type,
-                    "status": "error", "latency_ms": latency_ms,
+                    "status": "error", "latency_ms": latency_ms, "client": client,
                 }, unique_id=uid)
             logger.error(f"Service call failed: {e}", exc_info=True)
             return web.json_response({

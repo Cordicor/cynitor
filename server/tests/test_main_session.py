@@ -273,6 +273,15 @@ class TestAllocator:
             await s.connect("gs_usb:0", bitrate=500_000, allocator=given)
         assert bool(asked) == starts
 
+    @pytest.mark.parametrize("default, given", [(True, None), (False, True)])
+    async def test_never_while_taking_no_commands(self, asked, tmp_path, default, given):
+        # Giving a node its node-ID changes it: a session that changes no node runs no allocator.
+        from main import CANSession
+        s = CANSession(data_dir=tmp_path, default_no_commands=default)
+        with pytest.raises(RuntimeError, match="stop after the scanner"):
+            await s.connect("gs_usb:0", bitrate=500_000, allocator=True, no_commands=given)
+        assert asked == []
+
     async def test_never_while_a_raw_log_plays(self, asked, tmp_path):
         from main import CANSession
         s = CANSession(data_dir=tmp_path, default_allocator=True)

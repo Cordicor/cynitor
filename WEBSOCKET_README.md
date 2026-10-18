@@ -403,7 +403,7 @@ Response:
 
 `history_error` says why history and recordings are not being written, such as `"disk I/O error"` on a full disk, until a write works again; otherwise `null`. What such a write loses counts in `dropped.logger`.
 
-`own_node_id` is Cynitor's own node-ID on the bus, `null` when not connected or listening only (`listen_only`).
+`own_node_id` is Cynitor's own node-ID on the bus, `null` when not connected or listening only (`listen_only`). `no_commands` is whether the session that runs refuses register writes, service calls, firmware updates and test nodes on a real bus (see `POST /api/can/connect`).
 
 `update` is a newer Cynitor release, `{"version": "1.4.0", "url": "https://github.com/OpenCyphal-Garage/cynitor/releases/tag/v1.4.0"}`, when the server's update check (GitHub, at start and once a day) found one; otherwise `null`, also when the check is off (`--no-update-check`, `CYNITOR_NO_UPDATE_CHECK=1`) or GitHub cannot be reached.
 
@@ -431,7 +431,7 @@ curl -X POST http://localhost:8080/api/can/connect \
 
 Response (success):
 ```json
-{"status": "running", "can_interface": "vcan0", "can_fd": false, "allocator": null}
+{"status": "running", "can_interface": "vcan0", "can_fd": false, "allocator": null, "listen_only": false, "no_commands": false}
 ```
 
 `allocator` is as in `GET /api/status`: `null` unless the session runs Cynitor's node-ID allocator.
@@ -441,6 +441,8 @@ Response (success):
 `data_bitrate` (integer, 1–12000000 bit/s, optional) opens the adapter as CAN FD with that data-phase bitrate; left out, the session is Classic CAN unless the server was started with `--data-bitrate`. Only adapters whose `supports_fd` is true take it (PEAK, Kvaser, Vector, IXXAT, candleLight with CAN FD firmware, slcan), at one of their `data_bitrates` where those are given (slcan: 2000000 or 5000000); SocketCAN ignores it and runs CAN FD when the interface is set up for it. `can_fd` in the response says which it became.
 
 `listen_only` (boolean, optional) has the session send nothing on the bus: no node-ID, heartbeat, GetInfo or register reads, no allocator and no test nodes; subjects decode from their fixed IDs and the types the user set. Left out, it does only if the server was started with `--listen-only`. Meanwhile `GET /api/registers/{id}`, `POST /api/registers/{id}/set`, service calls and firmware updates answer `409` saying the session listens only. `listen_only` in the response, and in `GET /api/status`, says whether the session sends nothing. The CAN controller still acknowledges frames unless the interface itself is in listen-only mode.
+
+`no_commands` (boolean, optional) has the session change no node: it names nodes and reads registers as usual, but `POST /api/registers/{id}/set`, service calls, firmware updates and starting a test node on a real bus (not the simulated bus) answer `409` saying the session takes no commands, and no allocator runs. Left out, it does only if the server was started with `--no-commands`. `no_commands` in the response, and in `GET /api/status`, says whether the session runs so. It is enforced by the server, so a script or another dashboard cannot get round it; to change nodes, disconnect and connect without it.
 
 `allocator` (boolean, optional) has Cynitor give plug-and-play nodes their node-IDs in this session (see [Allocator Behavior](#4-allocator-behavior)); left out, it does only if the server was started with `--allocator`. Turn it on only for a bus with no allocator of its own.
 
@@ -1048,7 +1050,7 @@ Response:
 }
 ```
 
-Event types: `first_seen`, `reappeared`, `disappeared`, `restart_suspected` (the uptime dropped, then counted on), `health_change`, `mode_change`, `port_change`, `service_call`, `register_write` (Cynitor wrote a register: `name`, `value` as sent, `status` `ok` with `read_back`, or `timeout`), `firmware_update` (Cynitor told the node to update from `file`), `got_node_id`, `lost_node_id`, `node_id_migration`, `node_id_conflict` (heartbeats on this node-ID alternate between two uptimes: two nodes share it; or, with `"own_node_id": true` in its detail, another node uses Cynitor's own node-ID, which `/api/status`'s `last_error` then says too; reported at most once a minute) and `type_conflict` (the node publishes a subject with another type than the one it is decoded as, which an earlier publisher advertised).
+Event types: `first_seen`, `reappeared`, `disappeared`, `restart_suspected` (the uptime dropped, then counted on), `health_change`, `mode_change`, `port_change`, `service_call`, `register_write` (Cynitor wrote a register: `name`, `value` as sent, `status` `ok` with `read_back`, `not_applied` or `timeout`), `firmware_update` (Cynitor told the node to update from `file`), `got_node_id`, `lost_node_id`, `node_id_migration`, `node_id_conflict` (heartbeats on this node-ID alternate between two uptimes: two nodes share it; or, with `"own_node_id": true` in its detail, another node uses Cynitor's own node-ID, which `/api/status`'s `last_error` then says too; reported at most once a minute) and `type_conflict` (the node publishes a subject with another type than the one it is decoded as, which an earlier publisher advertised). A `service_call`, `register_write` or `firmware_update` carries `client`, the address of the dashboard or script that asked for it.
 
 Returns `400` for invalid node_id or limit, `503` if the event logger is not available.
 

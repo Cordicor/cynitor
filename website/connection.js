@@ -140,17 +140,31 @@ const renderBusNotice = () => {
 const LISTEN_ONLY_HINT = 'Connect without sending anything on the bus: no node-ID, no heartbeat, no requests. '
   + 'Nodes then show no names, versions or registers, and nothing can be written or called; '
   + 'subjects decode from their fixed IDs and the types you set.';
-const renderListenOnly = () => {
-  const row = el('canListenOnlyRow');
+// No commands: the choice in the connect form, and while connected whether
+// the session refuses everything that would change a node.
+const NO_COMMANDS_HINT = 'Connect to watch the bus and read its nodes without changing any: register writes, '
+  + 'service calls, firmware updates and test nodes on a real bus are refused, and no allocator runs.';
+
+// A connect-form choice that holds for the session: shown while idle, and while
+// connected only if the session runs with it, then locked.
+const renderSessionToggle = (rowId, toggleId, chosen, active, activeHint, hint) => {
+  const row = el(rowId);
   if (!row) return;
   const idle = !state.canConnected && !state.canDisconnecting;
-  const listening = state.canConnected && state.listenOnly;
-  row.classList.toggle('hidden', !(idle || listening));
-  const toggle = el('canListenOnlyToggle');
-  toggle.checked = idle ? state.canListenOnly : listening;
+  const on = state.canConnected && active;
+  row.classList.toggle('hidden', !(idle || on));
+  const toggle = el(toggleId);
+  toggle.checked = idle ? chosen : on;
   toggle.disabled = !idle || !state.dashboardConnected || state.canConnecting;
   row.classList.toggle('is-locked', toggle.disabled);
-  row.title = listening ? 'This session sends nothing on the bus: nodes show no names or registers.' : LISTEN_ONLY_HINT;
+  row.title = on ? activeHint : hint;
+};
+
+const renderListenOnly = () => {
+  renderSessionToggle('canListenOnlyRow', 'canListenOnlyToggle', state.canListenOnly, state.listenOnly,
+    'This session sends nothing on the bus: nodes show no names or registers.', LISTEN_ONLY_HINT);
+  renderSessionToggle('canNoCommandsRow', 'canNoCommandsToggle', state.canNoCommands, state.noCommands,
+    'This session changes no node: writes, calls and updates are refused.', NO_COMMANDS_HINT);
 };
 
 // Cynitor's node-ID allocator: the choice in the connect form, and while
@@ -312,7 +326,8 @@ const updateSemaphores = () => {
       const dropped = state.droppedEvents;
       const droppedTotal = dropped ? dropped.scanner + dropped.logger + dropped.clients : 0;
       const dropStr = droppedTotal > 0 ? ` · ${droppedTotal} dropped` : '';
-      const selfStr = state.listenOnly ? ' · listening only' : state.ownNodeId != null ? ` · as node ${state.ownNodeId}` : '';
+      const selfStr = (state.listenOnly ? ' · listening only' : state.ownNodeId != null ? ` · as node ${state.ownNodeId}` : '')
+        + (state.noCommands && !state.listenOnly ? ' · no commands' : '');
       canInfo.textContent = `${rate.toFixed(1)} msg/s${utilStr}${dropStr}${selfStr}`;
       canInfo.title = droppedTotal > 0
         ? `Messages lost because the backend could not keep up — before decoding: ${dropped.scanner}, `
@@ -755,7 +770,10 @@ const selectInterface = async () => {
   if (!target.interface) {
     return null;
   }
-  const body = { interface: target.interface, allocator: state.canAllocator, listen_only: state.canListenOnly };
+  const body = {
+    interface: target.interface, allocator: state.canAllocator,
+    listen_only: state.canListenOnly, no_commands: state.canNoCommands,
+  };
   if (target.needsBitrate) {
     body.bitrate = selectedCanBitrate();
     if (body.bitrate === null) {
@@ -777,6 +795,7 @@ const selectInterface = async () => {
     state.preferredCanInterface = el('interfacesSelect').value;
     state.allocatorStatus = data?.allocator ?? null;
     state.listenOnly = data?.listen_only === true;
+    state.noCommands = data?.no_commands === true;
     if (body.bitrate) {
       state.canBitrates[target.interface] = body.bitrate;
       if (body.data_bitrate) {
@@ -811,6 +830,7 @@ const clearCanSession = () => {
   state.droppedEvents = null;
   state.allocatorStatus = null;
   state.listenOnly = false;
+  state.noCommands = false;
   state.busLoadHistory.length = 0;
   drawBusLoadSparkline();
   renderNodesTable();
@@ -878,6 +898,7 @@ const pollStatus = async () => {
   state.busErrors = data.bus_errors ?? null;
   state.allocatorStatus = data.allocator ?? null;
   state.listenOnly = data.listen_only === true;
+  state.noCommands = data.no_commands === true;
   state.ownNodeId = Number.isInteger(data.own_node_id) ? data.own_node_id : null;
   state.serverCpu = data.server_cpu ?? state.serverCpu;
   state.decodeOnDemand = data.decode_on_demand === true;
@@ -1074,6 +1095,7 @@ const openDashboard = async () => {
     state.canConnected = true;
     state.allocatorStatus = statusData.allocator ?? null;
     state.listenOnly = statusData.listen_only === true;
+    state.noCommands = statusData.no_commands === true;
     setCanError(null);
     showConnectedCanInterface(statusData.can_interface, statusData.can_bitrate,
       statusData.can_data_bitrate, statusData.can_fd);

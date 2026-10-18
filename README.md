@@ -48,6 +48,8 @@ No Python needed. Take the file for your system from the
 
 - All of them are for x86-64, hold the same server and open no window: you
   use it from a browser.
+- An AppImage needs FUSE. Where there is none (a container, a minimal
+  install), run it with `--appimage-extract-and-run`.
 - Each file has a `<file>.sha256` beside it: `sha256sum -c <file>.sha256`
   checks a download. From 1.4.0 each is also signed as built by this
   repository's release workflow:
@@ -230,6 +232,7 @@ topics to v1.0 subject-IDs on the device (`name#1234`).
 | `--bitrate <n>` | Bus speed in bit/s. Required with `--can` for every adapter but SocketCAN and the simulated bus |
 | `--data-bitrate <n>` | CAN FD data-phase speed in bit/s; leave it out for Classic CAN. Ignored for SocketCAN |
 | `--decode-on-demand` | Decode only the subjects a dashboard shows or a recording takes, and count the rest: for a bus that carries more than the server can decode. The dashboard's **Decode on demand** box does the same at any time |
+| `--no-commands` | Watch the bus and read its nodes, but change none: register writes, service calls, firmware updates and test nodes on a real bus are refused, and no allocator runs. The server enforces it, so no dashboard or script can get round it. The dashboard's **No commands** box does the same for one session |
 | `--listen-only` | Watch the bus without sending anything: no node-ID, heartbeat or requests, so node names, versions and registers are not read. The dashboard's **Listen only** box does the same for one session. The CAN controller still acknowledges frames unless the interface itself is in listen-only mode (SocketCAN: `ip link set can0 type can ... listen-only on`) |
 | `--allocator` | Give plug-and-play nodes their node-IDs. Off by default: only for a bus with no allocator of its own. The dashboard's **Node-ID allocator** box does the same for one session |
 | `--bind <host>` | Listen on `<host>`. Default `127.0.0.1`; `0.0.0.0` for the whole network, which needs `CYNITOR_AUTH_TOKEN` set |

@@ -152,7 +152,7 @@ class TestApi:
         session.scanner._get_node_unique_id_hex = lambda node_id: "ab" * 16
         await client.post("/api/nodes/42/firmware", json={"file": "motor-1.2.app.bin"})
         session.event_logger.log_node_event.assert_awaited_once_with(
-            42, "firmware_update", {"file": "motor-1.2.app.bin"}, unique_id="ab" * 16)
+            42, "firmware_update", {"file": "motor-1.2.app.bin", "client": "127.0.0.1"}, unique_id="ab" * 16)
 
     @pytest.mark.parametrize("error, status", [
         (FileNotFoundError("x"), 404), (TimeoutError("x"), 504), (RuntimeError("x"), 409),

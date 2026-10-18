@@ -4,7 +4,7 @@ Handlers of the REST API, which WebSocketServer (websocket_server.py) inherits a
 
 from aiohttp import web
 
-from api_helpers import ApiHandlers, _parse_int, listen_only_refusal, MAX_NODE_ID
+from api_helpers import ApiHandlers, _parse_int, command_refusal, MAX_NODE_ID
 from firmware import firmware_path, list_firmware, MAX_FIRMWARE_BYTES, MAX_FIRMWARE_FOLDER_BYTES
 
 
@@ -75,7 +75,7 @@ class FirmwareApi(ApiHandlers):
         name = body.get("file") if isinstance(body, dict) else None
         if not isinstance(name, str):
             return web.json_response({"error": "file is required"}, status=400)
-        if refused := listen_only_refusal(self.session):
+        if refused := command_refusal(self.session):
             return refused
         try:
             update = await self.session.begin_firmware_update(node_id, name)
@@ -85,5 +85,5 @@ class FirmwareApi(ApiHandlers):
             return web.json_response({"error": str(e)}, status=504)
         except RuntimeError as e:
             return web.json_response({"error": str(e)}, status=409)
-        await self._note_in_node_history(node_id, "firmware_update", {"file": name})
+        await self._note_in_node_history(node_id, "firmware_update", {"file": name, "client": request.remote})
         return web.json_response(update)

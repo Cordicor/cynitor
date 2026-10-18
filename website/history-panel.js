@@ -53,6 +53,9 @@ const formatHistoryTime = (unix) => {
   return `${hh}:${mm}:${ss}`;
 };
 
+// Who sent a command Cynitor carried out: the address of the dashboard or script that asked.
+const sentBy = (d) => (d.client ? ` · by ${escapeHtml(d.client)}` : '');
+
 const formatEventDetail = (evt) => {
   const d = evt.detail;
   if (!d) return '';
@@ -64,13 +67,13 @@ const formatEventDetail = (evt) => {
     case 'restart_suspected':
       return `uptime ${d.old_uptime}s → ${d.new_uptime}s`;
     case 'service_call':
-      return `svc ${d.service_id} · ${d.status} · ${d.latency_ms}ms`;
+      return `svc ${d.service_id} · ${escapeHtml(d.status)} · ${d.latency_ms}ms${sentBy(d)}`;
     case 'register_write':
       return escapeHtml(d.status === 'ok'
         ? `${d.name} = ${d.value}${d.read_back !== d.value ? ` · read back ${d.read_back}` : ''}`
-        : `${d.name} = ${d.value} · ${d.status === 'not_applied' ? 'not taken by the node' : 'no answer'}`);
+        : `${d.name} = ${d.value} · ${d.status === 'not_applied' ? 'not taken by the node' : 'no answer'}`) + sentBy(d);
     case 'firmware_update':
-      return escapeHtml(`from ${d.file}`);
+      return escapeHtml(`from ${d.file}`) + sentBy(d);
     case 'got_node_id':
     case 'lost_node_id':
       return `#${d.node_id}`;
