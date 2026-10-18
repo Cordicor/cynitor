@@ -4,7 +4,6 @@ from __future__ import annotations
 import argparse
 import asyncio
 import contextlib
-import json
 import logging
 import ipaddress
 import os
@@ -34,7 +33,7 @@ from can_hub import CANHub, HubBusLoad, pick_free_node_id
 from bus_load import BusLoadMonitor
 from can_link import _CAN_STATE, discover_can_interfaces, get_can_link_diagnostics
 from cyphal_v11 import SOCKETCAN_FILTER, V11Traffic
-from data_dir import (EVENTS_DB, SCANNER_DB, SUBJECT_TYPES_FILE, TEST_NODES_FILE, prepare_data_dir,
+from data_dir import (EVENTS_DB, SCANNER_DB, TEST_NODES_FILE, prepare_data_dir,
                       resolve_data_dir)
 from firmware import COMMAND_STATUS, FIRMWARE_DIR, FirmwareServer, firmware_path, send_update_command
 from log_store import InMemoryLogStore, APILogHandler, TokenRedactingFilter
@@ -42,11 +41,11 @@ from raw_log import (END_OF_LOG, LogPlayer, SocketcanTap, log_has_fd_frames,
                      log_path, read_sidecar)
 from session_errors import SessionBusy
 from session_rawlog import RawLogging
+from session_subjects import UserSubjectTypes
 from simulation import SimulatedBus
 from testnodes import TestNodeBus, TestNodeManager
 from on_demand import OnDemandDecoding
 from update_check import DISABLE_ENV as DISABLE_UPDATE_CHECK_ENV, UpdateCheck
-from type_guess import load_candidates, rank_types
 from startup_setup import ensure_libusb_on_path, prepare_runtime, resolve_project_root
 from version import __version__
 
@@ -160,7 +159,8 @@ class CANSession:
         self.can_data_bitrate: Optional[int] = None
         self.can_fd = False
         # The raw frame log being written, if any, and its SocketCAN tap.
-        self.raw_logs = RawLogging(self)  # every frame on the bus to a candump .log file, while asked to
+        self.raw_logs = RawLogging(self)
+        self.user_types = UserSubjectTypes(self)  # types the user set for subjects no register names  # every frame on the bus to a candump .log file, while asked to
         # Cyphal v1.1 traffic seen on the bus (see cyphal_v11); on SocketCAN
         # from a filtered listen-only socket, behind the hub from the hub.
         self.v11: Optional[V11Traffic] = None
@@ -311,7 +311,7 @@ class CANSession:
                 self.scanner.listen_only = self.listen_only = listen_only
                 self.no_commands = no_commands
                 self.scanner.on_own_node_id_conflict = self._own_node_id_taken
-                self._apply_saved_subject_types()
+                self.user_types.apply_saved()
                 if offline is None and self.scanner.node.id is not None:
                     self.firmware = FirmwareServer(self.firmware_folder)
                     self.firmware.serve_on(self.scanner.node)
@@ -577,64 +577,6 @@ class CANSession:
                       + (self.event_logger.dropped_events if self.event_logger else 0),
             "clients": self.telemetry.dropped["client"],
         }
-
-    # ── Subject types the user sets, for subjects no register names ──
-
-    GUESS_LISTEN_S = 3.0  # how long guess_subject_type listens for payloads
-
-    @property
-    def subject_types_file(self) -> Path:
-        return self.data_dir / SUBJECT_TYPES_FILE
-
-    def saved_subject_types(self) -> dict[int, str]:
-        """{subject_id: DSDL type name} as saved in the data folder."""
-        try:
-            saved = json.loads(self.subject_types_file.read_text(encoding="utf-8"))
-            return {int(sid): str(name) for sid, name in saved.items()}
-        except (OSError, ValueError, AttributeError):
-            return {}
-
-    def set_subject_type(self, subject_id: int, type_name: Optional[str]) -> None:
-        """Decode ``subject_id`` as ``type_name`` from now on and in later sessions; None forgets it.
-
-        RuntimeError if CAN is not connected or the subject's registers name
-        its type; ValueError if the type is not a compiled message type.
-        """
-        if not self.is_running:
-            raise RuntimeError("CAN is not connected")
-        self._live_scanner.set_subject_type(subject_id, type_name)
-        saved = self.saved_subject_types()
-        if type_name is None:
-            saved.pop(subject_id, None)
-        else:
-            saved[subject_id] = type_name
-        try:
-            self.subject_types_file.write_text(
-                json.dumps({str(sid): name for sid, name in sorted(saved.items())}, indent=1), encoding="utf-8")
-        except OSError as exc:
-            logger.warning("Could not save the subject types: %s", exc)
-
-    def _apply_saved_subject_types(self) -> None:
-        for subject_id, type_name in self.saved_subject_types().items():
-            try:
-                self._live_scanner.set_subject_type(subject_id, type_name)
-            except (RuntimeError, ValueError) as exc:
-                logger.warning("Subject %d: not decoding it as %s, which was set earlier: %s",
-                               subject_id, type_name, exc)
-
-    async def guess_subject_type(self, subject_id: int, types: list[dict]) -> dict:
-        """Listen to an undecoded subject and rank the ``types`` its payloads fit (see type_guess).
-
-        {samples, matches, candidates: [{type, custom, preview}]}; no samples
-        if nothing was published on it meanwhile.
-        """
-        if not self.is_running:
-            raise RuntimeError("CAN is not connected")
-        payloads = await self._live_scanner.sample_subject(subject_id, self.GUESS_LISTEN_S)
-        if not payloads:
-            return {"samples": 0, "matches": 0, "candidates": []}
-        ranked = await asyncio.to_thread(lambda: rank_types(payloads, load_candidates(types), self.can_fd))
-        return {"samples": len(payloads), **ranked}
 
     @property
     def firmware_folder(self) -> Path:

@@ -80,7 +80,7 @@ class NodesApi(ApiHandlers):
 
     def _subject_type_change(self, subject_id: int, type_name: Optional[str]) -> web.Response:
         try:
-            self.session.set_subject_type(subject_id, type_name)
+            self.session.user_types.set(subject_id, type_name)
         except ValueError as e:
             return web.json_response({"error": str(e)}, status=400)
         except RuntimeError as e:
@@ -95,7 +95,7 @@ class NodesApi(ApiHandlers):
             return web.json_response({"error": "DSDL manager not available"}, status=503)
         types = await asyncio.to_thread(self.dsdl_manager.message_types)
         try:
-            result = await self.session.guess_subject_type(subject_id, types)
+            result = await self.session.user_types.guess(subject_id, types)
         except RuntimeError as e:
             return web.json_response({"error": str(e)}, status=409)
         return web.json_response(result)

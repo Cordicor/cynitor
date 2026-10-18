@@ -304,14 +304,14 @@ async def run() -> None:
               f"subject {UNNAMED_SUBJECT_ID} is in the device's port list, but no register names its type")
         from dsdl_manager import DsdlManager
         types = DsdlManager(ROOT, data_dir=data).message_types()
-        guess = await session.guess_subject_type(UNNAMED_SUBJECT_ID, types)
+        guess = await session.user_types.guess(UNNAMED_SUBJECT_ID, types)
         offered = {c["type"]: c["preview"] for c in guess["candidates"]}
         right = "uavcan.si.unit.velocity.Vector3.1.0"
         check(guess["samples"] > 0 and offered.get(right) == {"meter_per_second": [1.0, 2.0, 3.5]},
               f"guessing from {guess['samples']} payloads offers {right} among {guess['matches']} fitting types")
         check("uavcan.si.sample.velocity.Vector3.1.0" not in offered,
               "a type of another size (the same with a timestamp) is not offered")
-        session.set_subject_type(UNNAMED_SUBJECT_ID, right)
+        session.user_types.set(UNNAMED_SUBJECT_ID, right)
         decoded = await wait_for(lambda: UNNAMED_SUBJECT_ID in session.telemetry.latest_by_subject)
         values = decoded and session.telemetry.latest_by_subject[UNNAMED_SUBJECT_ID]["attributes"][0]["value"]
         check(values == [1.0, 2.0, 3.5], f"subject {UNNAMED_SUBJECT_ID} decodes once its type is set: {values}")

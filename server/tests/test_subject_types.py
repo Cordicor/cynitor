@@ -10,6 +10,7 @@ import pytest
 from aiohttp.test_utils import TestClient, TestServer
 
 import main
+import session_subjects
 import type_guess
 from scanner_node import ScannerNode
 
@@ -141,41 +142,41 @@ def session(tmp_path):
 
 class TestSession:
     def test_set_and_clear_are_saved(self, session):
-        session.set_subject_type(1620, "ns.T.1.0")
+        session.user_types.set(1620, "ns.T.1.0")
         session.scanner.set_subject_type.assert_called_with(1620, "ns.T.1.0")
-        assert json.loads(session.subject_types_file.read_text()) == {"1620": "ns.T.1.0"}
-        session.set_subject_type(1620, None)
-        assert session.saved_subject_types() == {}
+        assert json.loads(session.user_types.file.read_text()) == {"1620": "ns.T.1.0"}
+        session.user_types.set(1620, None)
+        assert session.user_types.saved() == {}
 
     def test_refused_types_are_not_saved(self, session):
         session.scanner.set_subject_type.side_effect = ValueError("no")
         with pytest.raises(ValueError):
-            session.set_subject_type(1620, "ns.X.1.0")
-        assert session.saved_subject_types() == {}
+            session.user_types.set(1620, "ns.X.1.0")
+        assert session.user_types.saved() == {}
 
     def test_needs_a_connection(self, tmp_path):
         with pytest.raises(RuntimeError, match="not connected"):
-            main.CANSession(data_dir=tmp_path).set_subject_type(1620, "ns.T.1.0")
+            main.CANSession(data_dir=tmp_path).user_types.set(1620, "ns.T.1.0")
 
     def test_saved_types_are_applied_and_bad_ones_skipped(self, session):
-        session.subject_types_file.write_text(json.dumps({"1620": "ns.T.1.0", "1621": "ns.Gone.1.0"}))
+        session.user_types.file.write_text(json.dumps({"1620": "ns.T.1.0", "1621": "ns.Gone.1.0"}))
         session.scanner.set_subject_type.side_effect = [None, ValueError("not compiled")]
-        session._apply_saved_subject_types()
+        session.user_types.apply_saved()
         assert session.scanner.set_subject_type.call_count == 2
 
     def test_unreadable_file_is_empty(self, session):
-        session.subject_types_file.write_text("not json")
-        assert session.saved_subject_types() == {}
+        session.user_types.file.write_text("not json")
+        assert session.user_types.saved() == {}
 
     async def test_guess_without_traffic(self, session):
         session.scanner.sample_subject = AsyncMock(return_value=[])
-        assert await session.guess_subject_type(1620, []) == {"samples": 0, "matches": 0, "candidates": []}
+        assert await session.user_types.guess(1620, []) == {"samples": 0, "matches": 0, "candidates": []}
 
     async def test_guess_ranks_the_samples(self, session):
         session.scanner.sample_subject = AsyncMock(return_value=[b"\x01"])
-        with patch.object(main, "load_candidates", return_value=["c"]) as load, \
-                patch.object(main, "rank_types", return_value={"matches": 1, "candidates": ["x"]}) as rank:
-            result = await session.guess_subject_type(1620, [{"full_name": "ns.T.1.0"}])
+        with patch.object(session_subjects, "load_candidates", return_value=["c"]) as load, \
+                patch.object(session_subjects, "rank_types", return_value={"matches": 1, "candidates": ["x"]}) as rank:
+            result = await session.user_types.guess(1620, [{"full_name": "ns.T.1.0"}])
         load.assert_called_once_with([{"full_name": "ns.T.1.0"}])
         rank.assert_called_once_with([b"\x01"], ["c"], False)
         assert result == {"samples": 1, "matches": 1, "candidates": ["x"]}
@@ -193,17 +194,17 @@ async def api(session):
 class TestApi:
     async def test_set_and_clear(self, api):
         client, session = api
-        session.set_subject_type = MagicMock()
+        session.user_types.set = MagicMock()
         resp = await client.put("/api/subjects/1620/type", json={"type": " ns.T.1.0 "})
         assert resp.status == 200 and (await resp.json())["type"] == "ns.T.1.0"
-        session.set_subject_type.assert_called_with(1620, "ns.T.1.0")
+        session.user_types.set.assert_called_with(1620, "ns.T.1.0")
         assert (await client.delete("/api/subjects/1620/type")).status == 200
-        session.set_subject_type.assert_called_with(1620, None)
+        session.user_types.set.assert_called_with(1620, None)
 
     @pytest.mark.parametrize("error, status", [(ValueError("x"), 400), (RuntimeError("x"), 409)])
     async def test_set_errors(self, api, error, status):
         client, session = api
-        session.set_subject_type = MagicMock(side_effect=error)
+        session.user_types.set = MagicMock(side_effect=error)
         assert (await client.put("/api/subjects/1620/type", json={"type": "ns.T.1.0"})).status == status
 
     async def test_bad_requests(self, api):
@@ -213,11 +214,11 @@ class TestApi:
 
     async def test_guess(self, api):
         client, session = api
-        session.guess_subject_type = AsyncMock(return_value={"samples": 2, "matches": 0, "candidates": []})
+        session.user_types.guess = AsyncMock(return_value={"samples": 2, "matches": 0, "candidates": []})
         resp = await client.get("/api/subjects/1620/type-guesses")
         assert resp.status == 200 and (await resp.json())["samples"] == 2
-        session.guess_subject_type.assert_awaited_once_with(1620, [{"full_name": "a"}])
-        session.guess_subject_type = AsyncMock(side_effect=RuntimeError("already decoded"))
+        session.user_types.guess.assert_awaited_once_with(1620, [{"full_name": "a"}])
+        session.user_types.guess = AsyncMock(side_effect=RuntimeError("already decoded"))
         assert (await client.get("/api/subjects/1620/type-guesses")).status == 409
 
 
