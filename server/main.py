@@ -38,9 +38,10 @@ from data_dir import (EVENTS_DB, SCANNER_DB, SUBJECT_TYPES_FILE, TEST_NODES_FILE
                       resolve_data_dir)
 from firmware import COMMAND_STATUS, FIRMWARE_DIR, FirmwareServer, firmware_path, send_update_command
 from log_store import InMemoryLogStore, APILogHandler, TokenRedactingFilter
-from raw_log import (END_OF_LOG, RAW_LOG_DIR, LogPlayer, RawLog, SocketcanTap, free_space_problem, log_has_fd_frames,
-                     log_path, new_log_name, read_sidecar, write_sidecar)
+from raw_log import (END_OF_LOG, LogPlayer, SocketcanTap, log_has_fd_frames,
+                     log_path, read_sidecar)
 from session_errors import SessionBusy
+from session_rawlog import RawLogging
 from simulation import SimulatedBus
 from testnodes import TestNodeBus, TestNodeManager
 from on_demand import OnDemandDecoding
@@ -159,8 +160,7 @@ class CANSession:
         self.can_data_bitrate: Optional[int] = None
         self.can_fd = False
         # The raw frame log being written, if any, and its SocketCAN tap.
-        self.raw_log: Optional[RawLog] = None
-        self._raw_tap: Optional[SocketcanTap] = None
+        self.raw_logs = RawLogging(self)  # every frame on the bus to a candump .log file, while asked to
         # Cyphal v1.1 traffic seen on the bus (see cyphal_v11); on SocketCAN
         # from a filtered listen-only socket, behind the hub from the hub.
         self.v11: Optional[V11Traffic] = None
@@ -578,10 +578,6 @@ class CANSession:
             "clients": self.telemetry.dropped["client"],
         }
 
-    @property
-    def raw_log_folder(self) -> Path:
-        return self.data_dir / RAW_LOG_DIR
-
     # ── Subject types the user sets, for subjects no register names ──
 
     GUESS_LISTEN_S = 3.0  # how long guess_subject_type listens for payloads
@@ -673,89 +669,13 @@ class CANSession:
         logger.info("Node %d is updating from %s (%d bytes)", node_id, name, update["bytes"])
         return update
 
-    def start_raw_log(self) -> RawLog:
-        """Start logging every frame on the bus to a new candump .log file.
-
-        Behind the hub the frames come from its forwarding loops; on SocketCAN
-        from a second, listen-only socket. RuntimeError if CAN is not connected
-        or a log is already running.
-        """
-        if not self.is_running:
-            raise RuntimeError("CAN is not connected")
-        if self.raw_log is not None:
-            raise RuntimeError("A raw log is already running")
-        self.raw_log_folder.mkdir(parents=True, exist_ok=True)
-        problem = free_space_problem(self.raw_log_folder)
-        if problem is not None:
-            raise RuntimeError(problem)
-        path = self.raw_log_folder / new_log_name()
-        if self.hub is not None:
-            log = RawLog(path, channel="can0")
-            self.hub.add_listener(log.write)
-        else:
-            device = socketcan_device(self.can_interface)
-            log = RawLog(path, channel=device)
-            try:
-                self._raw_tap = SocketcanTap(device, self.can_fd, log.write)
-            except Exception:
-                log.close()
-                path.unlink(missing_ok=True)
-                raise
-        self.raw_log = log
-        logger.info("Raw CAN log started: %s", path)
-        return log
-
-    def stop_raw_log(self) -> Optional[RawLog]:
-        """Stop the raw log, if one runs, and return it."""
-        log, self.raw_log = self.raw_log, None
-        if log is None:
-            return None
-        if self.hub is not None:
-            self.hub.remove_listener(log.write)
-        if self._raw_tap is not None:
-            self._raw_tap.stop()
-            self._raw_tap = None
-        log.close()
-        if self.scanner is not None:
-            write_sidecar(log.path, self._bus_knowledge())
-        logger.info("Raw CAN log stopped: %s (%d frames)", log.path, log.frames)
-        return log
-
-    def _bus_knowledge(self) -> dict:
-        """What this session knows about the bus that a raw log cannot hold, for playing it."""
-        scanner = self._live_scanner
-        publishers: dict[str, dict[str, str]] = {}
-        for subject_id, node_ids in scanner.active_publishers.items():
-            subject_type = scanner.subject_types.get(subject_id)
-            if not subject_type:
-                continue
-            for node_id in node_ids:
-                publishers.setdefault(str(node_id), {})[str(subject_id)] = subject_type
-        names = {}
-        for node_id, node in scanner.all_nodes.items():
-            info = getattr(node, "info_response", None)
-            if info is not None:
-                names[str(node_id)] = info.name.tobytes().decode("utf-8", errors="replace")
-        own = self.node_id
-        return {
-            "version": 1,
-            "own_node_id": own,  # None listening only
-            "bitrate": self.can_bitrate,
-            "data_bitrate": self.can_data_bitrate,
-            "fd": self.can_fd,
-            "publishers": publishers,
-            "servers": {str(n): {str(s): t for s, t in types.items()}
-                        for n, types in scanner.node_service_types.items()},
-            "names": names,
-        }
-
     async def play_raw_log(self, name: str, speed: float = 1.0) -> None:
         """Connect to a saved raw log as if it were the bus (see raw_log.LogPlayer).
 
         ``speed`` scales the logged pace; 0 plays as fast as frames can be read.
         The session ends when the log does. FileNotFoundError for an unknown log.
         """
-        path = log_path(self.raw_log_folder, name)
+        path = log_path(self.raw_logs.folder, name)
         if path is None or not path.is_file():
             raise FileNotFoundError(f"No raw log named {name!r}")
         info = read_sidecar(path)
@@ -858,7 +778,7 @@ class CANSession:
         each stop run even if one before it failed.
         """
         logger.info("Tearing down CAN session...")
-        self.stop_raw_log()  # started while the session runs, so not on the stack; its tap needs the bus
+        self.raw_logs.stop()  # started while the session runs, so not on the stack; its tap needs the bus
         stack, self._stack = self._stack, contextlib.AsyncExitStack()
         try:
             await stack.aclose()

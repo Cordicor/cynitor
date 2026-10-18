@@ -242,9 +242,9 @@ async def run() -> None:
 
         live = await wait_for(lambda: TEMPERATURE_SUBJECT_ID in session.telemetry.latest_by_subject)
         check(live, f"subject {TEMPERATURE_SUBJECT_ID}, named in the device's registers, decoded live")
-        log = session.start_raw_log()
+        log = session.raw_logs.start()
         await asyncio.sleep(4)  # heartbeats each way, the port list, temperatures
-        session.stop_raw_log()
+        session.raw_logs.stop()
         logged = list(can.LogReader(str(log.path)))
         from_device = [m for m in logged if m.is_rx and m.arbitration_id & 0x7F == DEVICE_NODE_ID]
         own = [m for m in logged if not m.is_rx and m.arbitration_id & 0x7F == int(own_id)]

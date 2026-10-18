@@ -142,30 +142,30 @@ class TestSessionRawLog:
     def test_refused_when_not_connected(self, tmp_path):
         from main import CANSession
         with pytest.raises(RuntimeError, match="not connected"):
-            CANSession(data_dir=tmp_path).start_raw_log()
+            CANSession(data_dir=tmp_path).raw_logs.start()
 
     def test_hub_feeds_the_log_until_stopped(self, running_session):
-        log = running_session.start_raw_log()
+        log = running_session.raw_logs.start()
         assert running_session.hub.listeners == [log.write]
         running_session.hub.tell(_frames()[0])
-        assert running_session.stop_raw_log() is log
-        assert running_session.hub.listeners == [] and running_session.raw_log is None
-        assert log.frames == 1 and log.path.parent == running_session.raw_log_folder
+        assert running_session.raw_logs.stop() is log
+        assert running_session.hub.listeners == [] and running_session.raw_logs.active is None
+        assert log.frames == 1 and log.path.parent == running_session.raw_logs.folder
 
     def test_one_log_at_a_time(self, running_session):
-        running_session.start_raw_log()
+        running_session.raw_logs.start()
         with pytest.raises(RuntimeError, match="already running"):
-            running_session.start_raw_log()
+            running_session.raw_logs.start()
 
     def test_stop_without_a_log(self, running_session):
-        assert running_session.stop_raw_log() is None
+        assert running_session.raw_logs.stop() is None
 
     def test_refused_when_the_disk_is_low(self, running_session, monkeypatch):
         import raw_log
         monkeypatch.setattr(raw_log.shutil, "disk_usage", lambda _: SimpleNamespace(free=0))
         with pytest.raises(RuntimeError, match="MiB free"):
-            running_session.start_raw_log()
-        assert running_session.raw_log is None
+            running_session.raw_logs.start()
+        assert running_session.raw_logs.active is None
 
 
 @pytest.fixture
@@ -334,8 +334,8 @@ class TestSessionPlayback:
         scanner.node_service_types = {50: {384: "uavcan.register.Access_1_0"}}
         node = SimpleNamespace(info_response=SimpleNamespace(name=numpy.frombuffer(b"demo.sensor", numpy.uint8)))
         scanner.all_nodes = {50: node, 51: SimpleNamespace()}
-        log = running_session.start_raw_log()
-        running_session.stop_raw_log()
+        log = running_session.raw_logs.start()
+        running_session.raw_logs.stop()
         info = read_sidecar(log.path)
         assert info["publishers"] == {"50": {"1620": "uavcan.si.sample.temperature.Scalar_1_0"}}
         assert info["servers"] == {"50": {"384": "uavcan.register.Access_1_0"}}
@@ -349,7 +349,7 @@ class TestSessionPlayback:
     async def test_plays_through_the_hub_with_the_sidecar(self, tmp_path, monkeypatch):
         from main import CANSession
         session = CANSession(data_dir=tmp_path)
-        folder = session.raw_log_folder
+        folder = session.raw_logs.folder
         folder.mkdir()
         path = _log_with(folder, [_heartbeat(50, 0)])
         write_sidecar(path, {"own_node_id": 46, "bitrate": 250000, "fd": False,
@@ -374,8 +374,8 @@ class TestPlayApi:
     async def test_play_errors(self, api):
         client, session = api
         assert (await client.post("/api/rawlogs/cynitor-20260928-000000.log/play", json={})).status == 404
-        log = session.start_raw_log()
-        session.stop_raw_log()
+        log = session.raw_logs.start()
+        session.raw_logs.stop()
         url = f"/api/rawlogs/{log.path.name}/play"
         assert (await client.post(url, json={"speed": -1})).status == 400
         assert (await client.post(url, json={"speed": "fast"})).status == 400
@@ -383,8 +383,8 @@ class TestPlayApi:
 
     async def test_play_starts_the_session(self, api):
         client, session = api
-        log = session.start_raw_log()
-        session.stop_raw_log()
+        log = session.raw_logs.start()
+        session.raw_logs.stop()
         session.scanner = None  # disconnected
         session.play_raw_log = AsyncMock()
         resp = await client.post(f"/api/rawlogs/{log.path.name}/play", json={"speed": 0})
@@ -393,8 +393,8 @@ class TestPlayApi:
 
     async def test_delete_removes_the_sidecar(self, api):
         client, session = api
-        log = session.start_raw_log()
-        session.stop_raw_log()
+        log = session.raw_logs.start()
+        session.raw_logs.stop()
         assert sidecar_path(log.path).exists()
         assert (await client.delete(f"/api/rawlogs/{log.path.name}")).status == 200
         assert not sidecar_path(log.path).exists()

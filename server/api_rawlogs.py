@@ -15,15 +15,15 @@ class RawLogsApi(ApiHandlers):
     """The rawlogs part of WebSocketServer, which has the session and the rest these use."""
 
     async def _get_raw_logs(self, request: web.Request) -> web.Response:
-        active = self.session.raw_log
+        active = self.session.raw_logs.active
         return web.json_response({
             "active": active.status() if active is not None else None,
-            "logs": list_logs(self.session.raw_log_folder),
+            "logs": list_logs(self.session.raw_logs.folder),
         })
 
     async def _start_raw_log(self, request: web.Request) -> web.Response:
         try:
-            log = self.session.start_raw_log()
+            log = self.session.raw_logs.start()
         except RuntimeError as e:
             return web.json_response({"error": str(e)}, status=409)
         except Exception as e:
@@ -32,13 +32,13 @@ class RawLogsApi(ApiHandlers):
         return web.json_response(log.status(), status=201)
 
     async def _stop_raw_log(self, request: web.Request) -> web.Response:
-        log = self.session.stop_raw_log()
+        log = self.session.raw_logs.stop()
         if log is None:
             return web.json_response({"error": "No raw log is running"}, status=409)
         return web.json_response(log.status())
 
     def _raw_log_file(self, request: web.Request) -> Optional[Path]:
-        path = log_path(self.session.raw_log_folder, request.match_info["name"])
+        path = log_path(self.session.raw_logs.folder, request.match_info["name"])
         return path if path is not None and path.is_file() else None
 
     async def _download_raw_log(self, request: web.Request) -> web.StreamResponse:
@@ -54,7 +54,7 @@ class RawLogsApi(ApiHandlers):
         path = self._raw_log_file(request)
         if path is None:
             return web.json_response({"error": "No such raw log"}, status=404)
-        active = self.session.raw_log
+        active = self.session.raw_logs.active
         if active is not None and active.path == path:
             return web.json_response({"error": "Stop the raw log before deleting it"}, status=409)
         path.unlink()
