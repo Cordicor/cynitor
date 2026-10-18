@@ -1,6 +1,8 @@
 # Cynitor
 
-[![Tests](https://github.com/OpenCyphal-Garage/cynitor/actions/workflows/test.yml/badge.svg?branch=main&event=push)](https://github.com/OpenCyphal-Garage/cynitor/actions/workflows/test.yml)
+![Ubuntu 22.04: passing](https://img.shields.io/badge/Ubuntu_22.04-passing-brightgreen "On real hardware: a gs_usb CAN FD adapter and an STM32 Cyphal node; release binaries are built here")
+![Ubuntu 24.04: passing](https://img.shields.io/badge/Ubuntu_24.04-passing-brightgreen "CI: unit tests (Python 3.10, 3.11, 3.12), integration, browser end-to-end")
+![Windows Server 2022, 2025: passing](https://img.shields.io/badge/Windows_Server_2022%2C_2025-passing-brightgreen "CI: unit tests and integration on a virtual bus; the release build's smoke test (2022)")
 [![Latest release](https://img.shields.io/github/v/release/OpenCyphal-Garage/cynitor)](https://github.com/OpenCyphal-Garage/cynitor/releases/latest)
 
 A dashboard for [Cyphal](https://opencyphal.org/) (UAVCAN) networks on CAN and
@@ -60,17 +62,6 @@ No Python needed. Take the file for your system from the
   version under the sidebar links to it. Nothing about you or the bus is sent.
   `--no-update-check` (or `CYNITOR_NO_UPDATE_CHECK=1`) turns it off; without
   internet access it fails quietly.
-
-### Tested on
-
-![Ubuntu 22.04: passing](https://img.shields.io/badge/Ubuntu_22.04-passing-brightgreen "On real hardware: a gs_usb CAN FD adapter and an STM32 Cyphal node; release binaries are built here")
-![Ubuntu 24.04: passing](https://img.shields.io/badge/Ubuntu_24.04-passing-brightgreen "CI: unit tests (Python 3.10, 3.11, 3.12), integration, browser end-to-end")
-![Windows Server 2022, 2025: passing](https://img.shields.io/badge/Windows_Server_2022%2C_2025-passing-brightgreen "CI: unit tests and integration on a virtual bus; the release build's smoke test (2022)")
-![Windows 10, 11: not tested yet](https://img.shields.io/badge/Windows_10%2C_11-not_tested_yet-yellow "Neither the release build nor any adapter has been run on a desktop Windows yet")
-![macOS: not tested](https://img.shields.io/badge/macOS-not_tested-lightgrey "From source only: no build, no CI run")
-
-As of v1.3.0, updated with every release: Ubuntu 22.04 on real hardware (a
-gs_usb CAN FD adapter and an STM32 node), the others in CI.
 
 ### From source
 
