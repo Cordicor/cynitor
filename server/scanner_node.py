@@ -749,6 +749,8 @@ class ScannerNode(ScannerRegisters, ScannerServices):
 
     async def port_callback(self, msg: uavcan.node.port.List_1_0, transfer: pycyphal.transport.TransferFrom):
         node_id: int = transfer.source_node_id
+        if node_id is None:
+            return  # an anonymous node may not send one
 
         node = self.all_nodes[node_id]
         def _port_ids(ids):
@@ -788,6 +790,8 @@ class ScannerNode(ScannerRegisters, ScannerServices):
 
     async def heartbeat_callback(self, msg: uavcan.node.Heartbeat_1_0, transfer: pycyphal.transport.TransferFrom):
         node_id = transfer.source_node_id
+        if node_id is None:
+            return  # an anonymous node may not send one; it would be no node in the list
         node    = self.all_nodes[node_id]
         now     = datetime.datetime.now()
 

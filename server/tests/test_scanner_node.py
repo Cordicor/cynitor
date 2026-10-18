@@ -783,6 +783,15 @@ class TestOwnNodeIdTaken:
         await self.heartbeat(node, 42)
         assert node.said == []
 
+    async def test_anonymous_heartbeat_and_port_list_are_ignored(self):
+        # An anonymous node may send neither; one that does raised KeyError,
+        # logged with a traceback for each frame.
+        node = self.make()
+        await self.heartbeat(node, None)
+        await node.port_callback(MagicMock(), types.SimpleNamespace(source_node_id=None))
+        assert node.events == [] and set(node.all_nodes) == {42, 43}
+        node._queue_event.assert_not_awaited()
+
 
 class TestLeavingSoftwareUpdate:
     async def test_new_firmware_is_asked_for_its_info_at_once(self):
