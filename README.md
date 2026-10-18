@@ -48,6 +48,8 @@ No Python needed. Take the file for your system from the
 
 - All of them are for x86-64, hold the same server and open no window: you
   use it from a browser.
+- An AppImage needs FUSE. Where there is none (a container, a minimal
+  install), run it with `--appimage-extract-and-run`.
 - Each file has a `<file>.sha256` beside it: `sha256sum -c <file>.sha256`
   checks a download. From 1.4.0 each is also signed as built by this
   repository's release workflow:

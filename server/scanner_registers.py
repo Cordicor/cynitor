@@ -404,7 +404,8 @@ class ScannerRegisters:
                 register_access_client.call(access_request), timeout=self.REGISTER_TIMEOUT
             )
             if not access_response_tuple or not access_response_tuple[0]:
-                logging.error(f"Failed to access register '{register_name}' on node_id={node_id}")
+                # The node did not answer: an outcome of the request (504), not a server error.
+                logging.warning(f"Failed to access register '{register_name}' on node_id={node_id}")
                 return None
 
             access_response = access_response_tuple[0]
