@@ -568,12 +568,15 @@ class TestControllerState:
     @pytest.fixture
     def ip_says(self, monkeypatch, tmp_path):
         import types
+        import can_link
         import main
         (tmp_path / "can0").mkdir()
         (tmp_path / "can0" / "operstate").write_text("up\n")
         real_path = main.Path
-        monkeypatch.setattr(main, "Path", lambda p: tmp_path if p == "/sys/class/net" else real_path(p))
-        monkeypatch.setattr(main, "IS_LINUX", True)
+        # The health check is main's, the diagnostics can_link's: each reads its own.
+        for module in (main, can_link):
+            monkeypatch.setattr(module, "Path", lambda p: tmp_path if p == "/sys/class/net" else real_path(p))
+            monkeypatch.setattr(module, "IS_LINUX", True)
 
         def say(line):
             out = ("141: can0: <NOARP,UP,LOWER_UP,ECHO> mtu 72 qdisc pfifo_fast state UP mode DEFAULT\n"
