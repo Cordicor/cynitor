@@ -6,13 +6,13 @@ import asyncio
 
 from aiohttp import web
 
-from api_helpers import logger
+from api_helpers import ApiHandlers, logger
 from bus_errors import BusErrors
 from can_config import api_interface_error, is_explicit_spec, is_socketcan, resolve_bitrate, resolve_data_bitrate, socketcan_device
 from cyphal_v11 import V11Traffic
 
 
-class CanApi:
+class CanApi(ApiHandlers):
     """The can part of WebSocketServer, which has the session and the rest these use."""
 
     async def _list_adapters(self, refresh: bool = False) -> list[dict]:

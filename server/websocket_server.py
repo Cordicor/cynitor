@@ -318,6 +318,7 @@ class WebSocketServer(CanApi, RawLogsApi, TestNodesApi, FirmwareApi, NodesApi, R
             logger.info("Serving the dashboard from %s", self.website_dir)
 
     async def _serve_index(self, _request: web.Request) -> web.StreamResponse:
+        assert self.website_dir is not None  # routed only when there is one
         return web.FileResponse(self.website_dir / "index.html")
 
     async def _serve_config_js(self, request: web.Request) -> web.Response:
@@ -337,7 +338,8 @@ class WebSocketServer(CanApi, RawLogsApi, TestNodesApi, FirmwareApi, NodesApi, R
         """Start the WebSocket server."""
         try:
             # A line per request is a few a second per open dashboard: only when asked for.
-            self.runner = web.AppRunner(self.app, **({} if self.access_log else {"access_log": None}))
+            access: dict[str, Any] = {} if self.access_log else {"access_log": None}
+            self.runner = web.AppRunner(self.app, **access)
             await self.runner.setup()
             site = web.TCPSite(self.runner, self.host, self.port)
             await site.start()
@@ -358,16 +360,6 @@ class WebSocketServer(CanApi, RawLogsApi, TestNodesApi, FirmwareApi, NodesApi, R
             await self.runner.cleanup()
 
         logger.info("WebSocket server stopped")
-
-
-    async def _read_json_body(self, request: web.Request) -> tuple[Optional[dict], Optional[web.Response]]:
-        try:
-            body = await request.json()
-        except Exception:
-            return None, web.json_response({"error": "Invalid JSON body"}, status=400)
-        if not isinstance(body, dict):
-            return None, web.json_response({"error": "JSON body must be an object"}, status=400)
-        return body, None
 
 
     # ------------------------------------------------------------------
@@ -396,8 +388,8 @@ class WebSocketServer(CanApi, RawLogsApi, TestNodesApi, FirmwareApi, NodesApi, R
             while not ws.closed:
                 source = self._event_source()
                 if source is not None:
-                    queue = source.subscribe(max_queue=100)
-                    consume_task = asyncio.create_task(self._consume_and_send(ws, queue, source))
+                    queue = stream = source.subscribe(max_queue=100)
+                    consume_task = asyncio.create_task(self._consume_and_send(ws, stream, source))
                     done, pending = await asyncio.wait(
                         [consume_task, recv_task, metrics_task, capture_task],
                         return_when=asyncio.FIRST_COMPLETED
@@ -521,6 +513,7 @@ class WebSocketServer(CanApi, RawLogsApi, TestNodesApi, FirmwareApi, NodesApi, R
             except Exception as e:
                 logger.error("Error sending to client: %s", e)
                 break
+        return False
 
     async def _send_metrics_loop(self, ws: web.WebSocketResponse) -> None:
         """Send the bus load and the server's CPU use to the client every second."""

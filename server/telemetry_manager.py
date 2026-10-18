@@ -225,7 +225,7 @@ class TelemetryManager:
         return int(value)
 
     @classmethod
-    def _as_int_list(cls, values: Any) -> list[int]:
+    def _as_int_list(cls, values: Any) -> list[Optional[int]]:
         """Convert array-like values into a plain list of Python ints."""
         if values is None:
             return []
@@ -271,7 +271,9 @@ class TelemetryManager:
             try:
                 event = await self.scanner.message_queue.get()
                 # What is cached is what is sent: JSON-safe, NaN and infinity as null.
-                await self._broadcast(self._update_state(event))
+                cached = self._update_state(event)
+                if cached is not None:
+                    await self._broadcast(cached)
             except asyncio.CancelledError:
                 logger.info("Telemetry loop cancelled")
                 return
@@ -283,9 +285,10 @@ class TelemetryManager:
     # STATE MANAGEMENT
     # ------------------------------------------------------------------
 
-    def _update_state(self, event: dict[str, Any]) -> dict[str, Any]:
+    def _update_state(self, event: dict[str, Any]) -> Optional[dict[str, Any]]:
         """
         Update the latest-state cache with the new event, and return it as cached: JSON-safe.
+        None for an event without a subject-ID, which is neither cached nor sent.
         
         Args:
             event: Event dict with keys: subject_id, timestamp, rate, message_type, 
@@ -298,7 +301,7 @@ class TelemetryManager:
             
             if subject_id is None:
                 logging.error(f"Event missing subject_id: {event}")
-                return
+                return None
             
             self.latest_by_subject[subject_id] = event
             

@@ -219,6 +219,13 @@ class TestSetRegister:
             await self.write(node, "serial", "2", "natural16")
         assert node.written == []
 
+    async def test_a_register_the_node_does_not_have_is_named(self, uavcan_types):
+        # A node answers an unknown name with an empty value: that is no type mismatch.
+        node = Node({"gian": ("empty", None, False)})
+        with pytest.raises(ValueError, match="Node 7 has no register 'gian'"):
+            await self.write(node, "gian", "5", "natural16")
+        assert node.written == []
+
     async def test_another_type_is_refused_unless_both_are_numbers(self, uavcan_types):
         node = Node({"name": ("string", "x", True), "gain": ("integer32", np.array([1]), True)})
         with pytest.raises(ValueError, match="Type mismatch: expected 'string', got 'natural16'"):
@@ -257,8 +264,8 @@ class TestSetRegister:
         assert node.written == []
 
     async def test_a_type_there_is_no_writing_of_is_refused(self, uavcan_types):
-        node = Node({"r": ("empty", None, True)})
-        with pytest.raises(ValueError, match="Invalid value '1' for type 'empty'"):
+        node = Node({"r": ("natural16", np.array([1]), True)})
+        with pytest.raises(ValueError, match="Type mismatch: expected 'natural16', got 'empty'"):
             await self.write(node, "r", "1", "empty")
 
     async def test_a_node_that_does_not_answer_gives_nothing(self, uavcan_types):

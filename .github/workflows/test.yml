@@ -27,6 +27,21 @@ jobs:
       - run: pip install ruff==0.6.9
       - run: ruff check server tools tests
 
+  types:
+    name: Type check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6.3.0
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: server/requirements.txt
+      # The server's own libraries, so their types are checked against; settings in server/mypy.ini.
+      - run: pip install -r server/requirements.txt mypy==1.13.0
+      - working-directory: server
+        run: mypy .
+
   backend:
     # Linux jobs keep their original names, which branch protection may require.
     name: Backend (Python ${{ matrix.python-version }}${{ matrix.os != 'ubuntu-latest' && format(', {0}', matrix.os) || '' }})

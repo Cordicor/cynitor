@@ -4,11 +4,11 @@ Handlers of the REST API, which WebSocketServer (websocket_server.py) inherits a
 
 from aiohttp import web
 
-from api_helpers import _parse_int, listen_only_refusal, MAX_NODE_ID
+from api_helpers import ApiHandlers, _parse_int, listen_only_refusal, MAX_NODE_ID
 from firmware import firmware_path, list_firmware, MAX_FIRMWARE_BYTES, MAX_FIRMWARE_FOLDER_BYTES
 
 
-class FirmwareApi:
+class FirmwareApi(ApiHandlers):
     """The firmware part of WebSocketServer, which has the session and the rest these use."""
 
     async def _get_firmware(self, request: web.Request) -> web.Response:

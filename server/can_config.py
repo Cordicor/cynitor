@@ -93,8 +93,10 @@ def is_socketcan(iface: str) -> bool:
     return normalize_can_iface(iface).startswith("socketcan:")
 
 
-def socketcan_device(iface: str) -> str:
+def socketcan_device(iface: Optional[str]) -> str:
     """The kernel device name behind a SocketCAN ``iface`` (``socketcan:can0`` -> ``can0``)."""
+    if iface is None:
+        raise ValueError("No CAN interface")
     spec = normalize_can_iface(iface)
     if not spec.startswith("socketcan:"):
         raise ValueError(f"{iface!r} is not a SocketCAN interface")

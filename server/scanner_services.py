@@ -23,6 +23,17 @@ class ScannerServices:
     """The service part of ScannerNode, which has the pycyphal node (``_node``), the
     nodes seen (``all_nodes``) and the tables of clients and service types these use."""
 
+    # Set by ScannerNode, declared here for the type checker.
+    _node: Any
+    all_nodes: dict[int, Any]
+    services: set[str]
+    service_clients: dict
+    service_metadata: dict
+    node_service_types: dict[int, dict[int, str]]
+    SERVICE_CALL_TIMEOUT: float
+    STANDARD_SERVICES: dict[int, str]
+    FIXED_SERVICES: dict[int, str]
+
     async def add_servers(self, node_id: int, dsdl_srv_messages: dict[int, str]) -> dict[int, dict[str, Any]]:
         """
         Creates clients for the services specified in dsdl_srv_messages for the given node_id.
@@ -31,7 +42,7 @@ class ScannerServices:
             node_id (int): The ID of the node to create service clients for.
             dsdl_srv_messages (Dict[int, str]): Dictionary mapping service IDs to service type names.
         """
-        service_info_list = {}
+        service_info_list: dict[int, dict[str, Any]] = {}
 
         for service_id, service_type in dsdl_srv_messages.items():
             last_dot_index = service_type.rfind('.')
@@ -325,7 +336,7 @@ class ScannerServices:
                     ns = type_str[:dot] if dot != -1 else None
                     sn = type_str[dot + 1:] if dot != -1 else type_str
                     try:
-                        mod = importlib.import_module(ns)
+                        mod = importlib.import_module(ns or "")  # no namespace: refused, as below
                         svc_cls = getattr(mod, sn)
                         fields = []
                         for attr in svc_cls.Request._MODEL_.attributes:

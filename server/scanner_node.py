@@ -156,7 +156,7 @@ class ScannerNode(ScannerRegisters, ScannerServices):
         self.all_nodes: dict[int, NodeInfo] = {node_id: NodeInfo(node_id=node_id) for node_id in range(self.NUM_NODES)}
         self.identity_map = NodeIdentityMap()
         self.subject_attributes: dict[int, list[str]] = {}                # Maps subject_id to list of attribute names
-        self.publishers_subscribers: dict[int, pycyphal.application.Subscriber] = {}
+        self.publishers_subscribers: dict[int, Any] = {}  # pycyphal Subscribers
         self.message_queue: asyncio.Queue = asyncio.Queue(maxsize=self.MESSAGE_QUEUE_SIZE)
         self.dropped_events = 0  # events discarded because message_queue was full
         self.active_publishers: dict[int, set] = {}                        # Maps subject_id to set of publisher node_ids
@@ -171,7 +171,7 @@ class ScannerNode(ScannerRegisters, ScannerServices):
         self._prev_uptime: dict[int, int] = {}
         self._prev_ports: dict[int, dict] = {}  # node_id -> {publishers: [...], ...}
         self._info_in_flight: set[int] = set()  # node_ids with a GetInfo running
-        self._rate_timestamps: dict[int, dict[int, collections.deque]] = {}  # subject_id -> node_id -> times
+        self._rate_timestamps: dict[int, dict[Optional[int], collections.deque]] = {}  # subject_id -> node_id (None: anonymous) -> times
         self.subject_types: dict[int, str] = {}           # subject_id -> the type it is decoded as
         # Those of subject_types the user set, for subjects no register names.
         self.user_subject_types: dict[int, str] = {}
@@ -268,7 +268,7 @@ class ScannerNode(ScannerRegisters, ScannerServices):
     def offline_ports(self, node_id: int) -> tuple[dict[int, str], dict[int, str]]:
         """(publishers, servers) of a node as a raw log's sidecar recorded them."""
         def ports(kind: str) -> dict[int, str]:
-            return {int(k): v for k, v in self.offline.get(kind, {}).get(str(node_id), {}).items()}
+            return {int(k): v for k, v in (self.offline or {}).get(kind, {}).get(str(node_id), {}).items()}
         return ports("publishers"), ports("servers")
 
     async def add_subscriptions(self, node_id: int, dsdl_pub_messages: dict[int, str]) -> None:
@@ -311,7 +311,7 @@ class ScannerNode(ScannerRegisters, ScannerServices):
             self._unsubscribe(subject_id)
             self.subject_types.pop(subject_id, None)
             del self.user_subject_types[subject_id]
-        if data_type_class is not None:
+        if data_type_class is not None and message_type is not None:
             self._subscribe(subject_id, data_type_class, message_type)
             self.user_subject_types[subject_id] = message_type
 
@@ -562,7 +562,7 @@ class ScannerNode(ScannerRegisters, ScannerServices):
         period = 1.0 / rate if rate > 0 else 0.0
         return bool(times) and now - times[-1] <= max(self.PUBLISHING_MIN_SECONDS, self.PUBLISHING_PERIODS * period)
 
-    def _track_rate(self, subject_id: int, node_id: int, timestamp: float) -> tuple[float, float]:
+    def _track_rate(self, subject_id: int, node_id: Optional[int], timestamp: float) -> tuple[float, float]:
         """Record one message and return (this publisher's rate, the whole subject's rate).
 
         Rates are kept per publisher: several nodes publish the same subject
@@ -592,7 +592,7 @@ class ScannerNode(ScannerRegisters, ScannerServices):
         """
         stamp = getattr(transfer, "timestamp", None)
         try:
-            return float(stamp.system), float(stamp.monotonic)
+            return float(stamp.system), float(stamp.monotonic)  # type: ignore[union-attr]  # None: below
         except (AttributeError, TypeError, ValueError):
             return time.time(), time.monotonic()
 
@@ -608,7 +608,7 @@ class ScannerNode(ScannerRegisters, ScannerServices):
             return None
 
     async def _queue_event(self, subject_id: int, message_type: str, attributes: list,
-                           publisher_node_id: int, payload_bytes: Optional[int] = None,
+                           publisher_node_id: Optional[int], payload_bytes: Optional[int] = None,
                            transfer=None) -> None:
         """Build a standardized event dict and put it on the message queue."""
         timestamp, monotonic = self._transfer_times(transfer)
@@ -749,8 +749,8 @@ class ScannerNode(ScannerRegisters, ScannerServices):
     MODE_NAMES = {0: "OPERATIONAL", 1: "INITIALIZATION", 2: "MAINTENANCE", 3: "SOFTWARE_UPDATE"}
     MODE_SOFTWARE_UPDATE = 3
 
-    def _get_node_unique_id_hex(self, node_id: int) -> Optional[str]:
-        node = self.all_nodes.get(node_id)
+    def _get_node_unique_id_hex(self, node_id: Optional[int]) -> Optional[str]:
+        node = None if node_id is None else self.all_nodes.get(node_id)
         if node and node.has_responded_to_getInfo and node.unique_id.size > 0:
             uid = bytes(node.unique_id).hex()  # run for every message: no loop in Python over its bytes
             if uid.strip('0'):
@@ -763,7 +763,7 @@ class ScannerNode(ScannerRegisters, ScannerServices):
             _fire_and_log(self.on_node_event(node_id, event_type, detail, unique_id=uid), f"node_event({event_type})")
 
     async def port_callback(self, msg: uavcan.node.port.List_1_0, transfer: pycyphal.transport.TransferFrom):
-        node_id: int = transfer.source_node_id
+        node_id = transfer.source_node_id
         if node_id is None:
             return  # an anonymous node may not send one
 
@@ -1016,7 +1016,7 @@ class ScannerNode(ScannerRegisters, ScannerServices):
         elif prev is not None and uptime < prev and prev > 5:
             self._uptime_before_drop[node_id] = prev
 
-    def _report_node_id_conflict(self, node_id: int, uptime_a: int, uptime_b: int) -> None:
+    def _report_node_id_conflict(self, node_id: int, uptime_a: Optional[int], uptime_b: int) -> None:
         now = time.monotonic()
         last = self._node_id_conflict_reported.get(node_id)
         if last is not None and now - last < self.NODE_ID_CONFLICT_REPORT_S:
@@ -1073,7 +1073,7 @@ class ScannerNode(ScannerRegisters, ScannerServices):
             new_unique_id = ''.join(f'{byte:02x}' for byte in node.unique_id) if node.has_responded_to_getInfo else None
 
             is_replacement = old_unique_id and new_unique_id and old_unique_id != new_unique_id
-            if is_replacement:
+            if is_replacement and new_unique_id:
                 known_nid = self.identity_map.get_nid(new_unique_id)
                 if known_nid is None or known_nid == node_id:
                     logging.info(f"Node {node_id} identity changed: {old_unique_id} -> {new_unique_id}. Resetting node state.")

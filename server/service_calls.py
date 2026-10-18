@@ -59,7 +59,7 @@ class ServiceCallRecorder:
         self._log = log
         self._node_uid = node_uid
         self._close_tap = None
-        self._drainer = None
+        self._drainer: Optional[asyncio.Task] = None
         self._waiting: deque = deque()
         self._held: list = []  # (frame, arrival) of frames not yet HOLD_S old, in time order
         self._tracer = CANTracer()
@@ -145,7 +145,8 @@ class ServiceCallRecorder:
         if service.role == ServiceDataSpecifier.Role.REQUEST:
             key = (spec.source_node_id, spec.destination_node_id, service.service_id, meta.transfer_id)
             if key in self._pending:  # the transfer-ID came round again: no response to the earlier one
-                self._finish(key, *self._pending.pop(key), None, None, calls)
+                asked, request = self._pending.pop(key)
+                self._finish(key, asked, request, None, None, calls)
             self._pending[key] = (t, payload)
         else:
             key = (spec.destination_node_id, spec.source_node_id, service.service_id, meta.transfer_id)

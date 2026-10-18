@@ -101,10 +101,11 @@ async def run_bootloader(make_transport: MakeTransport, node_id: int, minor: int
         size = 0
         while True:
             result = await client.call(uavcan.file.Read_1_1.Request(offset=size, path=uavcan.file.Path_2_0(path)))
-            if result is None or result[0].error.value != 0:
+            response: Optional[uavcan.file.Read_1_1.Response] = result[0] if result is not None else None  # type: ignore[assignment]
+            if response is None or response.error.value != 0:
                 logger.warning("demo.sensor: bootloader read failed at byte %d: %s", size, result)
                 return False
-            chunk = len(result[0].data.value)
+            chunk = len(response.data.value)
             size += chunk
             if chunk < 256:
                 logger.info("demo.sensor: bootloader read %d bytes; starting the new firmware", size)
@@ -142,7 +143,7 @@ async def _sense(node: pycyphal.application.Node, node_id: int) -> Optional[tupl
     restart = asyncio.Event()
     update = None
 
-    async def on_command(request: Command.Request, meta) -> Command.Response:
+    async def on_command(request: uavcan.node.ExecuteCommand_1_3.Request, meta) -> uavcan.node.ExecuteCommand_1_3.Response:
         nonlocal update
         if request.command == Command.Request.COMMAND_RESTART:
             asyncio.get_running_loop().call_later(0.2, restart.set)  # answer first, then restart

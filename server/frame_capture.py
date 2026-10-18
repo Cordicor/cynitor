@@ -16,6 +16,7 @@ import asyncio
 import logging
 import time
 from collections import deque
+from typing import Optional
 
 from pycyphal.transport import MessageDataSpecifier, ServiceDataSpecifier, Timestamp
 from pycyphal.transport.can import CANCapture
@@ -155,8 +156,8 @@ class FrameCaptureManager:
         self._own_node_ids = own_node_ids  # a function giving Cynitor's node-IDs
         self._decode_errors = decode_errors
         self._close_tap = None
-        self._drainer = None
-        self._own = frozenset()
+        self._drainer: Optional[asyncio.Task] = None
+        self._own: frozenset[int] = frozenset()
         self._waiting: deque = deque()
         self._ring: deque = deque(maxlen=self.RING_SIZE)
         self._subscribers: set[asyncio.Queue] = set()

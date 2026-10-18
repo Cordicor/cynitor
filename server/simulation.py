@@ -59,7 +59,8 @@ class SimulatedBus:
         """Start the devices; they run until stop()."""
         devices = self._devices
         if devices is None:
-            from demo_devices import run as devices
+            from demo_devices import run
+            devices = run
         self._task = asyncio.create_task(self._run(devices), name=f"{self.channel}-devices")
 
     async def _run(self, devices: Callable[[Callable], Awaitable[None]]) -> None:

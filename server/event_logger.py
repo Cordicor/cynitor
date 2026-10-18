@@ -83,7 +83,7 @@ class EventLogger:
 
     def __init__(
         self,
-        db_path: str = "telemetry.db",
+        db_path: "str | Path" = "telemetry.db",
         retention_seconds: float = 86400.0,
         max_events: int = 5_000_000,
     ) -> None:
@@ -773,7 +773,7 @@ class EventLogger:
             conn.row_factory = sqlite3.Row
             if unique_id:
                 where_clause = "unique_id = ?"
-                param = unique_id
+                param: Any = unique_id
             else:
                 where_clause = "publisher_node_id = ?"
                 param = node_id
@@ -1238,7 +1238,7 @@ class EventLogger:
                 (name, start_unix, end_unix, json.dumps(filt) if filt else None, notes, time.time(),
                  max_length_seconds, max_events, 1 if stop_on_limit else 0, events_source),
             )
-            return int(cursor.lastrowid)
+            return int(cursor.lastrowid or 0)  # always set after an INSERT
 
     async def create_recording(
         self,

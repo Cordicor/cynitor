@@ -35,7 +35,7 @@ import secrets
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Optional, TypeGuard
 
 logger = logging.getLogger(__name__)
 
@@ -123,7 +123,7 @@ def _native(value):
     return int(value) if value.denominator == 1 else float(value)
 
 
-def _is_number(value) -> bool:
+def _is_number(value) -> TypeGuard[float]:
     return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
 
 
@@ -212,6 +212,7 @@ def evaluate(schema: dict, value: Any, t: float, count: int = 0, rng: Optional[r
     rng = rng or random.Random()
     kind = schema["kind"]
     if kind in ("int", "float"):
+        number: float
         if value is None:
             number = 0
         elif _is_wave(value):
@@ -512,7 +513,7 @@ class TestNodeManager:
                 self._check_rate(test_id, node)
             self._save({**self._nodes, test_id: node})
             self._nodes[test_id] = node
-            if live:
+            if live and running is not None:
                 running.set_status({**node, "node_id": running.definition["node_id"]})
             elif running is not None:  # confirmed when it started, so no new confirmation
                 await self._close(test_id)
@@ -600,6 +601,7 @@ class TestNodeManager:
 
     def _run(self, definition: dict, node_id: int) -> None:
         """Start the kept ``definition`` on ``node_id``: its own, or the one Cynitor gives it."""
+        assert self._bus is not None, "test nodes run only while CAN is connected"
         try:
             self._running[definition["id"]] = _Running({**definition, "node_id": node_id}, self._bus.make_transport)
         except ValueError:
@@ -644,6 +646,7 @@ class TestNodeManager:
         now = time.monotonic()
         ours = {r.definition["node_id"] for r in self._running.values()}
         ours |= {nid for nid, at in self._stopped_at.items() if now - at < _STOPPED_GRACE_S}
+        assert self._bus is not None, "test nodes run only while CAN is connected"
         if node_id in self._bus.node_ids_in_use() and node_id not in ours:
             return (f"Node-ID {node_id} is in use on the bus; give the test node another, "
                     "or none, for Cynitor to give it a free one")

@@ -9,7 +9,7 @@ from typing import Optional
 
 from aiohttp import web
 
-from api_helpers import _parse_int, listen_only_refusal, logger, MAX_NODE_ID, MAX_SERVICE_ID, MAX_SUBJECT_ID
+from api_helpers import ApiHandlers, _parse_int, listen_only_refusal, logger, MAX_NODE_ID, MAX_SERVICE_ID, MAX_SUBJECT_ID
 
 
 def _synthesize_nodes_from_recording(db_path, recording_id: int) -> dict:
@@ -55,7 +55,7 @@ def _synthesize_nodes_from_recording(db_path, recording_id: int) -> dict:
     return {"node_count": len(nodes), "nodes": {k: v for k, v in nodes.items()}}
 
 
-class NodesApi:
+class NodesApi(ApiHandlers):
     """The nodes part of WebSocketServer, which has the session and the rest these use."""
 
     async def _set_subject_type(self, request: web.Request) -> web.Response:

@@ -751,7 +751,7 @@ class DsdlManager:
                 continue
             relative = path.relative_to(folder)
             type_name, version, _ = DsdlManager._parse_filename(relative.name)
-            if type_name:
+            if type_name and version:
                 where = ".".join([*relative.parts[:-1], type_name, version])
                 break
         line = f", line {exc.line}" if exc.line else ""

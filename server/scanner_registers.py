@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 import numpy as np
 
@@ -25,6 +25,18 @@ class RegisterNotApplied(Exception):
 class ScannerRegisters:
     """The register part of ScannerNode, which has the pycyphal node (``_node``),
     the limits (REGISTER_TIMEOUT, MAX_REGISTERS, ...) and the type-name helpers these use."""
+
+    # Set by ScannerNode, declared here for the type checker.
+    _node: Any
+    REGISTER_TIMEOUT: float
+    MAX_REGISTERS: int
+    MAX_UNANSWERED_INDEXES: int
+    MAX_SUBJECT_ID: int
+    MAX_SERVICE_ID: int
+    UNSET_PORT_ID: int
+    STANDARD_SERVICES: dict[int, str]
+    _dsdl_type_to_module_name: Callable[[str], str]
+    _canonical_type_name: Callable[[str], str]
 
     async def _read_register(self, register_access_client, reg_name: str,
                              node_id: int) -> tuple[str | None, Any | None] | None:
@@ -65,7 +77,7 @@ class ScannerRegisters:
             return None
 
         try:
-            port_id = int(value[0])  # Natural16 is an array with one element
+            port_id = int(value[0])  # type: ignore[index]  # Natural16 is an array with one element
         except (TypeError, ValueError, IndexError) as e:
             logging.warning(f"Invalid {label}-ID in register '{reg_name}': {value}, error: {e}")
             return None
@@ -397,6 +409,8 @@ class ScannerRegisters:
 
             access_response = access_response_tuple[0]
             current_field_name, _current_value = self._find_non_none_field(access_response.value)
+            if current_field_name is None or current_field_name == 'empty':  # Cyphal's answer for a name it does not have
+                raise ValueError(f"Node {node_id} has no register '{register_name}'")
             if not access_response.mutable:
                 logging.info(f"Register '{register_name}' on node_id={node_id} is read-only: not written")
                 raise ValueError(f"Register '{register_name}' is read-only")
@@ -498,11 +512,11 @@ class ScannerRegisters:
                 if n < lo or n > hi:
                     raise ValueError(f"Value {n} out of range for {reg_type} ({lo}–{hi})")
         elif reg_type in self._REAL_RANGES:
-            lo, hi = self._REAL_RANGES[reg_type]
+            low, high = self._REAL_RANGES[reg_type]
             for v in self._parse_array_value(value):
-                n = float(v)
-                if n < lo or n > hi:
-                    raise ValueError(f"Value {n} out of range for {reg_type}")
+                x = float(v)
+                if x < low or x > high:
+                    raise ValueError(f"Value {x} out of range for {reg_type}")
 
     def _register_value(self, reg_type: str, value: str):
         """``value``, as typed, as the uavcan.register.Value of ``reg_type`` to send; ValueError if it is none."""

@@ -109,6 +109,8 @@ class RawLog:
                 self._check_limits_locked()
 
     def _check_limits_locked(self) -> None:
+        if self._writer is None:
+            return
         try:
             size = self._writer.file.tell()  # the file on disk lags by the write buffer
         except (OSError, ValueError, AttributeError):

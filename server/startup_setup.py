@@ -116,7 +116,7 @@ def resolve_project_root() -> Path:
     sys._MEIPASS. Everywhere else the root is the parent of server/.
     """
     if getattr(sys, "frozen", False):
-        return Path(sys._MEIPASS)
+        return Path(getattr(sys, "_MEIPASS"))
     return Path(__file__).resolve().parent.parent
 
 

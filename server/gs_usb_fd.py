@@ -23,7 +23,7 @@ import logging
 import struct
 import time
 from dataclasses import dataclass
-from typing import Optional
+from typing import Any, Optional
 
 import can
 from can.util import dlc2len, len2dlc
@@ -216,7 +216,7 @@ class GsUsbFdBus(can.BusABC):
     a timeout, as when the adapter is unplugged, fails ``recv``.
     """
 
-    def __init__(self, index: int, bitrate: int, data_bitrate: int, **kwargs: object) -> None:
+    def __init__(self, index: int, bitrate: int, data_bitrate: int, **kwargs: Any) -> None:
         if usb is None:
             raise can.CanInterfaceNotImplementedError("gs_usb adapters need pyusb, which is not installed")
         self.channel_info = f"gs_usb:{index}"

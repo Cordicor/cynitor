@@ -62,7 +62,7 @@ def _no_filters_on_virtual_channels() -> None:
         if not media.interface_name.startswith("virtual:"):
             configure(media, configuration)
 
-    PythonCANMedia.configure_acceptance_filters = configure_unless_virtual
+    PythonCANMedia.configure_acceptance_filters = configure_unless_virtual  # type: ignore[method-assign,assignment]
 
 
 _no_filters_on_virtual_channels()
@@ -105,7 +105,7 @@ def open_adapter(spec: str, bitrate: int, data_bitrate: Optional[int] = None) ->
         # python-can compares the channel with the number of devices found.
         kwargs["index"] = int(channel)
     elif channel.isdigit():
-        channel = int(channel)
+        channel = int(channel)  # type: ignore[assignment]  # python-can takes a number for these
     if data_bitrate is not None:
         if interface == "pcan":
             kwargs = {"timing": can.BitTimingFd.from_sample_point(

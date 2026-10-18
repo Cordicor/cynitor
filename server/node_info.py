@@ -1,7 +1,7 @@
 # This class provides all information about Cyphal node.
 
 from dataclasses import dataclass, field
-from typing import Deque, Optional
+from typing import Any, Deque, Optional
 
 import datetime
 import collections
@@ -56,20 +56,20 @@ class NodeInfo:
         self.unique_id = numpy.array([], dtype=numpy.uint8)
         self.uptime = None
         self.has_appeared = False
-        self.last_seen = collections.deque(maxlen=2)
+        self.last_seen: Deque[datetime.datetime] = collections.deque(maxlen=2)
         self.has_responded_to_getInfo = False
         self.has_disappeared = False
         self.has_published_port_list = False
         self.has_registered_ports = False
         self.has_subscribers = False
-        self.subscriber_SubjectIDs = []
+        self.subscriber_SubjectIDs: list[Any] = []
         self.has_publishers = False
-        self.publisher_SubjectIDs = []
+        self.publisher_SubjectIDs: list[Any] = []
         self.has_clients = False
-        self.client_ServiceIDs = []
+        self.client_ServiceIDs: list[Any] = []
         self.has_servers = False
-        self.server_ServiceIDs = []
-        self.publishers_info = {}
+        self.server_ServiceIDs: list[Any] = []
+        self.publishers_info: dict[Any, Any] = {}
         self.last_info_time: Optional[datetime.datetime] = None      # last GetInfo answered
         self.last_info_attempt: Optional[datetime.datetime] = None   # last GetInfo sent
         self._last_seen_mono: float = 0.0

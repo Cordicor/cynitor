@@ -14,7 +14,7 @@ import subprocess
 import sys
 import threading
 from pathlib import Path
-from typing import Callable, Optional
+from typing import TYPE_CHECKING, Callable, Optional
 
 from can_config import (
     FD_MTU,
@@ -47,6 +47,15 @@ from update_check import DISABLE_ENV as DISABLE_UPDATE_CHECK_ENV, UpdateCheck
 from type_guess import load_candidates, rank_types
 from startup_setup import ensure_libusb_on_path, prepare_runtime, resolve_project_root
 from version import __version__
+
+if TYPE_CHECKING:  # for the type checker only: at run time these load on connect, once the compiled DSDL is on the path
+    from allocator import NodeIdAllocator
+    from event_logger import EventLogger
+    from frame_capture import FrameCaptureManager
+    from replay import ReplayManager
+    from scanner_node import ScannerNode
+    from service_calls import ServiceCallRecorder
+    from telemetry_manager import TelemetryManager
 
 IS_LINUX = sys.platform.startswith("linux")
 IS_WINDOWS = sys.platform == "win32"
@@ -321,13 +330,13 @@ class CANSession:
         # Serves firmware files to nodes being updated; None when Cynitor has
         # no node-ID or plays a raw log, since nothing can be sent then.
         self.firmware: Optional[FirmwareServer] = None
-        self.scanner = None
-        self.telemetry = None
-        self.allocator = None  # Cynitor's node-ID allocator, while it is on (see allocator)
-        self.event_logger = None
-        self.frame_capture = None
-        self.service_calls = None  # every service call on the bus, for the recordings
-        self.bus_load: Optional[BusLoadMonitor] = None
+        self.scanner: Optional["ScannerNode"] = None
+        self.telemetry: Optional["TelemetryManager"] = None
+        self.allocator: Optional["NodeIdAllocator"] = None  # Cynitor's node-ID allocator, while it is on (see allocator)
+        self.event_logger: Optional["EventLogger"] = None
+        self.frame_capture: Optional["FrameCaptureManager"] = None
+        self.service_calls: Optional["ServiceCallRecorder"] = None  # every service call on the bus, for the recordings
+        self.bus_load: "Optional[BusLoadMonitor | HubBusLoad]" = None
         # Shares a non-SocketCAN adapter among the components; see can_hub.
         self.hub: Optional[CANHub] = None
         self.registered_nodes: set[int] = set()
@@ -344,11 +353,18 @@ class CANSession:
         # Mutually exclusive with scanner — the WS handler chooses telemetry
         # vs replay based on which is non-None, and connect()/start_replay()
         # refuse to run while the other side is active.
-        self.replay = None
+        self.replay: Optional["ReplayManager"] = None
 
     @property
     def is_running(self) -> bool:
         return self.scanner is not None
+
+    @property
+    def _live_scanner(self) -> "ScannerNode":
+        """The scanner; RuntimeError if CAN is not connected, which the API answers as 409."""
+        if self.scanner is None:
+            raise RuntimeError("CAN is not connected")
+        return self.scanner
 
     async def connect(self, can_iface: str, force_compile: bool = False,
                       bitrate: Optional[int] = None, data_bitrate: Optional[int] = None,
@@ -408,6 +424,7 @@ class CANSession:
             await self._pick_node_id(spec, fd=socketcan_supports_fd(device), listen_only=listen_only)
             await asyncio.to_thread(prepare_runtime, can_iface, force_compile, bitrate)
         else:
+            assert bitrate is not None  # resolve_bitrate gives one for all but SocketCAN
             if is_simulated(spec) and open_bus is None:
                 # The hub opens the simulated bus's wire as it would an adapter.
                 simulation = SimulatedBus(bitrate, data_bitrate)
@@ -454,18 +471,18 @@ class CANSession:
                     decode_errors=hub is None or hub.spec.partition(":")[0] in ("gs_usb", "rawlog"))
 
                 logger.info("Initializing EventLogger...")
-                await self.ensure_event_logger()
+                event_logger = await self.ensure_event_logger()
 
-                saved_identities = await self.event_logger.load_identity_map()
+                saved_identities = await event_logger.load_identity_map()
                 if saved_identities:
                     self.scanner.identity_map.load_snapshot(saved_identities)
 
-                saved_node_data = await self.event_logger.load_all_node_data()
+                saved_node_data = await event_logger.load_all_node_data()
                 if saved_node_data:
                     self.scanner.identity_map.load_node_data(saved_node_data)
 
-                self.scanner.on_node_event = self.event_logger.log_node_event
-                self.scanner.on_node_data_save = self.event_logger.save_node_data
+                self.scanner.on_node_event = event_logger.log_node_event
+                self.scanner.on_node_data_save = event_logger.save_node_data
 
                 logger_queue = self.telemetry.subscribe(max_queue=5000, label="logger")
                 self._tasks = [
@@ -476,11 +493,13 @@ class CANSession:
                 # canbusload reads a SocketCAN device; behind the hub, the
                 # hub counts the traffic itself.
                 logger.info("Initializing bus load monitor...")
+                bus_load: BusLoadMonitor | HubBusLoad
                 if hub is None:
-                    self.bus_load = BusLoadMonitor(socketcan_device(can_iface))
+                    bus_load = BusLoadMonitor(socketcan_device(can_iface))
                 else:
-                    self.bus_load = HubBusLoad(hub)
-                await self.bus_load.start()
+                    bus_load = HubBusLoad(hub)
+                self.bus_load = bus_load
+                await bus_load.start()
 
                 if hub is None:
                     self.v11 = V11Traffic()
@@ -552,11 +571,11 @@ class CANSession:
 
     def _start_allocator(self) -> None:
         """Have Cynitor give node-IDs to the nodes that ask for one (see allocator)."""
-        if self.scanner.node.id is None:
+        if self._live_scanner.node.id is None:
             logger.warning("The allocator is not started: Cynitor has no node-ID of its own to answer from")
             return
         from allocator import NodeIdAllocator
-        self.allocator = NodeIdAllocator(self.scanner.node, self._node_ids_seen)
+        self.allocator = NodeIdAllocator(self._live_scanner.node, self._node_ids_seen)
 
     def allocator_status(self) -> Optional[dict]:
         """Cynitor's allocator as /api/status reports it (see NodeIdAllocator.status); None while it is off."""
@@ -621,7 +640,7 @@ class CANSession:
     def _wanted_subjects(self) -> set[int]:
         """The subjects some dashboard watches or some recording takes."""
         wanted: set[int] = set().union(*self._watched.values())
-        if self.event_logger is not None:
+        if self.event_logger is not None and self.scanner is not None:
             for subject_id, message_type in self.scanner.subject_types.items():
                 if subject_id not in wanted and self.event_logger.records_subject(
                         subject_id, self.scanner.active_publishers.get(subject_id, ()),
@@ -639,7 +658,8 @@ class CANSession:
             await asyncio.sleep(1.0)
             try:
                 self._apply_decoding()
-                await self.scanner.queue_rates(self._rates.sample())
+                if self.scanner is not None and self._rates is not None:
+                    await self.scanner.queue_rates(self._rates.sample())
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # a second's rates missed must not end the loop
@@ -662,11 +682,10 @@ class CANSession:
         from pycyphal.transport.can import CANTransport
         if self.hub is not None:
             from pycyphal.transport.can.media.pythoncan import PythonCANMedia
-            media = PythonCANMedia(self.hub.local_spec, media_bitrate(self.hub.local_spec), media_mtu())
-        else:
-            from pycyphal.transport.can.media.socketcan import SocketCANMedia
-            media = SocketCANMedia(socketcan_device(self.can_interface), media_mtu())
-        return CANTransport(media, node_id)
+            return CANTransport(PythonCANMedia(self.hub.local_spec, media_bitrate(self.hub.local_spec), media_mtu()),
+                                node_id)
+        from pycyphal.transport.can.media.socketcan import SocketCANMedia
+        return CANTransport(SocketCANMedia(socketcan_device(self.can_interface), media_mtu()), node_id)
 
     @staticmethod
     def _open_v11_tap(device: str, traffic: V11Traffic) -> Optional[SocketcanTap]:
@@ -770,7 +789,7 @@ class CANSession:
         """
         if not self.is_running:
             raise RuntimeError("CAN is not connected")
-        self.scanner.set_subject_type(subject_id, type_name)
+        self._live_scanner.set_subject_type(subject_id, type_name)
         saved = self.saved_subject_types()
         if type_name is None:
             saved.pop(subject_id, None)
@@ -785,7 +804,7 @@ class CANSession:
     def _apply_saved_subject_types(self) -> None:
         for subject_id, type_name in self.saved_subject_types().items():
             try:
-                self.scanner.set_subject_type(subject_id, type_name)
+                self._live_scanner.set_subject_type(subject_id, type_name)
             except (RuntimeError, ValueError) as exc:
                 logger.warning("Subject %d: not decoding it as %s, which was set earlier: %s",
                                subject_id, type_name, exc)
@@ -798,7 +817,7 @@ class CANSession:
         """
         if not self.is_running:
             raise RuntimeError("CAN is not connected")
-        payloads = await self.scanner.sample_subject(subject_id, self.GUESS_LISTEN_S)
+        payloads = await self._live_scanner.sample_subject(subject_id, self.GUESS_LISTEN_S)
         if not payloads:
             return {"samples": 0, "matches": 0, "candidates": []}
         ranked = await asyncio.to_thread(lambda: rank_types(payloads, load_candidates(types), self.can_fd))
@@ -825,7 +844,7 @@ class CANSession:
         # Followed from before the command: the node may start reading at once.
         update = self.firmware.begin(node_id, name, path.stat().st_size)
         try:
-            status = await send_update_command(self.scanner.node, node_id, name)
+            status = await send_update_command(self._live_scanner.node, node_id, name)
             if status is None:
                 raise TimeoutError(f"Node {node_id} did not answer the update command")
             if status != 0:
@@ -887,11 +906,13 @@ class CANSession:
 
     def _bus_knowledge(self) -> dict:
         """What this session knows about the bus that a raw log cannot hold, for playing it."""
-        scanner = self.scanner
+        scanner = self._live_scanner
         publishers: dict[str, dict[str, str]] = {}
         for subject_id, node_ids in scanner.active_publishers.items():
             subject_type = scanner.subject_types.get(subject_id)
-            for node_id in node_ids if subject_type else ():
+            if not subject_type:
+                continue
+            for node_id in node_ids:
                 publishers.setdefault(str(node_id), {})[str(subject_id)] = subject_type
         names = {}
         for node_id, node in scanner.all_nodes.items():
@@ -935,7 +956,7 @@ class CANSession:
             # rather than once each node has registered, which may be too late.
             for node_id, subjects in info.get("publishers", {}).items():
                 try:
-                    await self.scanner.add_subscriptions(int(node_id), {int(s): t for s, t in subjects.items()})
+                    await self._live_scanner.add_subscriptions(int(node_id), {int(s): t for s, t in subjects.items()})
                 except Exception as exc:  # e.g. a custom type that is no longer compiled
                     logger.warning("Raw log %s: cannot decode node %s's subjects: %s", name, node_id, exc)
             player.play()
@@ -960,7 +981,7 @@ class CANSession:
                 self.scanner.service_metadata.pop(key, None)
         logger.info("Cleared registration state — register loop will re-attempt all nodes")
 
-    async def ensure_event_logger(self):
+    async def ensure_event_logger(self) -> "EventLogger":
         """The event logger, started on first use.
 
         Recordings live in the data folder, so listing, exporting or replaying
@@ -968,7 +989,8 @@ class CANSession:
         it (flushing what it holds); the next use starts it again.
         """
         async with self._event_logger_lock:  # two first uses at once start one
-            if self.event_logger is None:
+            event_logger = self.event_logger
+            if event_logger is None:
                 from event_logger import EventLogger
                 event_logger = EventLogger(
                     db_path=self.data_dir / EVENTS_DB,
@@ -977,7 +999,7 @@ class CANSession:
                 )
                 await event_logger.start()
                 self.event_logger = event_logger
-        return self.event_logger
+        return event_logger
 
     async def start_replay(self, recording_id: int, speed: float = 1.0,
                              start_offset_s: float = 0.0) -> dict:
@@ -988,9 +1010,9 @@ class CANSession:
             raise RuntimeError("CAN is connected — disconnect before starting replay")
         if self.replay is not None:
             raise RuntimeError("Replay already in progress")
-        await self.ensure_event_logger()
+        event_logger = await self.ensure_event_logger()
         from replay import ReplayManager
-        self.replay = ReplayManager(self.event_logger.db_path,
+        self.replay = ReplayManager(event_logger.db_path,
                                     recording_id=recording_id, speed=speed)
 
         def _on_finish() -> None:
@@ -1310,7 +1332,7 @@ async def _sample_bus_errors(session: 'CANSession') -> None:
         logger.debug("Bus error sample failed: %s", exc)
 
 
-async def _register_loop(scanner, registered_nodes: set[int], session: 'CANSession' = None) -> None:
+async def _register_loop(scanner, registered_nodes: set[int], session: Optional['CANSession'] = None) -> None:
     health_check_counter = 0
     registration_retry_at: dict[int, float] = {}
     try:
@@ -1416,7 +1438,7 @@ async def attach_or_fall_back(session, can_iface: str, force_compile: bool = Fal
         return False
 
 
-def show_token_on_terminal(token: str, stream=None) -> bool:
+def show_token_on_terminal(token: Optional[str], stream=None) -> bool:
     """Print the auth token where a person can copy it, and nowhere else.
 
     Deliberately not logged. The server's own log buffer is served through
@@ -1653,7 +1675,7 @@ def _exit_when_windows_parent_dies() -> None:
 
         SYNCHRONIZE = 0x00100000
         INFINITE = 0xFFFFFFFF
-        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)  # type: ignore[attr-defined]  # Windows only
         kernel32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
         kernel32.OpenProcess.restype = wintypes.HANDLE
         kernel32.WaitForSingleObject.argtypes = (wintypes.HANDLE, wintypes.DWORD)
@@ -1663,7 +1685,7 @@ def _exit_when_windows_parent_dies() -> None:
         logger.debug("Parent-death cleanup unavailable: %s", exc)
         return
     if not parent:
-        logger.debug("Parent-death cleanup unavailable: OpenProcess failed (%d)", ctypes.get_last_error())
+        logger.debug("Parent-death cleanup unavailable: OpenProcess failed (%d)", ctypes.get_last_error())  # type: ignore[attr-defined]
         return
 
     def wait_for_parent() -> None:

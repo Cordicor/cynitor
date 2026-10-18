@@ -9,7 +9,7 @@ from typing import Any, Optional
 
 from aiohttp import web
 
-from api_helpers import _parse_int, logger
+from api_helpers import ApiHandlers, _parse_int, logger
 
 
 def _csv_escape(value: Any) -> str:
@@ -22,7 +22,7 @@ def _csv_escape(value: Any) -> str:
     return s
 
 
-class RecordingsApi:
+class RecordingsApi(ApiHandlers):
     """The recordings part of WebSocketServer, which has the session and the rest these use."""
 
     _MAX_REC_ID = 2**31 - 1
