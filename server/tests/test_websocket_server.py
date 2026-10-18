@@ -110,7 +110,7 @@ class TestStatus:
     @patch("websocket_server.WebSocketServer._get_status")
     async def test_status_idle(self, mock_handler, client, session):
         """Test status endpoint returns correct idle state."""
-        # We patch the handler directly to avoid importing main.discover_can_interfaces
+        # We patch the handler directly to avoid importing can_link.discover_can_interfaces
         mock_handler.return_value = web.json_response({
             "status": "idle",
             "can_interface": None,
@@ -139,7 +139,7 @@ class TestCANConnect:
 
     @pytest.mark.asyncio
     async def test_listen_only_reaches_the_session_and_must_be_true_or_false(self, client, session):
-        with patch("main.discover_can_interfaces", return_value=["vcan0"]):
+        with patch("api_can.discover_can_interfaces", return_value=["vcan0"]):
             bad = await client.post("/api/can/connect", json={"interface": "vcan0", "listen_only": "yes"})
             ok = await client.post("/api/can/connect", json={"interface": "vcan0", "listen_only": True})
         assert bad.status == 400 and ok.status == 200
@@ -166,7 +166,7 @@ class TestCANConnect:
 
     @pytest.mark.asyncio
     async def test_no_commands_reaches_the_session_and_must_be_true_or_false(self, client, session):
-        with patch("main.discover_can_interfaces", return_value=["vcan0"]):
+        with patch("api_can.discover_can_interfaces", return_value=["vcan0"]):
             bad = await client.post("/api/can/connect", json={"interface": "vcan0", "no_commands": 1})
             ok = await client.post("/api/can/connect", json={"interface": "vcan0", "no_commands": True})
         assert bad.status == 400 and ok.status == 200
@@ -199,7 +199,7 @@ class TestCANConnect:
         # It was a 500 with a traceback in the log (F-018 b).
         from main import SessionBusy
         session.connect = AsyncMock(side_effect=SessionBusy("Replay session is active — stop it before connecting CAN"))
-        with patch("main.discover_can_interfaces", return_value=["vcan0"]):
+        with patch("api_can.discover_can_interfaces", return_value=["vcan0"]):
             resp = await client.post("/api/can/connect", json={"interface": "vcan0"})
         assert resp.status == 409 and "Replay session is active" in (await resp.json())["error"]
 
@@ -257,7 +257,7 @@ class TestCANConnectSpecsAndBitrate:
 
     @pytest.mark.asyncio
     async def test_bare_name_is_checked_against_discovery(self, client, session):
-        with patch("main.discover_can_interfaces", return_value=["vcan0"]):
+        with patch("api_can.discover_can_interfaces", return_value=["vcan0"]):
             resp = await client.post("/api/can/connect", json={"interface": "vcan99"})
         assert resp.status == 400
         data = await resp.json()
@@ -266,7 +266,7 @@ class TestCANConnectSpecsAndBitrate:
 
     @pytest.mark.asyncio
     async def test_discovered_socketcan_name_needs_no_bitrate(self, client, session):
-        with patch("main.discover_can_interfaces", return_value=["vcan0"]):
+        with patch("api_can.discover_can_interfaces", return_value=["vcan0"]):
             resp = await client.post("/api/can/connect", json={"interface": "vcan0"})
         assert resp.status == 200
         session.connect.assert_awaited_once_with("vcan0", bitrate=None, data_bitrate=None, allocator=None, listen_only=None, no_commands=None)
@@ -275,7 +275,7 @@ class TestCANConnectSpecsAndBitrate:
     async def test_explicit_spec_skips_discovery(self, client, session):
         # Discovery never lists adapters such as gs_usb:0 (and lists nothing
         # at all off Linux), so requiring a match made them unreachable.
-        with patch("main.discover_can_interfaces", return_value=[]) as discover:
+        with patch("api_can.discover_can_interfaces", return_value=[]) as discover:
             resp = await client.post(
                 "/api/can/connect", json={"interface": "gs_usb:0", "bitrate": 250000},
             )
@@ -339,7 +339,7 @@ class TestCANConnectSpecsAndBitrate:
     @pytest.mark.asyncio
     @pytest.mark.parametrize("allocator", [True, False])
     async def test_allocator_choice_reaches_the_session(self, client, session, allocator):
-        with patch("main.discover_can_interfaces", return_value=["vcan0"]):
+        with patch("api_can.discover_can_interfaces", return_value=["vcan0"]):
             resp = await client.post("/api/can/connect", json={"interface": "vcan0", "allocator": allocator})
         assert resp.status == 200
         session.connect.assert_awaited_once_with("vcan0", bitrate=None, data_bitrate=None, allocator=allocator, listen_only=None, no_commands=None)
@@ -357,7 +357,7 @@ class TestCANConnectSpecsAndBitrate:
     @pytest.mark.parametrize("status", [None, {"other_allocator": 42, "allocated": 1}])
     async def test_status_reports_cynitors_allocator(self, client, session, status):
         session.allocator_status.return_value = status
-        with patch("main.discover_can_interfaces", return_value=[]):
+        with patch("api_can.discover_can_interfaces", return_value=[]):
             resp = await client.get("/api/status")
         assert resp.status == 200
         assert (await resp.json())["allocator"] == status
@@ -369,7 +369,7 @@ class TestCANConnectSpecsAndBitrate:
         assert resp.status == 200 and await resp.json() == {"decode_on_demand": on_demand}
         session.set_decode_on_demand.assert_awaited_once_with(on_demand)
         session.decode_on_demand = on_demand   # as the session then has it
-        with patch("main.discover_can_interfaces", return_value=[]):
+        with patch("api_can.discover_can_interfaces", return_value=[]):
             status = await (await client.get("/api/status")).json()
         assert status["decode_on_demand"] is on_demand
 
@@ -383,13 +383,13 @@ class TestCANConnectSpecsAndBitrate:
     @pytest.mark.asyncio
     async def test_status_reports_the_servers_cpu_use(self, client, server, session):
         server.cpu.read = lambda: 42.5
-        with patch("main.discover_can_interfaces", return_value=[]):
+        with patch("api_can.discover_can_interfaces", return_value=[]):
             resp = await client.get("/api/status")
         assert (await resp.json())["server_cpu"] == 42.5
 
     @pytest.mark.asyncio
     async def test_status_says_why_history_is_not_written(self, client, session):
-        with patch("main.discover_can_interfaces", return_value=[]):
+        with patch("api_can.discover_can_interfaces", return_value=[]):
             session.event_logger = MagicMock(write_error=None)
             fine = (await (await client.get("/api/status")).json())["history_error"]
             session.event_logger.write_error = "disk I/O error"
@@ -401,13 +401,13 @@ class TestCANConnectSpecsAndBitrate:
         # It was shown nowhere (F-039).
         session.is_running = True
         session._own_node_ids = MagicMock(return_value={127})
-        with patch("main.discover_can_interfaces", return_value=[]):
+        with patch("api_can.discover_can_interfaces", return_value=[]):
             status = await (await client.get("/api/status")).json()
         assert status["own_node_id"] == 127
 
     @pytest.mark.asyncio
     async def test_status_reports_a_newer_release(self, client, server, session):
-        with patch("main.discover_can_interfaces", return_value=[]):
+        with patch("api_can.discover_can_interfaces", return_value=[]):
             unchecked = (await (await client.get("/api/status")).json())["update"]
             newer = {"version": "1.4.0", "url": "https://github.com/OpenCyphal-Garage/cynitor/releases/tag/v1.4.0"}
             server.update_check = MagicMock(available=newer)
@@ -708,7 +708,7 @@ class TestSecFetchSiteAndDevOrigins:
     @pytest.mark.asyncio
     @pytest.mark.parametrize("site", ["same-origin", "same-site", "none"])
     async def test_the_dashboards_own_requests_pass(self, client, site):
-        with patch("main.discover_can_interfaces", return_value=[]):
+        with patch("api_can.discover_can_interfaces", return_value=[]):
             resp = await client.get("/api/status", headers={"Sec-Fetch-Site": site})
         assert resp.status == 200
 
@@ -736,7 +736,7 @@ class TestHealthOfAWantedBus:
     @pytest.mark.asyncio
     async def test_disconnecting_clears_it(self, client, session):
         session.is_running, session.wanted_can = True, "can0"
-        with patch("main.discover_can_interfaces", return_value=[]):
+        with patch("api_can.discover_can_interfaces", return_value=[]):
             await client.post("/api/can/disconnect")
         assert session.wanted_can is None
 
@@ -785,7 +785,7 @@ class TestCrossSiteRequests:
     async def test_foreign_site_post_is_refused_before_it_runs(self, client, session):
         # text/plain is a "simple" request: the browser sends it without a
         # preflight, so a CORS header alone would not stop it from running.
-        with patch("main.discover_can_interfaces", return_value=["vcan0"]):
+        with patch("api_can.discover_can_interfaces", return_value=["vcan0"]):
             resp = await client.post(
                 "/api/can/connect", data='{"interface": "vcan0"}',
                 headers={"Origin": "https://evil.example", "Content-Type": "text/plain"},
@@ -1160,7 +1160,7 @@ class TestTransportDiagnostics:
         session.bus_load = bus_load
 
         link = {"state": "ERROR-ACTIVE", "bitrate": 500000, "berr_tx": 0, "berr_rx": 0}
-        with patch("main.get_can_link_diagnostics", return_value=link):
+        with patch("api_can.get_can_link_diagnostics", return_value=link):
             resp = await client.get("/api/can/transport")
         assert resp.status == 200
         data = await resp.json()
@@ -1189,7 +1189,7 @@ class TestTransportDiagnostics:
         scanner = MagicMock()
         scanner.get_transport_info = MagicMock(return_value={"protocol": None, "statistics": None})
         session.scanner = scanner
-        with patch("main.get_can_link_diagnostics") as diagnostics:
+        with patch("api_can.get_can_link_diagnostics") as diagnostics:
             resp = await client.get("/api/can/transport")
         assert resp.status == 200
         link = (await resp.json())["link"]
@@ -1204,7 +1204,7 @@ class TestTransportDiagnostics:
         scanner = MagicMock()
         scanner.get_transport_info = MagicMock(return_value={"protocol": None, "statistics": None})
         session.scanner = scanner
-        with patch("main.get_can_link_diagnostics", return_value={}) as diagnostics:
+        with patch("api_can.get_can_link_diagnostics", return_value={}) as diagnostics:
             await client.get("/api/can/transport")
         diagnostics.assert_called_once_with("vcan0")
 
@@ -1388,7 +1388,7 @@ class TestAdapterListing:
     @pytest.mark.asyncio
     async def test_status_lists_adapters_and_bitrate(self, listing_client, session):
         session.can_bitrate = None
-        with patch("main.discover_can_interfaces", return_value=["vcan0"]):
+        with patch("api_can.discover_can_interfaces", return_value=["vcan0"]):
             data = await (await listing_client.get("/api/status")).json()
         assert data["available_interfaces"] == ["vcan0"]  # unchanged for old clients
         assert data["available_adapters"][1] == {
@@ -1402,14 +1402,14 @@ class TestAdapterListing:
     @pytest.mark.asyncio
     async def test_status_reports_dropped_events(self, listing_client, session):
         session.dropped_events.return_value = {"scanner": 0, "logger": 4, "clients": 1}
-        with patch("main.discover_can_interfaces", return_value=[]):
+        with patch("api_can.discover_can_interfaces", return_value=[]):
             data = await (await listing_client.get("/api/status")).json()
         assert data["dropped"] == {"scanner": 0, "logger": 4, "clients": 1}
 
     @pytest.mark.asyncio
     async def test_status_reports_bus_errors(self, listing_client, session):
         from bus_errors import BusErrors
-        with patch("main.discover_can_interfaces", return_value=[]):
+        with patch("api_can.discover_can_interfaces", return_value=[]):
             none_yet = (await (await listing_client.get("/api/status")).json())["bus_errors"]
             session.bus_errors = BusErrors("can0")
             session.bus_errors.observe({"state": "ERROR-PASSIVE", "berr_tx": 0, "berr_rx": 128}, now=100.0)

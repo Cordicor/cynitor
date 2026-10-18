@@ -33,6 +33,7 @@ from can_config import (
 from bus_errors import BusErrors
 from can_discovery import AdapterCatalog, discover_adapters, simulated_adapters
 from can_hub import CANHub, HubBusLoad, pick_free_node_id
+from can_link import _CAN_STATE, discover_can_interfaces, get_can_link_diagnostics
 from cyphal_v11 import SOCKETCAN_FILTER, V11Traffic
 from data_dir import (EVENTS_DB, SCANNER_DB, SUBJECT_TYPES_FILE, TEST_NODES_FILE, prepare_data_dir,
                       resolve_data_dir)
@@ -40,6 +41,7 @@ from firmware import COMMAND_STATUS, FIRMWARE_DIR, FirmwareServer, firmware_path
 from log_store import InMemoryLogStore, APILogHandler, TokenRedactingFilter
 from raw_log import (END_OF_LOG, RAW_LOG_DIR, LogPlayer, RawLog, SocketcanTap, free_space_problem, log_has_fd_frames,
                      log_path, new_log_name, read_sidecar, write_sidecar)
+from session_errors import SessionBusy
 from simulation import SimulatedBus
 from testnodes import TestNodeBus, TestNodeManager
 from transfer_rates import TransferRates
@@ -75,47 +77,6 @@ if not any(isinstance(handler, APILogHandler) for handler in _root_logger.handle
     _root_logger.addHandler(APILogHandler(_log_store))
 
 
-def discover_can_interfaces() -> list[str]:
-    interfaces: set[str] = set()
-
-    def maybe_add_interface(name: str) -> None:
-        interface_name = name.split("@", 1)[0].strip()
-        if not interface_name:
-            return
-
-        type_file = Path("/sys/class/net") / interface_name / "type"
-        try:
-            if type_file.exists() and type_file.read_text(encoding="utf-8").strip() == "280":
-                interfaces.add(interface_name)
-                return
-        except Exception:
-            pass
-
-        if re.match(r"^(v?can\d+|slcan\d+)$", interface_name):
-            interfaces.add(interface_name)
-
-    try:
-        result = subprocess.run(
-            ["ip", "-o", "link", "show"],
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-        if result.returncode == 0:
-            for line in result.stdout.splitlines():
-                match = re.match(r"^\d+:\s+([^:]+):", line)
-                if match:
-                    maybe_add_interface(match.group(1))
-    except Exception:
-        pass
-
-    try:
-        for iface in Path("/sys/class/net").iterdir():
-            maybe_add_interface(iface.name)
-    except Exception:
-        pass
-
-    return sorted(interfaces)
 
 
 # SocketCAN interfaces plus every other adapter found, for the dashboard's
@@ -284,10 +245,6 @@ def bound_address(bind: str, port: int) -> str:
 # ---------------------------------------------------------------------------
 # CAN session lifecycle
 # ---------------------------------------------------------------------------
-
-class SessionBusy(RuntimeError):
-    """A connect refused because a session or a replay already runs: the caller's to resolve (409)."""
-
 
 class CANSession:
     """Manages the lifecycle of all CAN-dependent components."""
@@ -1250,73 +1207,8 @@ async def register_nodes(scanner, registered_nodes_set: set[int],
 # Background tasks
 # ---------------------------------------------------------------------------
 
-# The controller's state in `ip -details link show`: "can state ERROR-ACTIVE",
-# or with the controller's modes between, as "can <FD> state ERROR-WARNING".
-_CAN_STATE = re.compile(r"\bcan\s+(?:<[^>]*>\s+)?state\s+(\S+)")
 
 
-def get_can_link_diagnostics(iface: str) -> dict:
-    """Best-effort controller/bus diagnostics for a CAN interface.
-
-    Parses ``ip -details -statistics link show <iface>`` plus sysfs operstate.
-    SocketCAN-specific (Linux). All fields are optional — virtual interfaces
-    (vcan) expose no CAN controller state, so most values come back ``None``.
-    Never raises; returns whatever could be read.
-    """
-    result: dict = {
-        "operstate": None, "state": None, "bitrate": None, "dbitrate": None,
-        "berr_tx": None, "berr_rx": None, "restart_ms": None,
-        "restarts": None, "bus_errors": None, "arbitration_lost": None,
-        "error_warning": None, "error_passive": None, "bus_off": None,
-    }
-    if not IS_LINUX:
-        return result
-
-    try:
-        result["operstate"] = (
-            (Path("/sys/class/net") / iface / "operstate").read_text(encoding="utf-8").strip()
-        )
-    except Exception:
-        pass
-
-    try:
-        proc = subprocess.run(
-            ["ip", "-details", "-statistics", "link", "show", iface],
-            check=False, capture_output=True, text=True, timeout=3,
-        )
-    except Exception:
-        return result
-    if proc.returncode != 0:
-        return result
-    out = proc.stdout
-
-    def _int(pattern: str, group: int = 1):
-        m = re.search(pattern, out)
-        return int(m.group(group)) if m else None
-
-    m = _CAN_STATE.search(out)
-    if m:
-        result["state"] = m.group(1)
-    result["bitrate"] = _int(r"\bbitrate\s+(\d+)")
-    result["dbitrate"] = _int(r"\bdbitrate\s+(\d+)")
-    result["restart_ms"] = _int(r"restart-ms\s+(\d+)")
-    berr = re.search(r"berr-counter\s+tx\s+(\d+)\s+rx\s+(\d+)", out)
-    if berr:
-        result["berr_tx"], result["berr_rx"] = int(berr.group(1)), int(berr.group(2))
-
-    # CAN error-state-change counters appear as a labelled header row followed
-    # by the values, only with -statistics and only on real controllers.
-    counters = re.search(
-        r"re-started\s+bus-errors\s+arbit-lost\s+error-warn\s+error-pass\s+bus-off"
-        r"\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)",
-        out,
-    )
-    if counters:
-        (result["restarts"], result["bus_errors"], result["arbitration_lost"],
-         result["error_warning"], result["error_passive"], result["bus_off"]) = (
-            int(counters.group(i)) for i in range(1, 7)
-        )
-    return result
 
 
 def _check_can_health(iface: str) -> Optional[str]:
