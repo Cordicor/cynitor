@@ -17,11 +17,10 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Optional
 
 from can_config import (
-    FD_MTU,
     is_simulated,
     is_socketcan,
-    media_bitrate,
-    media_mtu,
+    MediaSettings,
+    media_settings,
     normalize_can_iface,
     socketcan_supports_fd,
     resolve_bitrate,
@@ -249,6 +248,17 @@ class BusLoadMonitor:
             raise
 
 
+def _node_id_from_environment() -> Optional[int]:
+    """The node-ID the user fixed with UAVCAN__NODE__ID (pycyphal's name for it), if a valid one."""
+    value = os.environ.get("UAVCAN__NODE__ID", "").strip()
+    if not value:
+        return None
+    if value.isdigit() and int(value) <= 127:
+        return int(value)
+    logger.warning("UAVCAN__NODE__ID=%r is no node-ID (0-127); Cynitor picks one per bus instead", value)
+    return None
+
+
 def is_loopback(bind: str) -> bool:
     """Whether ``bind`` listens on this machine only: a loopback address, or localhost."""
     if bind.strip().lower() == "localhost":
@@ -349,10 +359,12 @@ class CANSession:
         self._event_logger_lock = asyncio.Lock()
         self._disconnect_task: Optional[asyncio.Task] = None
         self.last_error: Optional[str] = None
-        # Whether UAVCAN__NODE__ID is one this session picked, and so is
-        # forgotten when it ends: the next bus may have a node on it.
-        self._picked_node_id = False
-        self._node_id_before: Optional[str] = None  # UAVCAN__NODE__ID as it was, while listening only
+        # A node-ID the user fixed with UAVCAN__NODE__ID, read once here: user
+        # input, which no session writes back. Else each session picks one.
+        self.fixed_node_id = _node_id_from_environment()
+        self.node_id: Optional[int] = None  # Cynitor's own in the session that runs; None: anonymous
+        self._media: Optional[MediaSettings] = None  # how its transports open the bus ...
+        self._bus_spec: Optional[str] = None          # ... and which (normalize_can_iface's spelling)
         # Recording-replay engine. None unless a replay session is in progress.
         # Mutually exclusive with scanner — the WS handler chooses telemetry
         # vs replay based on which is non-None, and connect()/start_replay()
@@ -429,17 +441,17 @@ class CANSession:
         # instead of blocking it behind a cold-start connect.
         hub: Optional[CANHub] = None
         simulation: Optional[SimulatedBus] = None
+        media = media_settings(spec, bitrate, data_bitrate)
         if is_socketcan(spec):
-            device = socketcan_device(spec)
-            await self._pick_node_id(spec, fd=socketcan_supports_fd(device), listen_only=listen_only)
-            await asyncio.to_thread(prepare_runtime, can_iface, force_compile, bitrate)
+            node_id = await self._pick_node_id(spec, fd=media.fd, listen_only=listen_only)
+            await asyncio.to_thread(prepare_runtime, force_compile)
         else:
             assert bitrate is not None  # resolve_bitrate gives one for all but SocketCAN
             if is_simulated(spec) and open_bus is None:
                 # The hub opens the simulated bus's wire as it would an adapter.
                 simulation = SimulatedBus(bitrate, data_bitrate)
                 open_bus = simulation.open_wire
-            hub = await self._open_hub(spec, bitrate, force_compile, data_bitrate, open_bus, listen_only)
+            hub, node_id = await self._open_hub(spec, bitrate, force_compile, data_bitrate, open_bus, listen_only)
 
         async with self._lock:
             if self.is_running:
@@ -449,13 +461,15 @@ class CANSession:
             self.last_error = None
             # From here on _teardown owns the hub, including on failure below.
             self.hub = hub
+            self._media, self._bus_spec, self.node_id = media, spec, node_id
 
             try:
                 from scanner_node import ScannerNode
                 from telemetry_manager import TelemetryManager
 
                 logger.info("Initializing ScannerNode...")
-                self.scanner = ScannerNode(register_file=str(self.data_dir / SCANNER_DB))
+                self.scanner = ScannerNode(register_file=str(self.data_dir / SCANNER_DB),
+                                           transport=self._transport(node_id))
                 self.scanner.offline = offline
                 self.scanner.listen_only = self.listen_only = listen_only
                 self.no_commands = no_commands
@@ -523,7 +537,7 @@ class CANSession:
                 self.can_interface = can_iface
                 self.can_bitrate = bitrate
                 self.can_data_bitrate = data_bitrate
-                self.can_fd = media_mtu() == FD_MTU
+                self.can_fd = media.fd
 
                 # Cynitor's own node hears only the calls made to it: the
                 # recordings take the calls from a tap on the bus instead.
@@ -543,7 +557,7 @@ class CANSession:
                     self.simulation = simulation
                     simulation.start()
                 if offline is None and not listen_only:  # nothing can be sent while a raw log plays
-                    self.test_nodes.attach(TestNodeBus(self._test_node_transport, simulation is not None,
+                    self.test_nodes.attach(TestNodeBus(self._transport, simulation is not None,
                                                        self._node_ids_in_use))
                 logger.info("CAN session started on %s", can_iface)
             except Exception:
@@ -685,19 +699,21 @@ class CANSession:
                        if node.has_appeared and not node.has_disappeared}
         return in_use
 
-    def _test_node_transport(self, node_id: int):
-        """A transport for a test node with ``node_id``, on the bus Cynitor is connected to.
+    def _transport(self, node_id: Optional[int]):
+        """A transport on the bus of the session that runs, as ``node_id`` (None: anonymous).
 
-        Behind the hub on its channel, as the scanner is; on SocketCAN a socket
-        of its own, whose frames the kernel loops back to Cynitor's.
+        The scanner's and each test node's: behind the hub on its channel; on
+        SocketCAN a socket each, whose frames the kernel loops back to the others.
         """
         from pycyphal.transport.can import CANTransport
+        media = self._media
+        if media is None:
+            raise RuntimeError("CAN is not connected")
         if self.hub is not None:
             from pycyphal.transport.can.media.pythoncan import PythonCANMedia
-            return CANTransport(PythonCANMedia(self.hub.local_spec, media_bitrate(self.hub.local_spec), media_mtu()),
-                                node_id)
+            return CANTransport(PythonCANMedia(self.hub.local_spec, media.bitrate, media.mtu), node_id)
         from pycyphal.transport.can.media.socketcan import SocketCANMedia
-        return CANTransport(SocketCANMedia(socketcan_device(self.can_interface), media_mtu()), node_id)
+        return CANTransport(SocketCANMedia(socketcan_device(self._bus_spec), media.mtu), node_id)
 
     @staticmethod
     def _open_v11_tap(device: str, traffic: V11Traffic) -> Optional[SocketcanTap]:
@@ -709,30 +725,27 @@ class CANSession:
             logger.warning("Cannot watch %s for Cyphal v1.1 traffic: %s", device, exc)
             return None
 
-    async def _pick_node_id(self, local_spec: str, fd: bool = False, listen_only: bool = False) -> None:
-        """Choose Cynitor's own node-ID from the heartbeats on the bus, unless one is set.
+    async def _pick_node_id(self, local_spec: str, fd: bool = False, listen_only: bool = False) -> Optional[int]:
+        """Cynitor's own node-ID for the session: the one the user fixed, else
+        one no heartbeat on the bus uses; None to run anonymously.
 
         The way `yakut accommodate` does it, without needing yakut: without a
         node-ID the scanner runs anonymously and can ask no node for its
-        GetInfo or registers. Listening only, it runs anonymously on purpose:
-        a node-ID out of range is none to pycyphal, which then sends nothing.
+        GetInfo or registers. Listening only, it runs anonymously on purpose,
+        and so sends nothing.
         """
         if listen_only:
-            self._node_id_before = os.environ.get("UAVCAN__NODE__ID")
-            os.environ["UAVCAN__NODE__ID"] = "65535"
-            self._picked_node_id = True
-            return
-        if "UAVCAN__NODE__ID" in os.environ:
-            return
+            return None
+        if self.fixed_node_id is not None:
+            return self.fixed_node_id
         node_id = await asyncio.to_thread(pick_free_node_id, local_spec, frozenset(), None, fd)
         if node_id is None:
             logger.warning("Every node-ID is in use; the scanner will run anonymously")
-        else:
-            os.environ["UAVCAN__NODE__ID"] = str(node_id)
-            self._picked_node_id = True
+        return node_id
 
     async def _open_hub(self, spec: str, bitrate: int, force_compile: bool,
-                        data_bitrate: Optional[int] = None, open_bus=None, listen_only: bool = False) -> CANHub:
+                        data_bitrate: Optional[int] = None, open_bus=None,
+                        listen_only: bool = False) -> tuple[CANHub, Optional[int]]:
         """Open a non-SocketCAN adapter once and point every component at the hub's channel.
 
         Most such adapters admit a single open handle, and the node-ID picker,
@@ -742,14 +755,12 @@ class CANSession:
         hub = CANHub(spec, bitrate, data_bitrate) if open_bus is None else CANHub(spec, bitrate, data_bitrate, open_bus)
         await asyncio.to_thread(hub.start)
         try:
-            await self._pick_node_id(hub.local_spec, listen_only=listen_only)
-            await asyncio.to_thread(
-                prepare_runtime, hub.local_spec, force_compile, bitrate, False, data_bitrate,
-            )
+            node_id = await self._pick_node_id(hub.local_spec, listen_only=listen_only)
+            await asyncio.to_thread(prepare_runtime, force_compile)
         except BaseException:
             await asyncio.to_thread(hub.stop)
             raise
-        return hub
+        return hub, node_id
 
     async def disconnect(self) -> None:
         """Stop all CAN components (reverse order of connect)."""
@@ -931,10 +942,10 @@ class CANSession:
             info = getattr(node, "info_response", None)
             if info is not None:
                 names[str(node_id)] = info.name.tobytes().decode("utf-8", errors="replace")
-        own = os.environ.get("UAVCAN__NODE__ID")
+        own = self.node_id
         return {
             "version": 1,
-            "own_node_id": int(own) if own and own.isdigit() and int(own) <= 127 else None,  # not listening only
+            "own_node_id": own,  # None listening only
             "bitrate": self.can_bitrate,
             "data_bitrate": self.can_data_bitrate,
             "fd": self.can_fd,
@@ -1104,12 +1115,8 @@ class CANSession:
             await asyncio.to_thread(self.hub.stop)
             self.hub = None
         self.registered_nodes.clear()
-        if self._picked_node_id:  # one the user set stays
-            os.environ.pop("UAVCAN__NODE__ID", None)
-            if self._node_id_before is not None:  # set aside while listening only
-                os.environ["UAVCAN__NODE__ID"] = self._node_id_before
-            self._picked_node_id = False
-            self._node_id_before = None
+        self.node_id = None
+        self._media = self._bus_spec = None
         self.listen_only = False
         self.no_commands = False
         self.can_interface = None

@@ -33,78 +33,26 @@ class TestResolveProjectRoot:
 
 @pytest.fixture
 def runtime_env(monkeypatch):
-    """Run prepare_runtime without compiling DSDL or calling yakut, and undo its env changes."""
-    for name in ("UAVCAN__CAN__IFACE", "UAVCAN__CAN__MTU", "UAVCAN__CAN__BITRATE",
-                 "CYPHAL_PATH", "PYCYPHAL_PATH", "PYTHONPATH", "PATH"):
+    """Run prepare_runtime without compiling DSDL, and undo its env changes."""
+    for name in ("CYPHAL_PATH", "PYCYPHAL_PATH", "PYTHONPATH", "PATH"):
         monkeypatch.setenv(name, os.environ.get(name, ""))
-    # A preset node-ID skips `yakut accommodate`, which would open the bus.
-    monkeypatch.setenv("UAVCAN__NODE__ID", "42")
     monkeypatch.setattr(startup_setup, "_run_nnvg", lambda *args, **kwargs: None)
     monkeypatch.setattr(sys, "path", list(sys.path))
     return monkeypatch
 
 
-class TestPrepareRuntimeCanEnv:
-    def test_bare_name_becomes_socketcan(self, runtime_env):
-        prepare_runtime("vcan0")
-        assert os.environ["UAVCAN__CAN__IFACE"] == "socketcan:vcan0"
+class TestPrepareRuntime:
+    def test_makes_the_compiled_types_importable(self, runtime_env):
+        prepare_runtime()
+        compiled = str((resolve_project_root() / "python_compiled_messages").resolve())
+        assert os.environ["PYCYPHAL_PATH"] == compiled and compiled in sys.path
 
-    def test_spec_is_used_as_given(self, runtime_env):
-        prepare_runtime("gs_usb:0", bitrate=500_000)
-        assert os.environ["UAVCAN__CAN__IFACE"] == "gs_usb:0"
-
-    def test_legacy_pythoncan_prefix_is_dropped(self, runtime_env):
-        prepare_runtime("pythoncan:pcan:PCAN_USBBUS1", bitrate=500_000)
-        assert os.environ["UAVCAN__CAN__IFACE"] == "pcan:PCAN_USBBUS1"
-
-    def test_publishes_bitrate_for_both_phases(self, runtime_env):
-        # Unset, pycyphal would open the adapter at 1 Mbit/s; a single number
-        # would be read as CAN FD with a zero data phase.
-        prepare_runtime("gs_usb:0", bitrate=250_000)
-        assert os.environ["UAVCAN__CAN__BITRATE"] == "250000 250000"
-
-    def test_adapter_without_bitrate_is_refused_before_touching_env(self, runtime_env):
-        os.environ["UAVCAN__CAN__IFACE"] = "untouched"
-        with pytest.raises(ValueError, match="bitrate is required"):
-            prepare_runtime("gs_usb:0")
-        assert os.environ["UAVCAN__CAN__IFACE"] == "untouched"
-
-    def test_rejects_invalid_bitrate_before_touching_env(self, runtime_env):
-        os.environ["UAVCAN__CAN__IFACE"] = "untouched"
-        with pytest.raises(ValueError):
-            prepare_runtime("gs_usb:0", bitrate=0)
-        assert os.environ["UAVCAN__CAN__IFACE"] == "untouched"
-
-    def test_classic_can_by_default(self, runtime_env):
-        prepare_runtime("gs_usb:0", bitrate=500_000)
-        assert os.environ["UAVCAN__CAN__MTU"] == "8"
-
-    def test_data_bitrate_selects_can_fd(self, runtime_env):
-        prepare_runtime("pcan:PCAN_USBBUS1", bitrate=500_000, data_bitrate=2_000_000)
-        assert os.environ["UAVCAN__CAN__MTU"] == "64"
-        assert os.environ["UAVCAN__CAN__BITRATE"] == "500000 2000000"
-
-    def test_socketcan_follows_the_interface(self, runtime_env):
-        # pycyphal sends every frame as CAN FD at MTU 64; an interface that is
-        # not set up for CAN FD rejects them.
-        runtime_env.setattr(startup_setup, "socketcan_supports_fd", lambda device: device == "can1")
-        prepare_runtime("can0")
-        assert os.environ["UAVCAN__CAN__MTU"] == "8"
-        prepare_runtime("can1")
-        assert os.environ["UAVCAN__CAN__MTU"] == "64"
-
-    def test_can_fd_on_an_adapter_without_it_is_refused_before_touching_env(self, runtime_env):
-        os.environ["UAVCAN__CAN__IFACE"] = "untouched"
-        with pytest.raises(ValueError, match="cannot run CAN FD"):
-            prepare_runtime("canalystii:0", bitrate=500_000, data_bitrate=2_000_000)
-        assert os.environ["UAVCAN__CAN__IFACE"] == "untouched"
-
-    def test_socketcan_without_bitrate_clears_a_stale_one(self, runtime_env):
-        # The kernel's setting applies; a value left by an earlier adapter
-        # session must not reach the scanner.
-        os.environ["UAVCAN__CAN__BITRATE"] = "250000 250000"
-        prepare_runtime("vcan0")
-        assert "UAVCAN__CAN__BITRATE" not in os.environ
+    def test_publishes_no_session_settings(self, runtime_env):
+        # Which bus, at which rates, as which node-ID is the session's own: none
+        # of it may outlive a session or reach the processes it starts (F-030, Q-22).
+        before = {k: v for k, v in os.environ.items() if k.startswith("UAVCAN__")}
+        prepare_runtime()
+        assert {k: v for k, v in os.environ.items() if k.startswith("UAVCAN__")} == before
 
 
 class TestLibusbOnPath:

@@ -11,17 +11,15 @@ given for every interface except SocketCAN.
 
 from __future__ import annotations
 
-import os
 import re
 from pathlib import Path
+from dataclasses import dataclass
 from typing import Optional, Union
 
 MAX_CLASSIC_CAN_BITRATE = 1_000_000
 # Sanity bound for the CAN FD data phase; adapters top out between 8 and 12 Mbit/s.
 MAX_FD_DATA_BITRATE = 12_000_000
 
-BITRATE_ENV = "UAVCAN__CAN__BITRATE"
-MTU_ENV = "UAVCAN__CAN__MTU"
 CLASSIC_MTU = 8   # Cyphal/CAN payload per frame: Classic CAN
 FD_MTU = 64       # ... and CAN FD
 
@@ -248,49 +246,32 @@ def resolve_bitrate(iface: str, bitrate: Optional[object]) -> Optional[int]:
     return validate_bitrate(bitrate)
 
 
-def bitrate_env_value(bitrate: int, data_bitrate: Optional[int] = None) -> str:
-    """Format the bitrates for the ``uavcan.can.bitrate`` register.
+@dataclass(frozen=True)
+class MediaSettings:
+    """How a session's pycyphal transports open the bus: the MTU, and the
+    bitrate python-can media take (one number, or arbitration and data)."""
+    mtu: int
+    bitrate: Union[int, tuple[int, int]]
 
-    The register holds ``[arbitration, data]``. A single number is read as
-    ``[n, 0]``, which pycyphal takes for CAN FD with a zero-rate data phase,
-    so classic CAN must repeat the value.
+    @property
+    def fd(self) -> bool:
+        return self.mtu == FD_MTU
+
+
+def media_settings(iface: str, bitrate: Optional[int] = None,
+                   data_bitrate: Optional[int] = None) -> MediaSettings:
+    """The transport settings for ``iface`` at the given rates (see resolve_bitrate).
+
+    SocketCAN runs CAN FD when the interface is set up for it, and its kernel
+    sets the bitrate; anything else runs CAN FD when given a data bitrate.
+    pycyphal sends every frame at the MTU, which an interface not set up for
+    CAN FD rejects, so the MTU must follow the bus.
     """
-    return f"{bitrate} {data_bitrate or bitrate}"
-
-
-def bitrates_from_env() -> Optional[tuple[int, int]]:
-    """The (arbitration, data) bitrates that ``prepare_runtime`` published, if any."""
-    parts = os.environ.get(BITRATE_ENV, "").split()
-    try:
-        return (int(parts[0]), int(parts[-1])) if parts else None
-    except ValueError:
-        return None
-
-
-def bitrate_from_env() -> Optional[int]:
-    """The arbitration bitrate that ``prepare_runtime`` published, if any."""
-    rates = bitrates_from_env()
-    return rates[0] if rates else None
-
-
-def media_bitrate(iface: str) -> Union[int, tuple[int, int]]:
-    """The bitrate to hand PythonCANMedia for ``iface``, as published by ``prepare_runtime``.
-
-    One number for Classic CAN; (arbitration, data) when the data phase differs.
-    """
-    rates = bitrates_from_env()
-    if rates is not None:
-        return rates[0] if rates[0] == rates[1] else rates
     if is_socketcan(iface):
-        return _SOCKETCAN_IGNORED_BITRATE
-    raise RuntimeError(
-        f"No bitrate published for {iface}; prepare_runtime must run before the bus is opened"
-    )
-
-
-def media_mtu() -> int:
-    """The MTU that ``prepare_runtime`` published: FD_MTU for CAN FD, else CLASSIC_MTU."""
-    try:
-        return int(os.environ.get(MTU_ENV, CLASSIC_MTU))
-    except ValueError:
-        return CLASSIC_MTU
+        fd = socketcan_supports_fd(socketcan_device(iface))
+        return MediaSettings(FD_MTU if fd else CLASSIC_MTU, _SOCKETCAN_IGNORED_BITRATE)
+    if bitrate is None:
+        raise ValueError(f"A bitrate is required for {normalize_can_iface(iface)}")
+    if data_bitrate is None:
+        return MediaSettings(CLASSIC_MTU, bitrate)
+    return MediaSettings(FD_MTU, bitrate if data_bitrate == bitrate else (bitrate, data_bitrate))

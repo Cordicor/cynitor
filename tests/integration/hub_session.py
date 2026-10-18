@@ -196,8 +196,8 @@ async def run() -> None:
     try:
         await session.connect(f"virtual:{WIRE}", bitrate=BITRATE, data_bitrate=DATA_BITRATE, allocator=True)
         check(session.is_running and session.hub is not None, "connected through the CAN hub")
-        own_id = os.environ.get("UAVCAN__NODE__ID")
-        check(own_id == "127", f"picked its own node-ID ({own_id}): 127, the first of the two Cyphal leaves to tools")
+        own_id = str(session.node_id)
+        check(own_id == "127" and "UAVCAN__NODE__ID" not in os.environ, f"picked its own node-ID ({own_id}): 127, the first of the two Cyphal leaves to tools")
         check(session.can_fd == FD, f"session runs {'CAN FD' if FD else 'Classic CAN'}")
         own_frame = await first_frame_from(tap, int(own_id))
         check(own_frame is not None and own_frame.is_fd == FD,
@@ -493,7 +493,8 @@ async def run() -> None:
 
         # Cynitor's node-ID is the free one of the bus it was picked on: forgotten
         # with the session, picked again on the next bus, where 127 is now taken.
-        check("UAVCAN__NODE__ID" not in os.environ, "the node-ID Cynitor picked is forgotten when it disconnects")
+        check(session.node_id is None and "UAVCAN__NODE__ID" not in os.environ,
+              "the node-ID Cynitor picked is the session's, gone when it disconnects, never in the environment")
         on_127 = pycyphal.application.make_node(uavcan.node.GetInfo_1_0.Response(name="integration.on127"),
                                                 transport=on_wire(127))
         on_127.start()

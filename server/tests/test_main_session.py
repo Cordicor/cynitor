@@ -115,7 +115,7 @@ class TestConnectBitrate:
         with pytest.raises(RuntimeError, match="stop"):
             await s.connect("gs_usb:0")
         assert (hubs[0].spec, hubs[0].bitrate) == ("gs_usb:0", 250_000)
-        assert captured == [("virtual:fake-hub", False, 250_000, False, None)]
+        assert captured == [(False,)]  # compiling only: the rates stay with the session
 
     async def test_explicit_bitrate_wins(self, captured, hubs):
         from main import CANSession
@@ -123,7 +123,7 @@ class TestConnectBitrate:
         with pytest.raises(RuntimeError, match="stop"):
             await s.connect("gs_usb:0", bitrate=125_000)
         assert hubs[0].bitrate == 125_000
-        assert captured == [("virtual:fake-hub", False, 125_000, False, None)]
+        assert captured == [(False,)]
 
     async def test_invalid_bitrate_fails_before_prepare_runtime(self, captured, hubs):
         from main import CANSession
@@ -141,7 +141,7 @@ class TestConnectBitrate:
         from main import CANSession
         with pytest.raises(RuntimeError, match="stop"):
             await CANSession().connect("vcan0")
-        assert captured == [("vcan0", False, None)]
+        assert captured == [(False,)]
         assert hubs == []  # SocketCAN keeps its direct path
 
     async def test_socketcan_ignores_a_given_bitrate(self, captured, hubs):
@@ -149,7 +149,7 @@ class TestConnectBitrate:
         from main import CANSession
         with pytest.raises(RuntimeError, match="stop"):
             await CANSession(default_bitrate=250_000).connect("vcan0")
-        assert captured == [("vcan0", False, None)]
+        assert captured == [(False,)]
 
     def test_invalid_default_is_rejected_up_front(self):
         from main import CANSession
@@ -171,7 +171,7 @@ class TestConnectSimulatedBus:
         assert (hubs[0].spec, hubs[0].bitrate, hubs[0].data_bitrate) == (spec, *rates)
         wire = hubs[0].open_bus.__self__
         assert isinstance(wire, SimulatedBus) and (wire.bitrate, wire.data_bitrate) == rates
-        assert captured == [("virtual:fake-hub", False, rates[0], False, rates[1])]
+        assert captured == [(False,)]
 
     async def test_needs_no_bitrate(self, captured, hubs):
         from main import CANSession
@@ -228,11 +228,12 @@ class TestTestNodes:
     async def test_behind_the_hub_they_share_its_channel(self, tmp_path, monkeypatch, bitrate, mtu, payload):
         from types import SimpleNamespace
         from main import CANSession
-        monkeypatch.setenv("UAVCAN__CAN__BITRATE", bitrate)  # as prepare_runtime publishes them
-        monkeypatch.setenv("UAVCAN__CAN__MTU", mtu)
+        from can_config import media_settings
         s = CANSession(data_dir=tmp_path)
         s.hub = SimpleNamespace(local_spec="virtual:test-node-hub")
-        transport = s._test_node_transport(60)
+        rates = [int(r) for r in bitrate.split()]
+        s._media = media_settings("virtual:test-node-hub", rates[0], None if mtu == "8" else rates[1])
+        transport = s._transport(60)
         try:
             assert transport.local_node_id == 60 and transport.protocol_parameters.mtu == payload
         finally:
@@ -254,7 +255,8 @@ class TestAllocator:
             raise RuntimeError("stop after the scanner")
 
         monkeypatch.setattr(main, "prepare_runtime", lambda *args: None)
-        monkeypatch.setattr(scanner_node, "ScannerNode", lambda register_file: MagicMock())
+        monkeypatch.setattr(scanner_node, "ScannerNode", lambda register_file, transport=None: MagicMock())
+        monkeypatch.setattr(main.CANSession, "_transport", lambda self, node_id: None)
         monkeypatch.setattr(main, "FirmwareServer", MagicMock())  # the real one needs compiled DSDL
         monkeypatch.setattr(telemetry_manager, "TelemetryManager", stop_after_the_scanner)
         monkeypatch.setattr(main.CANSession, "_start_allocator", lambda self: starts.append(True))
@@ -345,7 +347,7 @@ class TestConnectCanFd:
         with pytest.raises(RuntimeError, match="stop"):
             await CANSession().connect("pcan:PCAN_USBBUS1", bitrate=500_000, data_bitrate=2_000_000)
         assert hubs[0].data_bitrate == 2_000_000
-        assert captured == [("virtual:fake-hub", False, 500_000, False, 2_000_000)]
+        assert captured == [(False,)]
 
     async def test_session_default_data_bitrate(self, captured, hubs):
         from main import CANSession
@@ -378,7 +380,7 @@ class TestConnectCanFd:
         from main import CANSession
         with pytest.raises(RuntimeError, match="stop"):
             await CANSession().connect("vcan0", data_bitrate=2_000_000)
-        assert captured == [("vcan0", False, None)]
+        assert captured == [(False,)]
 
     def test_invalid_default_data_bitrate_is_rejected_up_front(self):
         from main import CANSession
@@ -413,7 +415,7 @@ class TestConnectThroughHub:
         with pytest.raises(RuntimeError, match="stop"):
             await main.CANSession().connect("gs_usb:0", bitrate=500_000)
         assert picks == [("virtual:fake-hub", frozenset())]
-        assert os.environ["UAVCAN__NODE__ID"] == "42"
+        assert "UAVCAN__NODE__ID" not in os.environ  # the session's own, not the process's
 
     async def test_preset_node_id_is_kept(self, captured, hubs, monkeypatch):
         import os
@@ -421,7 +423,7 @@ class TestConnectThroughHub:
         monkeypatch.setattr(main, "pick_free_node_id", lambda *a: pytest.fail("should not pick"))
         with pytest.raises(RuntimeError, match="stop"):
             await main.CANSession().connect("gs_usb:0", bitrate=500_000)
-        assert os.environ["UAVCAN__NODE__ID"] == "7"
+        assert os.environ["UAVCAN__NODE__ID"] == "7"  # read, never written
 
 
 class TestNodeIdOnSocketcan:
@@ -433,12 +435,13 @@ class TestNodeIdOnSocketcan:
         import main
         picks = []
         monkeypatch.setattr(main, "pick_free_node_id", lambda *args: picks.append(args) or 42)
-        monkeypatch.setattr(main, "socketcan_supports_fd", lambda device: fd)
+        import can_config
+        monkeypatch.setattr(can_config, "socketcan_supports_fd", lambda device: fd)
         monkeypatch.delenv("UAVCAN__NODE__ID")
         with pytest.raises(RuntimeError, match="stop"):
             await main.CANSession().connect("vcan0")
         assert picks == [("socketcan:vcan0", frozenset(), None, fd)]
-        assert os.environ["UAVCAN__NODE__ID"] == "42"
+        assert "UAVCAN__NODE__ID" not in os.environ
 
     async def test_preset_node_id_is_kept(self, captured, hubs, monkeypatch):
         import os
@@ -450,41 +453,38 @@ class TestNodeIdOnSocketcan:
 
 
 class TestNodeIdIsPickedForEachBus:
-    """A node-ID Cynitor picked is the free one of the bus it was picked on, not of the next."""
+    """A node-ID Cynitor picked is the free one of the bus it was picked on, not of the next.
 
-    async def test_picked_node_id_is_forgotten_when_the_session_ends(self, hubs, monkeypatch):
+    It is the session's own: no process-wide variable carries it to the next
+    session, nor to the processes the server starts (F-023, F-030 Q-22)."""
+
+    async def test_picked_for_the_bus_and_kept_by_the_session_only(self, hubs, monkeypatch):
         import os
         import main
         monkeypatch.delenv("UAVCAN__NODE__ID")
         session = main.CANSession()
-        await session._pick_node_id("socketcan:vcan0")
-        assert os.environ["UAVCAN__NODE__ID"] == "42"
-        await session.disconnect()
+        assert await session._pick_node_id("socketcan:vcan0") == 42
         assert "UAVCAN__NODE__ID" not in os.environ
 
-    async def test_node_id_the_user_set_is_kept(self, hubs, monkeypatch):
+    async def test_node_id_the_user_set_is_used(self, hubs, monkeypatch):
+        import main
+        monkeypatch.setattr(main, "pick_free_node_id", lambda *a: pytest.fail("should not pick"))
+        session = main.CANSession()  # UAVCAN__NODE__ID=7, from the fixture
+        assert session.fixed_node_id == 7 and await session._pick_node_id("socketcan:vcan0") == 7
+
+    async def test_listening_only_runs_anonymously(self, hubs):
+        # F-032: a session that sends nothing has no node-ID, even one the user set.
         import os
         import main
         session = main.CANSession()
-        await session._pick_node_id("socketcan:vcan0")
-        await session.disconnect()
+        assert await session._pick_node_id("socketcan:vcan0", listen_only=True) is None
         assert os.environ["UAVCAN__NODE__ID"] == "7"
 
-    @pytest.mark.parametrize("set_by_user", [None, "7"])
-    async def test_listening_only_runs_anonymously_and_restores_the_users_node_id(self, hubs, monkeypatch, set_by_user):
-        # F-032: a session that sends nothing has no node-ID; pycyphal takes one
-        # out of range for none. A node-ID the user set is theirs again after.
-        import os
+    @pytest.mark.parametrize("value", ["128", "abc", "-1"])
+    def test_a_node_id_out_of_range_is_ignored(self, monkeypatch, caplog, value):
         import main
-        if set_by_user is None:
-            monkeypatch.delenv("UAVCAN__NODE__ID")
-        else:
-            monkeypatch.setenv("UAVCAN__NODE__ID", set_by_user)
-        session = main.CANSession()
-        await session._pick_node_id("socketcan:vcan0", listen_only=True)
-        during = os.environ["UAVCAN__NODE__ID"]
-        await session.disconnect()
-        assert (during, os.environ.get("UAVCAN__NODE__ID")) == ("65535", set_by_user)
+        monkeypatch.setenv("UAVCAN__NODE__ID", value)
+        assert main.CANSession().fixed_node_id is None and "is no node-ID" in caplog.text
 
     def test_another_node_on_cynitors_node_id_is_said_in_last_error(self):
         import main

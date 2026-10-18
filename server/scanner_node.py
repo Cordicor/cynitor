@@ -126,9 +126,12 @@ class ScannerNode(ScannerRegisters, ScannerServices):
         510: 'uavcan.time.GetSynchronizationMasterInfo_0_1',
     }
 
-    def __init__(self, register_file: Optional[str] = None) -> None:
+    def __init__(self, register_file: Optional[str] = None, transport=None) -> None:
         """``register_file`` is where the node's registers persist; the session
-        puts it in the data folder (see data_dir). Defaults to REGISTER_FILE."""
+        puts it in the data folder (see data_dir). Defaults to REGISTER_FILE.
+        ``transport`` is the CAN transport, with the node-ID, the session made
+        (main.CANSession._transport); without one, pycyphal makes one from the
+        UAVCAN__* environment variables, as its own tools do."""
         # Cynitor's own name and version, as another tool on the bus sees them
         # (it named itself after the pycyphal example it began as).
         major, minor = (parse_version(__version__) or (0, 0))[:2]
@@ -137,7 +140,8 @@ class ScannerNode(ScannerRegisters, ScannerServices):
             name=NODE_NAME,
         )
 
-        self._node = pycyphal.application.make_node(node_information, register_file or ScannerNode.REGISTER_FILE)
+        self._node = pycyphal.application.make_node(node_information, register_file or ScannerNode.REGISTER_FILE,
+                                                    transport=transport)
         self._node.heartbeat_publisher.mode = uavcan.node.Mode_1.OPERATIONAL
         self._node.heartbeat_publisher.vendor_specific_status_code = os.getpid() % 100
 

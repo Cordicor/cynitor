@@ -4,14 +4,11 @@ import pytest
 
 from can_config import (
     api_interface_error,
-    bitrate_env_value,
-    bitrate_from_env,
     fd_data_bitrates,
     is_explicit_spec,
     is_simulated,
     is_socketcan,
-    media_bitrate,
-    media_mtu,
+    media_settings,
     normalize_can_iface,
     resolve_bitrate,
     resolve_data_bitrate,
@@ -73,25 +70,6 @@ class TestValidateBitrate:
             validate_bitrate(bitrate)
 
 
-class TestBitrateEnv:
-    def test_env_value_repeats_the_rate(self):
-        # A single number is read by pycyphal as [n, 0]: CAN FD with a
-        # zero-rate data phase.
-        assert bitrate_env_value(250_000) == "250000 250000"
-
-    def test_reads_back_what_was_published(self, monkeypatch):
-        monkeypatch.setenv("UAVCAN__CAN__BITRATE", bitrate_env_value(250_000))
-        assert bitrate_from_env() == 250_000
-
-    def test_none_when_unset(self, monkeypatch):
-        monkeypatch.delenv("UAVCAN__CAN__BITRATE", raising=False)
-        assert bitrate_from_env() is None
-
-    def test_none_when_unparseable(self, monkeypatch):
-        monkeypatch.setenv("UAVCAN__CAN__BITRATE", "fast")
-        assert bitrate_from_env() is None
-
-
 class TestIsSocketcan:
     @pytest.mark.parametrize("iface", ["vcan0", "can0", "socketcan:can0", "pythoncan:vcan0"])
     def test_socketcan(self, iface):
@@ -117,20 +95,30 @@ class TestResolveBitrate:
             resolve_bitrate("vcan0", 0)
 
 
-class TestMediaBitrate:
-    def test_uses_published_bitrate(self, monkeypatch):
-        monkeypatch.setenv("UAVCAN__CAN__BITRATE", "250000 250000")
-        assert media_bitrate("gs_usb:0") == 250_000
+class TestMediaSettings:
+    """How a session's transports open the bus, from the connect's own rates (no environment)."""
 
-    def test_socketcan_gets_a_placeholder(self, monkeypatch):
+    def test_classic_adapter(self):
+        settings = media_settings("gs_usb:0", 250_000)
+        assert (settings.mtu, settings.bitrate, settings.fd) == (8, 250_000, False)
+
+    def test_can_fd_adapter_carries_both_phases(self):
+        settings = media_settings("pcan:PCAN_USBBUS1", 500_000, 2_000_000)
+        assert (settings.mtu, settings.bitrate, settings.fd) == (64, (500_000, 2_000_000), True)
+
+    def test_equal_phases_are_one_number(self):
+        assert media_settings("virtual:hub", 1_000_000, 1_000_000).bitrate == 1_000_000
+
+    def test_socketcan_follows_the_interface_and_gets_a_placeholder_rate(self, monkeypatch):
         # PythonCANMedia needs a number even though SocketCAN ignores it.
-        monkeypatch.delenv("UAVCAN__CAN__BITRATE", raising=False)
-        assert isinstance(media_bitrate("socketcan:vcan0"), int)
+        import can_config
+        monkeypatch.setattr(can_config, "socketcan_supports_fd", lambda device: device == "vcan1")
+        assert media_settings("socketcan:vcan0").mtu == 8 and media_settings("socketcan:vcan1").mtu == 64
+        assert isinstance(media_settings("socketcan:vcan0").bitrate, int)
 
-    def test_adapter_without_published_bitrate_refuses(self, monkeypatch):
-        monkeypatch.delenv("UAVCAN__CAN__BITRATE", raising=False)
-        with pytest.raises(RuntimeError):
-            media_bitrate("gs_usb:0")
+    def test_an_adapter_without_a_bitrate_is_refused(self):
+        with pytest.raises(ValueError, match="bitrate is required"):
+            media_settings("gs_usb:0")
 
 
 class TestCanFd:
@@ -176,21 +164,6 @@ class TestCanFd:
     def test_socketcan_ignores_a_data_bitrate(self):
         # The kernel owns its rates; FD follows the interface's own setting.
         assert resolve_data_bitrate("vcan0", 2_000_000) is None
-
-    def test_env_value_carries_both_phases(self):
-        assert bitrate_env_value(500_000, 2_000_000) == "500000 2000000"
-
-    def test_media_bitrate_is_a_pair_for_can_fd(self, monkeypatch):
-        monkeypatch.setenv("UAVCAN__CAN__BITRATE", "500000 2000000")
-        assert media_bitrate("virtual:hub") == (500_000, 2_000_000)
-        assert bitrate_from_env() == 500_000
-
-    def test_media_mtu_defaults_to_classic(self, monkeypatch):
-        monkeypatch.delenv("UAVCAN__CAN__MTU", raising=False)
-        assert media_mtu() == 8
-        monkeypatch.setenv("UAVCAN__CAN__MTU", "64")
-        assert media_mtu() == 64
-
 
 class TestSimulatedBus:
     def test_named_by_its_interface(self):

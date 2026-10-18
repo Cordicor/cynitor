@@ -140,11 +140,7 @@ Start the server with `--no-frontend` to omit them entirely, for deployments whe
 
 ### 3. Runtime Environment
 
-At startup, Python setup runs automatically and configures:
-- `UAVCAN__CAN__IFACE=socketcan:<selected_iface>`, or the python-can spec as given (e.g. `gs_usb:0`)
-- `UAVCAN__CAN__BITRATE=<n> <n>` for non-SocketCAN adapters (cleared for SocketCAN)
-- `UAVCAN__NODE__ID` (auto-assigned if not already set)
-- `CYPHAL_PATH` and `PYCYPHAL_PATH` (DSDL locations)
+At startup, Python setup compiles the DSDL if needed and sets `CYPHAL_PATH` and `PYCYPHAL_PATH` (DSDL locations). A CAN session's interface, rates and node-ID are the session's own and set no environment variable. Cynitor reads `UAVCAN__NODE__ID` once at start, as a node-ID the user fixed; without it each session picks a free one on its bus (see `own_node_id` in `GET /api/status`).
 
 ### 4. Allocator Behavior
 

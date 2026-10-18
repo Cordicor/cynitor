@@ -8,20 +8,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-from can_config import (
-    BITRATE_ENV,
-    CLASSIC_MTU,
-    FD_MTU,
-    MTU_ENV,
-    bitrate_env_value,
-    is_socketcan,
-    normalize_can_iface,
-    resolve_bitrate,
-    resolve_data_bitrate,
-    socketcan_device,
-    socketcan_supports_fd,
-)
-
 logger = logging.getLogger(__name__)
 
 
@@ -72,41 +58,6 @@ def _run_nnvg(args: list[str], description: str) -> None:
         )
 
 
-def _auto_node_id() -> str | None:
-    if shutil.which("yakut") is None:
-        logger.warning("yakut is not available; UAVCAN__NODE__ID was not auto-assigned")
-        return None
-
-    try:
-        result = subprocess.run(
-            ["yakut", "accommodate"],
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-    except Exception as exc:
-        logger.warning("Failed to run 'yakut accommodate': %s", exc)
-        return None
-
-    if result.returncode != 0:
-        stderr = (result.stderr or "").strip()
-        logger.warning(
-            "'yakut accommodate' failed (exit=%s)%s",
-            result.returncode,
-            f": {stderr}" if stderr else "",
-        )
-        return None
-
-    value = (result.stdout or "").strip()
-    if not value:
-        logger.warning("'yakut accommodate' returned an empty node-ID")
-        return None
-    if not value.isdigit():
-        logger.warning("'yakut accommodate' returned non-numeric node-ID: %s", value)
-        return None
-    return value
-
-
 def resolve_project_root() -> Path:
     """
     Directory that holds dsdl_messages/ and python_compiled_messages/.
@@ -140,28 +91,13 @@ def ensure_libusb_on_path() -> None:
         _prepend_env_path("PATH", Path(dll_path).parent)
 
 
-def prepare_runtime(can_iface: str = "can0", force_compile: bool = False,
-                    bitrate: int | None = None, auto_node_id: bool = True,
-                    data_bitrate: int | None = None) -> None:
-    """Prepare environment variables, sys.path, and optional DSDL compilation for runtime.
+def prepare_runtime(force_compile: bool = False) -> None:
+    """Compile the DSDL if it is not yet (or ``force_compile``), and make it importable.
 
-    `auto_node_id` runs `yakut accommodate` when UAVCAN__NODE__ID is unset. It
-    has to be off when `can_iface` is a CAN hub's in-process channel, which a
-    child process cannot see.
-
-    `bitrate` is required for every interface except SocketCAN, whose bitrate
-    is set with `ip link`; ValueError is raised before anything changes if it
-    is missing or invalid.
-
-    CAN FD is used on SocketCAN when the interface is set up for it, and on
-    anything else when `data_bitrate` is given; Classic CAN otherwise.
+    The process-wide part of a CAN session's preparation: where the compiled
+    types are, for this process and the children it starts. What a session
+    opens, at which bitrate and node-ID, is the session's own (main.CANSession).
     """
-    bitrate = resolve_bitrate(can_iface, bitrate)
-    data_bitrate = resolve_data_bitrate(can_iface, data_bitrate)
-    if is_socketcan(can_iface):
-        fd = socketcan_supports_fd(socketcan_device(can_iface))
-    else:
-        fd = data_bitrate is not None
     project_root = resolve_project_root()
     dsdl_dir = project_root / "dsdl_messages"
     public_types_dir = dsdl_dir / "public_regulated_data_types"
@@ -202,33 +138,11 @@ def prepare_runtime(can_iface: str = "can0", force_compile: bool = False,
     _prepend_env_path("PYTHONPATH", python_output_dir)
     _ensure_sys_path(python_output_dir)
 
-    # A full transport spec (e.g. "gs_usb:0", "pcan:PCAN_USBBUS1") is used as
-    # given; a bare name such as "vcan0" means Linux SocketCAN.
-    os.environ["UAVCAN__CAN__IFACE"] = normalize_can_iface(can_iface)
-    # pycyphal sends every frame as CAN FD at the FD MTU, which an interface
-    # not set up for CAN FD rejects, so the MTU must follow the bus.
-    os.environ[MTU_ENV] = str(FD_MTU if fd else CLASSIC_MTU)
-    if fd:
-        logger.info("Using CAN FD on %s", can_iface)
-    # Published before `yakut accommodate` runs, so that it too opens the
-    # interface at this bitrate rather than pycyphal's 1 Mbit/s default.
-    # Cleared for SocketCAN, where the kernel's setting applies, so that a
-    # previous session's value does not linger.
-    if bitrate is None:
-        os.environ.pop(BITRATE_ENV, None)
-    else:
-        os.environ[BITRATE_ENV] = bitrate_env_value(bitrate, data_bitrate)
     ensure_libusb_on_path()
-
-    if auto_node_id and "UAVCAN__NODE__ID" not in os.environ:
-        node_id = _auto_node_id()
-        if node_id is not None:
-            os.environ["UAVCAN__NODE__ID"] = node_id
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Prepare runtime environment and compile DSDL messages")
-    parser.add_argument("--can", default="can0", help="CAN interface name (default: can0)")
     parser.add_argument(
         "--recompile",
         action="store_true",
@@ -237,8 +151,8 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-    # A build step: it compiles, and opens no bus (yakut accommodate would listen on it).
-    prepare_runtime(can_iface=args.can, force_compile=args.recompile, auto_node_id=False)
+    # A build step: it compiles, and opens no bus.
+    prepare_runtime(force_compile=args.recompile)
     compiled = resolve_project_root() / "python_compiled_messages"
     missing = [name for name in ("uavcan", "reg") if not (compiled / name).is_dir()]
     if missing:
